@@ -53,14 +53,18 @@ import org.alkaline.taskbrain.dsl.runtime.ViewVal
 import org.alkaline.taskbrain.ui.currentnote.undo.AlarmSnapshot
 import org.alkaline.taskbrain.util.PermissionHelper
 
-class CurrentNoteViewModel(application: Application) : AndroidViewModel(application) {
-
-    private val repository = NoteRepository()
-    private val alarmRepository = AlarmRepository()
-    private val alarmScheduler = AlarmScheduler(application)
-    private val sharedPreferences: SharedPreferences = application.getSharedPreferences("taskbrain_prefs", Context.MODE_PRIVATE)
-    private val agent = PrompterAgent()
-    private val directiveResultRepository = DirectiveResultRepository()
+class CurrentNoteViewModel @JvmOverloads constructor(
+    application: Application,
+    // External dependencies - injectable for testing, default to real implementations
+    private val repository: NoteRepository = NoteRepository(),
+    private val alarmRepository: AlarmRepository = AlarmRepository(),
+    private val alarmScheduler: AlarmScheduler = AlarmScheduler(application),
+    private val sharedPreferences: SharedPreferences = application.getSharedPreferences("taskbrain_prefs", Context.MODE_PRIVATE),
+    private val agent: PrompterAgent = PrompterAgent(),
+    private val directiveResultRepository: DirectiveResultRepository = DirectiveResultRepository(),
+    // For testing: provide a way to override noteOperations without Firebase
+    private val noteOperationsProvider: (() -> NoteRepositoryOperations?)? = null
+) : AndroidViewModel(application) {
 
     // Directive caching infrastructure (Phase 10 integration)
     private val directiveCacheManager = DirectiveCacheManager()
@@ -81,8 +85,12 @@ class CurrentNoteViewModel(application: Application) : AndroidViewModel(applicat
     )
 
     // Note operations for DSL mutations (Milestone 7)
+    // Use injected provider for testing, or create from Firebase for production
     private val noteOperations: NoteRepositoryOperations?
         get() {
+            // If a provider was injected (for testing), use it
+            noteOperationsProvider?.let { return it() }
+            // Otherwise, use Firebase (production)
             val userId = FirebaseAuth.getInstance().currentUser?.uid ?: return null
             return NoteRepositoryOperations(FirebaseFirestore.getInstance(), userId)
         }
@@ -732,11 +740,12 @@ class CurrentNoteViewModel(application: Application) : AndroidViewModel(applicat
      * 3. Re-executes ALL directives (doesn't skip existing results)
      * 4. Updates results in place (preserves collapsed state, no UI flicker)
      */
-    fun forceRefreshAllDirectives(content: String) {
+    fun forceRefreshAllDirectives(content: String, onComplete: (() -> Unit)? = null) {
         Log.d("InlineEditCache", "=== forceRefreshAllDirectives START ===")
         Log.d("InlineEditCache", "content preview: '${content.take(100).replace("\n", "\\n")}...'")
         if (!DirectiveFinder.containsDirectives(content)) {
             Log.d("InlineEditCache", "forceRefreshAllDirectives: no directives, returning")
+            onComplete?.invoke()
             return
         }
 
@@ -794,8 +803,16 @@ class CurrentNoteViewModel(application: Application) : AndroidViewModel(applicat
             }
 
             // 6. Update results
+            Log.d("InlineEditCache", "forceRefreshAllDirectives: UPDATING _directiveResults NOW with ${mergedResults.size} entries")
+            mergedResults.forEach { (key, result) ->
+                val content = result.toValue()?.toDisplayString()?.take(50)
+                Log.d("InlineEditCache", "  NEW [$key]: '$content...'")
+            }
             _directiveResults.value = mergedResults
-            Log.d("InlineEditCache", "=== forceRefreshAllDirectives DONE - updated ${mergedResults.size} directives ===")
+            Log.d("InlineEditCache", "=== forceRefreshAllDirectives DONE - _directiveResults UPDATED ===")
+
+            // Call completion callback AFTER results are updated
+            onComplete?.invoke()
         }
     }
 
@@ -1313,19 +1330,28 @@ class CurrentNoteViewModel(application: Application) : AndroidViewModel(applicat
                 .onSuccess {
                     Log.d("InlineEditCache", "=== saveInlineNoteContent SUCCESS for $noteId ===")
 
-                    // Phase 2: NOW invalidate caches AFTER save confirmed.
-                    // This ensures subsequent reads get the newly saved data.
-                    Log.d("InlineEditCache", "saveInlineNoteContent: INVALIDATING cachedNotes and directive cache...")
-                    cachedNotes = null
-                    // Phase 3: Invalidate metadata hash cache when notes change
+                    // OPTIMISTIC UPDATE: Replace the saved note's content in the cache
+                    // instead of clearing entirely. This prevents UI from showing stale
+                    // content if it re-renders before forceRefreshAllDirectives completes.
+                    Log.d("InlineEditCache", "saveInlineNoteContent: OPTIMISTIC UPDATE of cachedNotes...")
+                    cachedNotes = cachedNotes?.map { note ->
+                        if (note.id == noteId) {
+                            Log.d("InlineEditCache", "  Updated note $noteId in cache with new content")
+                            note.copy(content = newContent)
+                        } else note
+                    }
+                    // Clear directive cache so they re-execute with the optimistic content
                     MetadataHasher.invalidateCache()
                     directiveCacheManager.clearAll()
-                    Log.d("InlineEditCache", "saveInlineNoteContent: caches invalidated")
+                    Log.d("InlineEditCache", "saveInlineNoteContent: directive caches cleared, notes cache has optimistic content")
 
-                    // NOW end session (triggers refresh with fresh data)
-                    endInlineEditSession()
+                    // DO NOT end session here - the caller must end it AFTER
+                    // forceRefreshAllDirectives completes to avoid stale content.
+                    // See the onComplete callback in forceRefreshAllDirectives.
+                    Log.d("InlineEditCache", "saveInlineNoteContent: NOT ending session here (caller will end after refresh)")
 
                     onSuccess?.invoke()
+                    Log.d("InlineEditCache", "saveInlineNoteContent: onSuccess callback DONE")
                 }
                 .onFailure { e ->
                     Log.e("InlineEditCache", "=== saveInlineNoteContent FAILED for $noteId ===", e)

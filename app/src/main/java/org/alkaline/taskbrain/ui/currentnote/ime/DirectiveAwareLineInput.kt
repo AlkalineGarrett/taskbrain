@@ -51,7 +51,6 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
-import android.util.Log
 import org.alkaline.taskbrain.data.Note
 import org.alkaline.taskbrain.dsl.directives.DirectiveResult
 import org.alkaline.taskbrain.dsl.directives.DirectiveSegment
@@ -63,8 +62,6 @@ import org.alkaline.taskbrain.dsl.ui.DirectiveTextInput
 import org.alkaline.taskbrain.ui.currentnote.EditorController
 import org.alkaline.taskbrain.ui.currentnote.LocalInlineEditState
 import org.alkaline.taskbrain.ui.currentnote.InlineEditSession
-
-private const val TAG = "ViewDirectiveEdit"
 
 // Directive box colors
 private val DirectiveErrorColor = Color(0xFFF44336)    // Red
@@ -167,20 +164,14 @@ internal fun DirectiveAwareLineInput(
 
     // Check if this line has a view directive
     val viewDirectiveRange = remember(displayResult, directiveResults) {
-        val range = displayResult.directiveDisplayRanges.find { range ->
-            range.isView
-        }
-        Log.d(TAG, "Line $lineIndex: viewDirectiveRange=${range?.key}, isView=${range?.isView}, hasError=${range?.hasError}")
-        range
+        displayResult.directiveDisplayRanges.find { range -> range.isView }
     }
 
     // Get ViewVal if this is a view directive
     val viewVal = remember(viewDirectiveRange, directiveResults) {
         if (viewDirectiveRange != null) {
             val result = directiveResults[viewDirectiveRange.key]
-            val viewVal = result?.toValue() as? ViewVal
-            Log.d(TAG, "Line $lineIndex: viewVal=${viewVal != null}, notes=${viewVal?.notes?.size ?: 0}, collapsed=${result?.collapsed}")
-            viewVal
+            result?.toValue() as? ViewVal
         } else null
     }
 
@@ -213,7 +204,6 @@ internal fun DirectiveAwareLineInput(
             )
         } else if (viewDirectiveRange != null && viewVal != null && viewDirectiveRange.hasError.not()) {
             // View directive with successful result - render with inline editing support
-            Log.d(TAG, "Rendering ViewDirectiveInlineContent for line $lineIndex, key=${viewDirectiveRange.key}")
             ViewDirectiveInlineContent(
                 viewVal = viewVal,
                 displayText = viewDirectiveRange.displayText,
@@ -516,6 +506,36 @@ private fun mapDisplayToSourceCursor(displayCursor: Int, displayResult: DisplayT
 // =============================================================================
 
 /**
+ * Determines the effective display content during the transitional state.
+ *
+ * When saving an inline edit, there's a window between when isEditing becomes false
+ * and when directiveResults is refreshed with new content. During this window,
+ * displayContent (from directiveResults) contains STALE content.
+ *
+ * This function returns sessionContent during the transitional state to ensure
+ * the user sees their edits immediately, rather than a flash of old content.
+ *
+ * @param isEditing Whether the note is currently in edit mode
+ * @param hasActiveSession Whether there's an active inline edit session for this note
+ * @param displayContent The content from directiveResults (may be stale during transition)
+ * @param sessionContent The current content from the active session (always fresh)
+ * @return The content to display
+ */
+internal fun getEffectiveDisplayContent(
+    isEditing: Boolean,
+    hasActiveSession: Boolean,
+    displayContent: String,
+    sessionContent: String?
+): String {
+    return if (!isEditing && hasActiveSession && sessionContent != null) {
+        // Transitional state: session still active after save, use fresh content from session
+        sessionContent
+    } else {
+        displayContent
+    }
+}
+
+/**
  * Content from a view directive, rendered inline with inline editing support.
  * Shows the viewed notes' content with a subtle left border indicator.
  *
@@ -540,8 +560,6 @@ private fun ViewDirectiveInlineContent(
 
     // Track which note is currently being edited (by index)
     var editingNoteIndex by remember { mutableStateOf<Int?>(null) }
-
-    Log.d(TAG, "ViewDirectiveInlineContent: notes=${notes.size}, editingNoteIndex=$editingNoteIndex")
 
     Box(
         modifier = Modifier
@@ -581,31 +599,22 @@ private fun ViewDirectiveInlineContent(
             // Display rendered content, but edit raw content (preserves directives like [now])
             val displayContent = renderedContents?.firstOrNull() ?: note.content
             val editContent = note.content
-            Log.d(TAG, "Rendering single note: id=${note.id}, editingNoteIndex=$editingNoteIndex")
             EditableViewNoteSection(
                 note = note,
                 displayContent = displayContent,
                 editContent = editContent,
                 textStyle = textStyle,
                 isEditing = editingNoteIndex == 0,
-                onStartEditing = {
-                    Log.d(TAG, "onStartEditing called for single note, setting editingNoteIndex=0")
-                    editingNoteIndex = 0
-                },
+                onStartEditing = { editingNoteIndex = 0 },
                 onSave = { newContent ->
-                    Log.d(TAG, "onSave called for note ${note.id}")
                     editingNoteIndex = null
                     onNoteTap(note.id, newContent)
                 },
-                onCancel = {
-                    Log.d(TAG, "onCancel called for note ${note.id}")
-                    editingNoteIndex = null
-                },
+                onCancel = { editingNoteIndex = null },
                 modifier = Modifier.padding(end = ViewEditButtonSize)
             )
         } else {
             // Multiple notes with separators
-            Log.d(TAG, "Rendering ${notes.size} notes, editingNoteIndex=$editingNoteIndex")
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -626,19 +635,12 @@ private fun ViewDirectiveInlineContent(
                         editContent = editContent,
                         textStyle = textStyle,
                         isEditing = editingNoteIndex == index,
-                        onStartEditing = {
-                            Log.d(TAG, "onStartEditing called for note $index, setting editingNoteIndex=$index")
-                            editingNoteIndex = index
-                        },
+                        onStartEditing = { editingNoteIndex = index },
                         onSave = { newContent ->
-                            Log.d(TAG, "onSave called for note $index")
                             editingNoteIndex = null
                             onNoteTap(note.id, newContent)
                         },
-                        onCancel = {
-                            Log.d(TAG, "onCancel called for note $index")
-                            editingNoteIndex = null
-                        }
+                        onCancel = { editingNoteIndex = null }
                     )
                 }
             }
@@ -672,11 +674,18 @@ private fun EditableViewNoteSection(
     // Track if the text field has ever been focused - prevents canceling on initial render
     var hasBeenFocused by remember { mutableStateOf(false) }
 
-    Log.d(TAG, "EditableViewNoteSection: noteId=${note.id}, isEditing=$isEditing, hasSession=${inlineEditState?.isEditingNote(note.id)}")
+    // Use helper function to get correct content during transitional state
+    val hasActiveSession = inlineEditState?.isEditingNote(note.id) == true
+    val sessionContent = inlineEditState?.activeSession?.currentContent
+    val effectiveDisplayContent = getEffectiveDisplayContent(
+        isEditing = isEditing,
+        hasActiveSession = hasActiveSession,
+        displayContent = displayContent,
+        sessionContent = sessionContent
+    )
 
     // Reset hasBeenFocused when exiting edit mode
     LaunchedEffect(isEditing) {
-        Log.d(TAG, "EditableViewNoteSection LaunchedEffect: isEditing=$isEditing")
         if (!isEditing) {
             hasBeenFocused = false
         }
@@ -686,7 +695,6 @@ private fun EditableViewNoteSection(
     // Use editContent (raw) for editing, not displayContent (rendered)
     LaunchedEffect(isEditing, note.id, editContent) {
         if (isEditing && inlineEditState != null && !inlineEditState.isEditingNote(note.id)) {
-            Log.d(TAG, "Starting inline edit session for note ${note.id} with raw content")
             inlineEditState.startSession(note.id, editContent)
         }
     }
@@ -698,7 +706,6 @@ private fun EditableViewNoteSection(
         modifier = modifier.fillMaxWidth()
     ) {
         if (isEditing && session != null) {
-            Log.d(TAG, "Rendering InlineNoteEditor for note ${note.id}")
             // Editable mode - use InlineNoteEditor with proper EditorController support
             InlineNoteEditor(
                 session = session,
@@ -706,33 +713,28 @@ private fun EditableViewNoteSection(
                 focusRequester = focusRequester,
                 hostView = hostView,
                 onFocusChanged = { isFocused ->
-                    Log.d(TAG, "Focus changed: isFocused=$isFocused, isEditing=$isEditing, hasBeenFocused=$hasBeenFocused")
                     if (isFocused) {
                         hasBeenFocused = true
                         // Clear collapsing flag when focus is regained
                         session.clearCollapsingFlag()
-                        Log.d(TAG, "Focus gained, setting hasBeenFocused=true")
                     } else if (hasBeenFocused && isEditing) {
                         // Check if focus moved to an expanded directive editor (part of inline editing)
                         // or if we're in the process of collapsing a directive (focus will return)
                         val hasExpandedDirective = session.expandedDirectiveKey != null
                         val isCollapsing = session.isCollapsingDirective
-                        if (hasExpandedDirective || isCollapsing) {
-                            Log.d(TAG, "Focus lost but directive is expanded or collapsing, staying in edit mode")
-                            // Don't exit - focus moved to DirectiveEditRow or will return after collapse
-                        } else {
+                        if (!hasExpandedDirective && !isCollapsing) {
                             // Only handle focus loss if we previously had focus and no directive interaction
-                            val endedSession = inlineEditState?.endSession()
-                            if (endedSession != null && endedSession.isDirty) {
-                                Log.d(TAG, "Focus lost after having focus, saving changes")
-                                onSave(endedSession.currentContent)
+                            // DON'T end the UI session here - let the save/refresh flow handle it
+                            // to avoid showing stale directiveResults during the async refresh.
+                            // The session will be ended in CurrentNoteScreen after forceRefreshAllDirectives completes.
+                            if (session.isDirty) {
+                                onSave(session.currentContent)
                             } else {
-                                Log.d(TAG, "Focus lost after having focus, no changes, canceling")
+                                // For cancel (no changes), we can end the session immediately since no refresh needed
+                                inlineEditState?.endSession()
                                 onCancel()
                             }
                         }
-                    } else {
-                        Log.d(TAG, "Focus changed to false but hasBeenFocused=$hasBeenFocused, ignoring")
                     }
                 },
                 modifier = Modifier.fillMaxWidth()
@@ -740,28 +742,22 @@ private fun EditableViewNoteSection(
 
             // Request focus after the editor is composed
             LaunchedEffect(Unit) {
-                Log.d(TAG, "Requesting focus for inline note ${note.id}")
                 try {
                     focusRequester.requestFocus()
-                    Log.d(TAG, "Focus requested successfully")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to request focus", e)
+                } catch (_: Exception) {
+                    // Focus request failed - ignore
                 }
             }
         } else {
-            Log.d(TAG, "Rendering display mode for note ${note.id}")
-            // Display mode - tappable text showing rendered content
+            // Display mode - uses effectiveDisplayContent which handles transitional state
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(onClick = {
-                        Log.d(TAG, "Note section tapped, calling onStartEditing for note ${note.id}")
-                        onStartEditing()
-                    })
+                    .clickable(onClick = onStartEditing)
             ) {
                 SelectionContainer {
                     Text(
-                        text = displayContent,
+                        text = effectiveDisplayContent,
                         style = textStyle,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -824,8 +820,7 @@ private fun InlineNoteEditor(
             try {
                 focusRequester.requestFocus()
                 // Note: clearCollapsingFlag() will be called when focus is gained
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to request focus after directive collapsed", e)
+            } catch (_: Exception) {
                 // Clear flag anyway to prevent getting stuck
                 session.clearCollapsingFlag()
             }
@@ -860,8 +855,8 @@ private fun InlineNoteEditor(
                     // Request focus back to maintain edit mode
                     try {
                         focusRequester.requestFocus()
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Failed to request focus after tap", e)
+                    } catch (_: Exception) {
+                        // Focus request failed - ignore
                     }
                 }
             )
@@ -952,9 +947,6 @@ private fun InlineEditorLine(
     }
 
     val displayResult = remember(content, lineIndex, adjustedResults) {
-        Log.d(TAG, "InlineEditorLine: line $lineIndex, content='${content.take(30)}', prefix='$prefix', prefixLen=$prefixLength")
-        Log.d(TAG, "InlineEditorLine: original keys=${directiveResults.keys.filter { it.startsWith("$lineIndex:") }}")
-        Log.d(TAG, "InlineEditorLine: adjusted keys=${adjustedResults.keys.filter { it.startsWith("$lineIndex:") }}")
         DirectiveSegmenter.buildDisplayText(content, lineIndex, adjustedResults)
     }
 

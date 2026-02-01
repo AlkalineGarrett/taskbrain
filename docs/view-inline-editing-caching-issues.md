@@ -88,7 +88,60 @@ The feature allows users to edit notes displayed within a `[view ...]` directive
 
 ---
 
-## Issue 5: View Shows Old Content After Directive Edit (CURRENT - UNRESOLVED)
+## Issue 5: View Shows Old Content After Directive Edit (RESOLVED)
+
+**Note**: This issue was resolved through the comprehensive caching audit in `caching-audit-findings.md`. See Phases 1-5 for the complete fix.
+
+---
+
+## Issue 6: Stale Content Flash After Plain Text Inline Edit (RESOLVED)
+
+**Symptom**: When editing plain text (not directives) within a viewed note and tapping out to save, the UI briefly showed OLD content for ~1.5 seconds before updating to show the NEW content.
+
+**Root Cause**: When focus is lost, `editingNoteIndex` is set to `null` synchronously, triggering an immediate UI recompose. The display mode reads `displayContent` from `viewVal.renderedContents`, which comes from `directiveResults`. But `directiveResults` is only updated when `forceRefreshAllDirectives` completes asynchronously ~1.5 seconds later.
+
+**Timeline from logs**:
+1. Focus lost → `editingNoteIndex = null` (synchronous)
+2. UI recomposes in display mode with STALE content from `directiveResults`
+3. Save completes on Firestore (~700ms)
+4. `forceRefreshAllDirectives` completes (~800ms more)
+5. `directiveResults` updated, UI finally shows fresh content
+
+**Fix**: Use the session's `currentContent` during the transitional state.
+
+The `InlineEditSession` is NOT ended until `forceRefreshAllDirectives` completes. So when `isEditing=false` but the session is still active, we use the session's fresh content instead of the stale `displayContent` from `directiveResults`.
+
+**Implementation** (`DirectiveAwareLineInput.kt`):
+
+1. Added `getEffectiveDisplayContent()` helper function:
+```kotlin
+internal fun getEffectiveDisplayContent(
+    isEditing: Boolean,
+    hasActiveSession: Boolean,
+    displayContent: String,
+    sessionContent: String?
+): String {
+    return if (!isEditing && hasActiveSession && sessionContent != null) {
+        sessionContent  // Use fresh content from session during transitional state
+    } else {
+        displayContent
+    }
+}
+```
+
+2. Updated `EditableViewNoteSection` to use this helper.
+
+**Limitation**: During the transitional state, directives in the content (like `[add(1,1)]`) will appear as raw text instead of rendered results (like `2`). This is a minor visual artifact that resolves when the refresh completes.
+
+**Test**: `EffectiveDisplayContentTest.kt` - Unit tests for the helper function, including a test that fails without the fix.
+
+**Files Modified**:
+- `DirectiveAwareLineInput.kt` - Added helper function, updated display logic
+- `EffectiveDisplayContentTest.kt` - New unit test file
+
+---
+
+## Issue 5 (Original): View Shows Old Content After Directive Edit (RESOLVED)
 
 **Symptom**: After editing a directive within a viewed note and confirming:
 1. The inline editor recalculates and shows updated result

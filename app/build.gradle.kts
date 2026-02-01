@@ -65,6 +65,35 @@ android {
     }
 }
 
+// Slow test configuration
+// By default, exclude slow tests from regular test runs
+// Run with: ./gradlew slowTest
+tasks.withType<Test>().configureEach {
+    if (name != "slowTest") {
+        useJUnit {
+            excludeCategories("org.alkaline.taskbrain.testutil.SlowTest")
+        }
+    }
+}
+
+// Custom task to run only slow tests
+// Uses afterEvaluate to ensure testDebugUnitTest task exists
+afterEvaluate {
+    tasks.register<Test>("slowTest") {
+        description = "Runs slow integration tests only"
+        group = "verification"
+
+        // Configure the test classpath from the debug unit test task
+        val debugTestTask = tasks.named<Test>("testDebugUnitTest").get()
+        classpath = debugTestTask.classpath
+        testClassesDirs = debugTestTask.testClassesDirs
+
+        useJUnit {
+            includeCategories("org.alkaline.taskbrain.testutil.SlowTest")
+        }
+    }
+}
+
 dependencies {
 
     implementation(libs.androidx.core.ktx)

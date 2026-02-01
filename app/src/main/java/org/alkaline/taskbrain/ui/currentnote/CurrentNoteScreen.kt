@@ -70,6 +70,11 @@ fun CurrentNoteScreen(
     val directiveResults = remember(directiveResultsRaw) {
         currentNoteViewModel.getResultsByPosition()
     }
+    // Log when directiveResults changes to trace timing
+    LaunchedEffect(directiveResultsRaw) {
+        val firstContent = directiveResultsRaw.values.firstOrNull()?.toValue()?.toDisplayString()?.take(60)?.replace("\n", "\\n")
+        Log.d("InlineEditCache", ">>> directiveResultsRaw CHANGED: ${directiveResultsRaw.size} entries, firstContent='$firstContent...'")
+    }
     val recentTabs by recentTabsViewModel.tabs.observeAsState(emptyList())
     val tabsError by recentTabsViewModel.error.observeAsState()
 
@@ -165,8 +170,13 @@ fun CurrentNoteScreen(
                             session.updateDirectiveResults(results)
                             android.util.Log.d("InlineEditCache", "Session directive results updated, calling forceRefreshAllDirectives...")
                             // Now refresh host note's directives so the view shows updated content
-                            // This runs after inline editor directives are updated
-                            currentNoteViewModel.forceRefreshAllDirectives(userContent)
+                            // End session in the callback to ensure results are updated first
+                            currentNoteViewModel.forceRefreshAllDirectives(userContent) {
+                                android.util.Log.d("InlineEditCache", "forceRefreshAllDirectives COMPLETE, ending sessions NOW")
+                                // End BOTH sessions: ViewModel session AND UI session
+                                currentNoteViewModel.endInlineEditSession()
+                                inlineEditState.endSession()
+                            }
                             android.util.Log.d("InlineEditCache", "forceRefreshAllDirectives called (async)")
                         }
                     }
@@ -857,12 +867,19 @@ fun CurrentNoteScreen(
                         noteId = noteId,
                         newContent = noteContent,
                         onSuccess = {
-                            android.util.Log.d("CurrentNoteScreen", "onViewNoteTap: save SUCCESS for noteId=$noteId")
+                            android.util.Log.d("InlineEditCache", ">>> onViewNoteTap onSuccess CALLBACK ENTERED for noteId=$noteId")
                             // Invalidate the tab cache for this note so switching tabs shows fresh content
                             recentTabsViewModel.invalidateCache(noteId)
                             // Force re-execute ALL directives with fresh data from Firestore
-                            // This properly refreshes view directives without UI flicker
-                            currentNoteViewModel.forceRefreshAllDirectives(userContent)
+                            // End session in the callback to ensure results are updated first
+                            android.util.Log.d("InlineEditCache", ">>> onViewNoteTap: calling forceRefreshAllDirectives NOW")
+                            currentNoteViewModel.forceRefreshAllDirectives(userContent) {
+                                android.util.Log.d("InlineEditCache", ">>> forceRefreshAllDirectives COMPLETE, ending sessions NOW")
+                                // End BOTH sessions: ViewModel session AND UI session
+                                currentNoteViewModel.endInlineEditSession()
+                                inlineEditState.endSession()
+                            }
+                            android.util.Log.d("InlineEditCache", ">>> onViewNoteTap: forceRefreshAllDirectives call RETURNED (async)")
                         }
                     )
                 },
