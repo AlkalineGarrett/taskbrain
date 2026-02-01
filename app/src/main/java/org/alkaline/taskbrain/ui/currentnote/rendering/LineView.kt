@@ -84,6 +84,9 @@ internal fun ControlledLineView(
     onDirectiveTap: ((directiveKey: String, sourceText: String) -> Unit)? = null,
     onViewNoteTap: ((directiveKey: String, noteId: String, noteContent: String) -> Unit)? = null,
     onViewEditDirective: ((directiveKey: String, sourceText: String) -> Unit)? = null,
+    onViewDirectiveRefresh: ((lineIndex: Int, directiveKey: String, sourceText: String, newText: String) -> Unit)? = null,
+    onViewDirectiveConfirm: ((lineIndex: Int, directiveKey: String, sourceText: String, newText: String) -> Unit)? = null,
+    onViewDirectiveCancel: ((lineIndex: Int, directiveKey: String, sourceText: String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val prefix = lineState.prefix
@@ -216,6 +219,9 @@ internal fun ControlledLineView(
                 onViewEditDirective = { key, sourceText ->
                     onViewEditDirective?.invoke(key, sourceText)
                 },
+                onViewDirectiveRefresh = onViewDirectiveRefresh,
+                onViewDirectiveConfirm = onViewDirectiveConfirm,
+                onViewDirectiveCancel = onViewDirectiveCancel,
                 modifier = Modifier.fillMaxWidth()
             )
         }

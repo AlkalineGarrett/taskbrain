@@ -118,6 +118,9 @@ internal fun DirectiveAwareLineInput(
     onDirectiveTap: (directiveKey: String, sourceText: String) -> Unit,
     onViewNoteTap: ((directiveKey: String, noteId: String, noteContent: String) -> Unit)? = null,
     onViewEditDirective: ((directiveKey: String, sourceText: String) -> Unit)? = null,
+    onViewDirectiveRefresh: ((lineIndex: Int, directiveKey: String, sourceText: String, newText: String) -> Unit)? = null,
+    onViewDirectiveConfirm: ((lineIndex: Int, directiveKey: String, sourceText: String, newText: String) -> Unit)? = null,
+    onViewDirectiveCancel: ((lineIndex: Int, directiveKey: String, sourceText: String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val hostView = LocalView.current
@@ -204,18 +207,32 @@ internal fun DirectiveAwareLineInput(
             )
         } else if (viewDirectiveRange != null && viewVal != null && viewDirectiveRange.hasError.not()) {
             // View directive with successful result - render with inline editing support
+            val viewResult = directiveResults[viewDirectiveRange.key]
+            val isExpanded = viewResult?.collapsed == false
             ViewDirectiveInlineContent(
                 viewVal = viewVal,
                 displayText = viewDirectiveRange.displayText,
                 directiveKey = viewDirectiveRange.key,
                 sourceText = viewDirectiveRange.sourceText,
                 textStyle = textStyle,
+                isDirectiveExpanded = isExpanded,
+                directiveError = viewResult?.error,
+                directiveWarning = viewResult?.warning?.displayMessage,
                 onNoteTap = { noteId, noteContent ->
                     onViewNoteTap?.invoke(viewDirectiveRange.key, noteId, noteContent)
                 },
                 onEditDirective = {
                     onViewEditDirective?.invoke(viewDirectiveRange.key, viewDirectiveRange.sourceText)
                         ?: onDirectiveTap(viewDirectiveRange.key, viewDirectiveRange.sourceText)
+                },
+                onDirectiveRefresh = { newText ->
+                    onViewDirectiveRefresh?.invoke(lineIndex, viewDirectiveRange.key, viewDirectiveRange.sourceText, newText)
+                },
+                onDirectiveConfirm = { newText ->
+                    onViewDirectiveConfirm?.invoke(lineIndex, viewDirectiveRange.key, viewDirectiveRange.sourceText, newText)
+                },
+                onDirectiveCancel = {
+                    onViewDirectiveCancel?.invoke(lineIndex, viewDirectiveRange.key, viewDirectiveRange.sourceText)
                 }
             )
         } else {
@@ -580,8 +597,14 @@ private fun ViewDirectiveInlineContent(
     directiveKey: String,
     sourceText: String,
     textStyle: TextStyle,
+    isDirectiveExpanded: Boolean,
+    directiveError: String?,
+    directiveWarning: String?,
     onNoteTap: (noteId: String, noteContent: String) -> Unit,
-    onEditDirective: () -> Unit
+    onEditDirective: () -> Unit,
+    onDirectiveRefresh: ((newText: String) -> Unit)?,
+    onDirectiveConfirm: ((newText: String) -> Unit)?,
+    onDirectiveCancel: (() -> Unit)?
 ) {
     val notes = viewVal.notes
     val renderedContents = viewVal.renderedContents
@@ -589,91 +612,107 @@ private fun ViewDirectiveInlineContent(
     // Track which note is currently being edited (by index)
     var editingNoteIndex by remember { mutableStateOf<Int?>(null) }
 
-    Box(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .viewIndicator(ViewIndicatorColor)
             .padding(start = 8.dp, top = 4.dp, bottom = 4.dp)
     ) {
-        // Edit directive button at top-right
-        IconButton(
-            onClick = onEditDirective,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .size(ViewEditButtonSize)
-                .padding(end = 4.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Default.Settings,
-                contentDescription = "Edit view directive",
-                tint = ViewIndicatorColor,
-                modifier = Modifier.size(ViewEditIconSize)
+        // Directive edit row at the TOP when expanded
+        if (isDirectiveExpanded) {
+            DirectiveEditRow(
+                initialText = sourceText,
+                textStyle = textStyle,
+                errorMessage = directiveError,
+                warningMessage = directiveWarning,
+                onRefresh = { newText -> onDirectiveRefresh?.invoke(newText) },
+                onConfirm = { newText -> onDirectiveConfirm?.invoke(newText) },
+                onCancel = { onDirectiveCancel?.invoke() }
             )
         }
 
-        // Note content - either split by sections or as a single block
-        if (notes.isEmpty()) {
-            // Empty view - show placeholder
-            Text(
-                text = displayText,
-                style = textStyle.copy(color = ViewIndicatorColor),
+        // Main content box with edit button
+        Box(modifier = Modifier.fillMaxWidth()) {
+            // Edit directive button at top-right
+            IconButton(
+                onClick = onEditDirective,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(end = ViewEditButtonSize)
-            )
-        } else if (notes.size == 1) {
-            // Single note - simple case
-            val note = notes.first()
-            // Display rendered content, but edit raw content (preserves directives like [now])
-            val displayContent = renderedContents?.firstOrNull() ?: note.content
-            val editContent = note.content
-            EditableViewNoteSection(
-                note = note,
-                displayContent = displayContent,
-                editContent = editContent,
-                textStyle = textStyle,
-                isEditing = editingNoteIndex == 0,
-                onStartEditing = { editingNoteIndex = 0 },
-                onSave = { newContent ->
-                    editingNoteIndex = null
-                    onNoteTap(note.id, newContent)
-                },
-                onCancel = { editingNoteIndex = null },
-                modifier = Modifier.padding(end = ViewEditButtonSize)
-            )
-        } else {
-            // Multiple notes with separators
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(end = ViewEditButtonSize)
+                    .align(Alignment.TopEnd)
+                    .size(ViewEditButtonSize)
+                    .padding(end = 4.dp)
             ) {
-                notes.forEachIndexed { index, note ->
-                    // Separator before each note except first
-                    if (index > 0) {
-                        NoteSeparator()
-                    }
+                Icon(
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = "Edit view directive",
+                    tint = ViewIndicatorColor,
+                    modifier = Modifier.size(ViewEditIconSize)
+                )
+            }
 
-                    // Note section - display rendered content, but edit raw content
-                    val displayContent = renderedContents?.getOrNull(index) ?: note.content
-                    val editContent = note.content
-                    EditableViewNoteSection(
-                        note = note,
-                        displayContent = displayContent,
-                        editContent = editContent,
-                        textStyle = textStyle,
-                        isEditing = editingNoteIndex == index,
-                        onStartEditing = { editingNoteIndex = index },
-                        onSave = { newContent ->
-                            editingNoteIndex = null
-                            onNoteTap(note.id, newContent)
-                        },
-                        onCancel = { editingNoteIndex = null }
-                    )
+            // Note content - either split by sections or as a single block
+            if (notes.isEmpty()) {
+                // Empty view - show placeholder
+                Text(
+                    text = displayText,
+                    style = textStyle.copy(color = ViewIndicatorColor),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(end = ViewEditButtonSize)
+                )
+            } else if (notes.size == 1) {
+                // Single note - simple case
+                val note = notes.first()
+                // Display rendered content, but edit raw content (preserves directives like [now])
+                val displayContent = renderedContents?.firstOrNull() ?: note.content
+                val editContent = note.content
+                EditableViewNoteSection(
+                    note = note,
+                    displayContent = displayContent,
+                    editContent = editContent,
+                    textStyle = textStyle,
+                    isEditing = editingNoteIndex == 0,
+                    onStartEditing = { editingNoteIndex = 0 },
+                    onSave = { newContent ->
+                        editingNoteIndex = null
+                        onNoteTap(note.id, newContent)
+                    },
+                    onCancel = { editingNoteIndex = null },
+                    modifier = Modifier.padding(end = ViewEditButtonSize)
+                )
+            } else {
+                // Multiple notes with separators
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(end = ViewEditButtonSize)
+                ) {
+                    notes.forEachIndexed { index, note ->
+                        // Separator before each note except first
+                        if (index > 0) {
+                            NoteSeparator()
+                        }
+
+                        // Note section - display rendered content, but edit raw content
+                        val displayContent = renderedContents?.getOrNull(index) ?: note.content
+                        val editContent = note.content
+                        EditableViewNoteSection(
+                            note = note,
+                            displayContent = displayContent,
+                            editContent = editContent,
+                            textStyle = textStyle,
+                            isEditing = editingNoteIndex == index,
+                            onStartEditing = { editingNoteIndex = index },
+                            onSave = { newContent ->
+                                editingNoteIndex = null
+                                onNoteTap(note.id, newContent)
+                            },
+                            onCancel = { editingNoteIndex = null }
+                        )
+                    }
                 }
             }
-        }
-    }
+        }  // Close the Box
+    }  // Close the Column
 }
 
 /**

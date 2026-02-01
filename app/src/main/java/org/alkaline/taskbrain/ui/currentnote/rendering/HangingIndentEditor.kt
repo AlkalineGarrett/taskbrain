@@ -483,16 +483,22 @@ private fun EditorContent(
                     directiveResults = directiveResults,
                     onDirectiveTap = { key, sourceText -> onDirectiveTap?.invoke(key, sourceText) },
                     onViewNoteTap = onViewNoteTap,
-                    onViewEditDirective = onViewEditDirective
+                    onViewEditDirective = onViewEditDirective,
+                    onViewDirectiveRefresh = onDirectiveRefresh,
+                    onViewDirectiveConfirm = onDirectiveEditConfirm,
+                    onViewDirectiveCancel = onDirectiveEditCancel
                 )
 
                 // Render edit rows for expanded directives on this line
+                // Skip view directives - they render DirectiveEditRow inside ViewDirectiveInlineContent
                 val lineContent = lineState.content
                 val lineDirectives = DirectiveFinder.findDirectives(lineContent)
                 for (found in lineDirectives) {
                     val key = DirectiveFinder.directiveKey(index, found.startOffset)
                     val result = directiveResults[key]
-                    if (result != null && !result.collapsed) {
+                    // Skip view directives - they handle their own DirectiveEditRow at the top
+                    val isViewDirective = result?.toValue() is org.alkaline.taskbrain.dsl.runtime.values.ViewVal
+                    if (result != null && !result.collapsed && !isViewDirective) {
                         // Key on position-based key so component recreates when directive moves
                         key(key) {
                             DirectiveEditRow(
@@ -537,7 +543,10 @@ private fun ControlledLineViewWrapper(
     directiveResults: Map<String, DirectiveResult> = emptyMap(),
     onDirectiveTap: ((directiveKey: String, sourceText: String) -> Unit)? = null,
     onViewNoteTap: ((directiveKey: String, noteId: String, noteContent: String) -> Unit)? = null,
-    onViewEditDirective: ((directiveKey: String, sourceText: String) -> Unit)? = null
+    onViewEditDirective: ((directiveKey: String, sourceText: String) -> Unit)? = null,
+    onViewDirectiveRefresh: ((lineIndex: Int, directiveKey: String, sourceText: String, newText: String) -> Unit)? = null,
+    onViewDirectiveConfirm: ((lineIndex: Int, directiveKey: String, sourceText: String, newText: String) -> Unit)? = null,
+    onViewDirectiveCancel: ((lineIndex: Int, directiveKey: String, sourceText: String) -> Unit)? = null
 ) {
     val lineSelection = state.getLineSelection(index)
     val lineEndOffset = state.getLineStartOffset(index) + lineState.text.length
@@ -574,6 +583,9 @@ private fun ControlledLineViewWrapper(
         onDirectiveTap = onDirectiveTap,
         onViewNoteTap = onViewNoteTap,
         onViewEditDirective = onViewEditDirective,
+        onViewDirectiveRefresh = onViewDirectiveRefresh,
+        onViewDirectiveConfirm = onViewDirectiveConfirm,
+        onViewDirectiveCancel = onViewDirectiveCancel,
         modifier = Modifier
             .fillMaxWidth()
             .onGloballyPositioned { coordinates ->
