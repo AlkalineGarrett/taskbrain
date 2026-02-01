@@ -33,6 +33,14 @@ object DirectiveColors {
     // Action buttons - blue palette
     val RefreshButton = Color(0xFF2196F3)       // Blue (refresh button)
 
+    // Button directive - primary action blue palette
+    val ButtonBackground = Color(0xFF1976D2)    // Primary blue (button background)
+    val ButtonContent = Color(0xFFFFFFFF)       // White (button text)
+    val ButtonBorder = Color(0xFF1565C0)        // Darker blue (button border)
+    val ButtonLoadingBackground = Color(0xFF90CAF9) // Light blue (loading state)
+    val ButtonSuccessBackground = Color(0xFF4CAF50) // Green (success flash)
+    val ButtonErrorBackground = Color(0xFFF44336)   // Red (error state)
+
     // View directive - subtle indicator (Milestone 10)
     val ViewIndicator = Color(0xFFB0BEC5)       // Blue-gray (left border for views)
     val ViewDivider = Color(0xFFCFD8DC)         // Light blue-gray (divider between viewed notes)

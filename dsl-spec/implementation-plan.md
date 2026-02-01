@@ -1023,30 +1023,40 @@ data class NoteContext(
 
 ---
 
-## Milestone 8: Lambda
+## Milestone 8: Lambda ✅ COMPLETE
 
-**Target:** `[lambda[parse_date i.path]]`
+**Target:** `[find(where: [i.path.startsWith("inbox")])]`
 
-### Builtins Additions
-```kotlin
-"parse_date" to { args, env ->
-    val str = args[0].asString()
-    DateVal(LocalDate.parse(str))
-}
-```
+### Implementation Summary
 
-### Lexer Additions
-- `LAMBDA` keyword token
+Lambda syntax was redesigned as part of view caching Phase 0b. The `lambda` keyword is now deprecated in favor of implicit lambda syntax `[...]`.
 
-### Parser Additions
-- `lambda[...]` syntax
-- Implicit `i` parameter inside lambda body
+**Changes made:**
+1. Modified `Parser.parsePrimary` to recognize `[...]` as implicit lambda with parameter `i`
+2. Added `LambdaInvocation` AST node for immediate invocation `[[expr](arg)]`
+3. Added multi-arg lambda syntax `(a, b)[expr]` for explicit parameters
+4. Extended `Executor.evaluate()` to handle `LambdaInvocation`
+5. Legacy `lambda[...]` syntax remains valid but deprecated
+
+### Syntax Changes
+
+| Old (deprecated) | New (preferred) |
+|------------------|-----------------|
+| `lambda[i.path]` | `[i.path]` |
+| `find(where: lambda[i.path.startsWith("x")])` | `find(where: [i.path.startsWith("x")])` |
 
 ### AST Nodes
 ```kotlin
 data class LambdaExpr(
     val params: List<String>,  // ["i"] for implicit form
-    val body: Expression
+    val body: Expression,
+    override val position: Int
+) : Expression()
+
+data class LambdaInvocation(
+    val lambda: Expression,
+    val args: List<Expression>,
+    override val position: Int
 ) : Expression()
 ```
 
@@ -1059,40 +1069,14 @@ data class LambdaVal(
 ) : DslValue()
 ```
 
-### Executor
-```kotlin
-is LambdaExpr -> LambdaVal(expr.params, expr.body, env.capture())
-
-// Invoking a lambda:
-fun invokeLambda(lambda: LambdaVal, args: List<DslValue>): DslValue {
-    val localEnv = lambda.capturedEnv.child()
-    lambda.params.zip(args).forEach { (param, arg) ->
-        localEnv.define(param, arg)
-    }
-    return evaluate(lambda.body, localEnv)
-}
-```
-
-### Integration with Find
-```kotlin
-"find" to { args, env ->
-    val whereLambda = args.named("where") as? LambdaVal
-    // ...
-    val filtered = notes.filter { note ->
-        val pathMatches = pathPattern?.compiledRegex?.matches(note.path) ?: true
-        val whereMatches = whereLambda?.let {
-            invokeLambda(it, listOf(NoteVal(note))).asBoolean()
-        } ?: true
-        pathMatches && whereMatches
-    }
-    ListVal(filtered.map { NoteVal(it) })
-}
-```
-
-### Tests
-- Lambda creation and invocation
-- Variable capture works
-- `find(where: lambda[...])` filters correctly
+### Tests (ImplicitLambdaTest.kt) ✅ All passing
+- Implicit lambda `[expr]` creates lambda with parameter `i` ✅
+- Variable assignment `[f: [add(i, 1)]]` creates bound lambda ✅
+- Multi-arg lambdas `[(a, b)[expr]]` syntax ✅
+- Legacy `lambda[...]` remains valid ✅
+- Nested brackets in find predicates ✅
+- Parentheses equivalence `func[x]` = `func([x])` ✅
+- Immediate invocation `[[expr](arg)]` ✅
 
 ---
 
@@ -1350,345 +1334,359 @@ class ViewContentTracker {
 
 ---
 
-## Milestone 11: Refresh (Target 2)
+## Milestone 11: Refresh ✅ COMPLETE
 
-**Target:** `[refresh view sort find(path: pattern(...)), key: lambda[...], order: descending]`
+**Target:** `[refresh[if(time.gt("12:00"), "afternoon", "morning")]]`
 
-### Parser Additions
-- `refresh` as top-level modifier
-- Wraps the inner expression
+### Implementation Summary
+
+Refresh was implemented as part of view caching Phases 0d and 3. The syntax uses `refresh[...]` brackets rather than a top-level modifier.
+
+**Changes made:**
+1. Added `RefreshExpr` AST node in `Expression.kt`
+2. Modified `Parser.parsePrimary` to recognize `refresh[...]` syntax
+3. Implemented time trigger analysis with backtrace + verify algorithm
+4. Created `RefreshTriggerAnalyzer` for extracting trigger times from AST
+5. Created `RefreshScheduler` for periodic trigger checking
+6. Added `mockedTime` support to Environment for verification testing
 
 ### AST Nodes
 ```kotlin
-data class RefreshDirective(val inner: Expression) : Expression()
+data class RefreshExpr(val inner: Expression, override val position: Int) : Expression()
+```
+
+### Time Trigger Analysis
+
+The backtrace + verify algorithm finds flip points:
+1. Walk AST to find all time/date literals in comparisons
+2. Resolve variables through constant propagation
+3. Backtrace from literal through method chains to temporal source
+4. Reverse any `.plus()` operations (e.g., `.plus(minutes:10).gt("12:00")` → trigger at 11:50)
+5. Verify by evaluating at trigger time ±1 minute to confirm value changes
+
+### Trigger Types
+```kotlin
+sealed class TimeTrigger {
+    abstract fun shouldTriggerAt(time: LocalDateTime): Boolean
+    abstract fun nextTriggerAfter(time: LocalDateTime): LocalDateTime?
+    abstract val isRecurring: Boolean
+}
+
+data class DailyTimeTrigger(val triggerTime: LocalTime) : TimeTrigger()
+data class DateTrigger(val triggerDate: LocalDate) : TimeTrigger()
+data class DateTimeTrigger(val triggerDateTime: LocalDateTime) : TimeTrigger()
 ```
 
 ### Dependency Tracking
+
+Full dependency tracking implemented in view caching Phase 2:
 ```kotlin
 data class DirectiveDependencies(
-    val pathPatterns: List<PatternVal>,  // From find(path: ...)
-    val noteIds: List<String>            // Direct note references
+    val firstLineNotes: Set<String>,
+    val nonFirstLineNotes: Set<String>,
+    val dependsOnPath: Boolean,
+    val dependsOnModified: Boolean,
+    val dependsOnCreated: Boolean,
+    val dependsOnViewed: Boolean,
+    val dependsOnNoteExistence: Boolean,
+    val hierarchyDeps: List<HierarchyDependency>,
+    val usesSelfAccess: Boolean
 )
-
-fun extractDependencies(ast: Expression): DirectiveDependencies {
-    // Static analysis: walk AST, find all find() calls and note refs
-}
 ```
 
-### Storage
-- Store dependencies alongside directive result
-- On note change: find directives that depend on changed note's path
-- Mark those directives as stale
+### Staleness and Cache Invalidation
 
-### Execution
-- On view: check if directive is stale
-- If stale: re-execute, update cache
-- Show loading indicator during re-execution
+Implemented in `StalenessChecker` and `DirectiveCacheManager`:
+- On-demand metadata hashing (lazy, field-level)
+- Short-circuit staleness check (stop at first stale dependency)
+- Global vs per-note cache based on self-access
 
-### Tests
-- Dependencies extracted correctly
-- Re-execution triggered on dependency change
-- Cache invalidation works
+### Tests (RefreshExprTest.kt, RefreshTriggerAnalyzerTest.kt) ✅ All passing
+- `refresh[...]` syntax recognized ✅
+- Valid wrapper for temporal values ✅
+- Backtrace algorithm finds trigger times ✅
+- Math reversal works (`.plus()` → subtract) ✅
+- Verification confirms actual value flip ✅
+- Variable resolution via constant propagation ✅
+- Multiple triggers in single expression ✅
+- Daily recurring vs one-time triggers ✅
 
 ---
 
-## Milestone 12: Deferred Execution
+## Milestone 12: Deferred Execution ✅ COMPLETE
 
 **Target:** `[later date]`, `[later[...]]`
 
-### Lexer Additions
-| Token Type | Pattern |
-|------------|---------|
-| `LATER` | `later` keyword |
-| `RUN` | `run` keyword |
+### Implementation Summary
 
-### Parser Additions
-- `later expr` → defer single expression
-- `later[...]` → defer entire scope
-- `run expr` → force evaluation in deferred scope
+Deferred execution was implemented in view caching Phase 0e. The design was simplified: `later` creates lambdas rather than a separate `DeferredVal` type.
 
-### AST Nodes
+**Changes made:**
+1. Modified `Parser.parsePrimary` to recognize `later` keyword
+2. `later expr` wraps the next primary expression in a `LambdaExpr` with param `i`
+3. `later[...]` is redundant (equivalent to just `[...]`)
+4. No separate `DeferredVal` type needed - lambdas serve the same purpose
+
+### Design Change
+
+The original design proposed a separate `DeferredVal` type with auto-propagation. The simplified design uses lambdas directly:
+
+| Original Design | Implemented Design |
+|-----------------|-------------------|
+| `later date` → `DeferredVal` | `later date` → `LambdaVal` (lambda returning `date`) |
+| Auto-propagation through builtins | Lambda invocation when needed |
+| `run expr` to force evaluation | Just invoke the lambda |
+
+### Parser
 ```kotlin
-data class DeferredExpr(val inner: Expression) : Expression()
-data class DeferredScope(val inner: Expression) : Expression()
-data class RunExpr(val inner: Expression) : Expression()
-```
-
-### Types
-```kotlin
-data class DeferredVal(
-    val ast: Expression,
-    val capturedEnv: Environment
-) : DslValue()
-```
-
-### Auto-Propagation
-```kotlin
-// In builtin functions that take arguments, handle deferred values:
-"format" to { args, env ->
-    val dateArg = args[0]
-    if (dateArg is DeferredVal) {
-        // Return deferred that will format when resolved
-        DeferredVal(CallExpr("format", listOf(dateArg.ast)), env)
-    } else {
-        StringVal((dateArg as DateVal).format())
+// later expr - wraps next token in lambda
+// later[...] - redundant, equivalent to [...]
+private fun parseLaterExpression(): Expression {
+    consume(LATER)
+    // If followed by [, the later is redundant
+    if (check(LBRACKET)) {
+        return parseDeferredBlock()  // Returns LambdaExpr
     }
+    // Otherwise wrap next primary in lambda
+    val body = parsePrimary()
+    return LambdaExpr(listOf("i"), body, position)
 }
 ```
 
-### Executor
-```kotlin
-is DeferredExpr -> DeferredVal(expr.inner, env.capture())
-is DeferredScope -> DeferredVal(expr.inner, env.capture())
-is RunExpr -> evaluate(expr.inner, env)  // Force evaluation
+### Usage with Schedule
 
-fun resolveDeferred(deferred: DeferredVal): DslValue {
-    return evaluate(deferred.ast, deferred.capturedEnv)
-}
+Deferred blocks are primarily used with `schedule()`:
+```
+[schedule(daily, [new(path: date)])]
+                 ^^^^^^^^^^^^^^^^^^^
+                 This is the deferred action (a lambda)
 ```
 
-### Tests
-- Deferred values don't execute immediately
-- Auto-propagation works
-- `run` forces evaluation
-- Variable capture preserves values
+When the schedule fires, the lambda is invoked, executing `new(path: date)` with `date` evaluated at execution time.
+
+### Tests (LaterExprTest.kt) ✅ All passing
+- `later expr` creates lambda ✅
+- `later[...]` equivalent to `[...]` ✅
+- `later 5` and `[5]` both produce lambdas returning 5 ✅
+- Static analysis inherits body's dynamic/idempotent status ✅
 
 ---
 
-## Milestone 13: Schedule (Target 1)
+## Milestone 13: Schedule (Partial - Syntax Complete, Backend Pending)
 
-**Target:** `[schedule(daily_at("9:00"), later[maybe_new(...)])]`
+**Target:** `[schedule(daily, [maybe_new(path: date)])]`
 
-### Builtins: DateFunctions.kt Additions
+### Implementation Summary
+
+Schedule syntax was implemented in view caching Phase 0f. The syntax was simplified to use frequency constants rather than time-specific functions.
+
+### Completed ✅
+
+**Syntax and Types (ActionFunctions.kt, ActionValues.kt):**
 ```kotlin
-"parse_time" to { args, env ->
-    val str = args[0].asString()
-    TimeVal(LocalTime.parse(str))
-}
+// Frequency constants
+"daily" to { _, _ -> StringVal("daily") }
+"hourly" to { _, _ -> StringVal("hourly") }
+"weekly" to { _, _ -> StringVal("weekly") }
 
-"daily_at" to { args, env ->
-    val time = args[0] as TimeVal
-    ScheduleRuleVal(DailyAt(time.value))
-}
-
-"at" to { args, env ->
-    val datetime = args[0] as DateTimeVal
-    ScheduleRuleVal(At(datetime.value))
-}
-```
-
-### Types
-```kotlin
-sealed class ScheduleRule
-data class DailyAt(val time: LocalTime) : ScheduleRule()
-data class At(val datetime: LocalDateTime) : ScheduleRule()
-
-data class ScheduleRuleVal(val rule: ScheduleRule) : DslValue()
-```
-
-### Builtins: NoteFunctions.kt Additions
-```kotlin
+// schedule(frequency, action) - Creates a ScheduleVal
 "schedule" to { args, env ->
-    val rule = args[0] as ScheduleRuleVal
-    val action = args[1] as DeferredVal
-
-    val directiveText = env.getCurrentDirectiveText()
-    val hash = directiveText.sha256()
-
-    // Check for existing schedule with same hash
-    val existing = scheduleRepository.findByHash(hash)
-    if (existing != null && existing.noteId != env.getCurrentNoteId()) {
-        error("Schedule already exists in another note")
+    val frequency = when (val freqArg = args.require(0, "frequency")) {
+        is StringVal -> ScheduleFrequency.fromString(freqArg.value)
+        else -> throw ExecutionException("frequency must be a string constant")
     }
-
-    scheduleRepository.upsertSchedule(
-        hash = hash,
-        noteId = env.getCurrentNoteId(),
-        rule = rule.rule,
-        deferredAst = serializeAst(action.ast),
-        capturedEnv = serializeEnv(action.capturedEnv)
-    )
-
-    ScheduleVal(hash, rule.rule)
+    val action = args.requireLambda(1, "schedule", "action")
+    ScheduleVal(frequency, action)
 }
+
+enum class ScheduleFrequency { DAILY, HOURLY, WEEKLY }
+
+data class ScheduleVal(
+    val frequency: ScheduleFrequency,
+    val action: LambdaVal
+) : DslValue()
 ```
 
-### Storage: ScheduleRepository.kt
-```kotlin
-class ScheduleRepository(private val firestore: FirebaseFirestore) {
-    private val collection = firestore.collection("schedules")
+**Idempotency Integration:**
+- `schedule()` is recognized as a wrapper that makes non-idempotent actions (like `new()`, `.append()`) safe at top-level
+- `MutationValidator` allows mutations inside `schedule()` blocks
 
-    suspend fun upsertSchedule(...)
-    suspend fun findByHash(hash: String): Schedule?
-    suspend fun getSchedulesForNote(noteId: String): List<Schedule>
-    suspend fun getAllActiveSchedules(): List<Schedule>
-    suspend fun markExecuted(hash: String, success: Boolean, error: String?)
-    suspend fun cancelSchedule(hash: String)
-}
-```
+### Pending 🔲
 
-### Firebase Cloud Function
-```typescript
-// functions/src/scheduleExecutor.ts
+**Backend Execution:**
+The original plan's backend components are still needed:
 
-import * as functions from 'firebase-functions';
-import * as admin from 'firebase-admin';
+1. **ScheduleRepository.kt** - Firestore storage for schedules:
+   ```kotlin
+   class ScheduleRepository(private val firestore: FirebaseFirestore) {
+       suspend fun upsertSchedule(...)
+       suspend fun findByHash(hash: String): Schedule?
+       suspend fun getSchedulesForNote(noteId: String): List<Schedule>
+       suspend fun getAllActiveSchedules(): List<Schedule>
+       suspend fun markExecuted(hash: String, success: Boolean, error: String?)
+       suspend fun cancelSchedule(hash: String)
+   }
+   ```
 
-export const executeSchedules = functions.pubsub
-    .schedule('every 1 minutes')
-    .onRun(async (context) => {
-        const now = admin.firestore.Timestamp.now();
-        const db = admin.firestore();
+2. **Firebase Cloud Function** - Server-side schedule execution (see original plan)
 
-        const dueSchedules = await db.collection('schedules')
-            .where('status', '==', 'active')
-            .where('nextExecution', '<=', now)
-            .get();
+3. **WorkManager Fallback** - Client-side fallback for offline execution (see original plan)
 
-        for (const doc of dueSchedules.docs) {
-            await executeSchedule(doc);
-        }
-    });
+4. **UI: Schedule Indicator** - Visual feedback for notes with active schedules
 
-async function executeSchedule(doc: FirebaseFirestore.DocumentSnapshot) {
-    const schedule = doc.data();
-    try {
-        // Deserialize and execute the deferred AST
-        const result = await executeDeferredAst(
-            schedule.deferredAst,
-            schedule.capturedEnv,
-            schedule.noteId
-        );
+5. **Note Deletion Handling** - Confirm schedule cancellation on note delete
 
-        // Update schedule
-        await doc.ref.update({
-            lastExecution: admin.firestore.FieldValue.serverTimestamp(),
-            lastError: null,
-            failureCount: 0,
-            nextExecution: calculateNextExecution(schedule.rule)
-        });
-    } catch (error) {
-        // Exponential backoff
-        const failureCount = schedule.failureCount + 1;
-        const backoffMinutes = Math.min(Math.pow(2, failureCount), 60 * 24); // Max 24h
+### Syntax Change from Original Plan
 
-        await doc.ref.update({
-            lastExecution: admin.firestore.FieldValue.serverTimestamp(),
-            lastError: error.message,
-            failureCount,
-            nextExecution: new Date(Date.now() + backoffMinutes * 60 * 1000)
-        });
-    }
-}
-```
+| Original | Implemented |
+|----------|-------------|
+| `schedule(daily_at("9:00"), later[...])` | `schedule(daily, [...])` |
+| `ScheduleRuleVal` with `DailyAt(time)` | `ScheduleVal` with `ScheduleFrequency` |
+| Time-specific scheduling | Frequency-based scheduling |
 
-### WorkManager Fallback (Android)
-```kotlin
-class ScheduleExecutorWorker(
-    context: Context,
-    params: WorkerParameters
-) : CoroutineWorker(context, params) {
+The simpler frequency-based approach (`daily`, `hourly`, `weekly`) was chosen for the MVP. Time-specific scheduling (e.g., "daily at 9:00 AM") can be added later if needed.
 
-    override suspend fun doWork(): Result {
-        val scheduleRepository = // inject
-        val executor = // inject
-
-        val dueSchedules = scheduleRepository.getDueSchedules()
-
-        for (schedule in dueSchedules) {
-            try {
-                executor.executeDeferred(schedule.deferredAst, schedule.capturedEnv)
-                scheduleRepository.markExecuted(schedule.hash, true, null)
-            } catch (e: Exception) {
-                scheduleRepository.markExecuted(schedule.hash, false, e.message)
-            }
-        }
-
-        return Result.success()
-    }
-}
-
-// Schedule periodic execution
-fun scheduleBackgroundExecution(context: Context) {
-    val request = PeriodicWorkRequestBuilder<ScheduleExecutorWorker>(
-        15, TimeUnit.MINUTES  // Minimum for periodic work
-    ).build()
-
-    WorkManager.getInstance(context)
-        .enqueueUniquePeriodicWork(
-            "schedule_executor",
-            ExistingPeriodicWorkPolicy.KEEP,
-            request
-        )
-}
-```
-
-### UI: Schedule Indicator
-- Notes with active schedules show indicator icon
-- Tap indicator to see schedule status
-- Global schedule view lists all schedules
-
-### On Note Deletion
-```kotlin
-fun deleteNote(noteId: String) {
-    val schedules = scheduleRepository.getSchedulesForNote(noteId)
-    if (schedules.isNotEmpty()) {
-        // Show confirmation dialog
-        showScheduleDeletionWarning(schedules) { confirmed ->
-            if (confirmed) {
-                schedules.forEach { scheduleRepository.cancelSchedule(it.hash) }
-                noteRepository.deleteNote(noteId)
-            }
-        }
-    } else {
-        noteRepository.deleteNote(noteId)
-    }
-}
-```
-
-### Tests
-- Schedule creation and hash identity
-- Duplicate detection across notes
-- Execution triggers correctly
-- Retry with backoff on failure
-- Cleanup on note deletion
+### Tests (ActionFunctionsTest.kt) ✅ All passing
+- `schedule(daily, action)` creates ScheduleVal ✅
+- Frequency constants (`daily`, `hourly`, `weekly`) work ✅
+- Schedule makes mutations safe at top-level ✅
+- Error handling for invalid frequency/action ✅
 
 ---
 
 ## Later Milestones
 
-### Variables and Conditionals
-- Parser: `:` for definition, `;` for separation
-- Executor: variable scoping in `Environment`
-- Builtins: comparison functions, `if`
+### Variables and Conditionals ✅ COMPLETE (View Caching Phase 0a)
+- Parser: `:` for definition, `;` for separation ✅ (Milestone 7)
+- Executor: variable scoping in `Environment` ✅ (Milestone 7)
+- Builtins: comparison functions (`eq`, `ne`, `gt`, `lt`, `gte`, `lte`) ✅
+- Builtins: logical functions (`and`, `or`, `not`) ✅
+- Builtins: `if(condition, thenValue, elseValue)` ✅
+- Method-style syntax: `a.gt(b).and(a.lt(c))` ✅
 
-### List Operations
-- `first`, `list`, `maybe`
-- Special values: `undefined`, `empty`
-- **Design principle**: `first` on empty list returns `undefined` (not error)
+### List Operations ✅ MOSTLY COMPLETE (Milestone 9)
+- `first` ✅ - Returns first item or `undefined` if empty
+- `list` ✅ - Creates list from arguments
+- `maybe` 🔲 - Still needed for optional/fallback values
+- Special value: `undefined` ✅ - `UndefinedVal` implemented
+- Special value: `empty` 🔲 - Not yet implemented
+- **Design principle**: `first` on empty list returns `undefined` (not error) ✅
 
-### Button
-- UI rendering
-- Tap to execute
-- Error state display
+### Button ✅ COMPLETE (View Caching Phase 0f + Button UI)
+- `button(label, action)` creates `ButtonVal` ✅
+- UI rendering ✅ - `ButtonDirectiveContent` composable with color states
+- Tap to execute ✅ - `executeButton()` in ViewModel, callbacks wired through UI hierarchy
+- Error state display ✅ - `ButtonExecutionState` enum (IDLE, LOADING, SUCCESS, ERROR) with visual feedback
+- Button colors in `DirectiveColors.kt` ✅ - Blue primary, loading, success flash, error states
+
+### once[...] Execution Block ✅ COMPLETE (View Caching Phase 0c)
+- Parser: `once[...]` syntax ✅
+- Execution: Body evaluated once, result cached by expression hash ✅
+- Cache: `InMemoryOnceCache` implementation ✅
+- Bare time error: Dynamic temporal expressions without `once` wrapper throw error ✅
+
+### Mutation Validation ✅ COMPLETE (View Caching Phase 9)
+- `MutationValidator` validates directives against mutation and temporal rules ✅
+- Bare mutation detection: Rejects `new()`, `maybe_new()`, `.append()` without `button`/`schedule` ✅
+- Bare time value detection: Rejects `date`, `time`, `datetime` without `once[...]`/`refresh[...]` ✅
+- Context-aware validation: Properly allows mutations/time values inside wrappers ✅
 
 ### Polish
-- Parse error display on focus-out
-- Global error navigation
-- Schedule view screen
-- Retry policy visibility
-- Comments (`#`)
-- Bracket escaping (`[[`, `]]`)
-- Timezone parameter support
-- `run` in deferred scope
-- `lambda(params)[...]` named parameters
+- Parse error display on focus-out 🔲
+- Global error navigation 🔲
+- Schedule view screen 🔲 (blocked by Milestone 13 backend)
+- Retry policy visibility 🔲
+- Comments (`#`) 🔲
+- Bracket escaping (`[[`, `]]`) 🔲
+- Timezone parameter support 🔲
+- Named lambda parameters `(a, b)[...]` ✅ (View Caching Phase 0b)
 
 ### Design Principles to Apply Throughout
 - **Graceful undefined access**: Accessing non-existent data returns `undefined` rather than errors:
-  - Out-of-bounds list access (e.g., `first` on empty list) → `undefined`
-  - Missing properties → `undefined`
-  - Hierarchy navigation beyond available ancestors (e.g., `.up` on root) → `undefined`
-- **Minimize special characters**: Prefer built-in identifiers/functions over symbolic operators
+  - Out-of-bounds list access (e.g., `first` on empty list) → `undefined` ✅
+  - Missing properties → `undefined` (partial - some throw errors)
+  - Hierarchy navigation beyond available ancestors (e.g., `.up` on root) → `undefined` ✅
+- **Minimize special characters**: Prefer built-in identifiers/functions over symbolic operators ✅
+
+---
+
+## Directive Caching Infrastructure ✅ COMPLETE
+
+Comprehensive caching infrastructure was implemented as part of the view caching work. See `docs/view-caching-plan.md` for full design details.
+
+### Components Implemented
+
+**Language Features (Phase 0):**
+- Method-style syntax: `.eq()`, `.gt()`, `.and()`, `.or()`, string methods ✅
+- Implicit lambda syntax: `[expr]` with parameter `i` ✅
+- `once[...]` for snapshot caching ✅
+- `refresh[...]` for time-based refresh ✅
+- `later` keyword for deferred execution ✅
+- `button()` and `schedule()` functions ✅
+
+**Caching Infrastructure (Phases 1-6):**
+- `DirectiveDependencies` - tracks content, metadata, and hierarchy dependencies ✅
+- `CachedDirectiveResult` - stores result with dependencies and hashes ✅
+- `ContentHasher` / `MetadataHasher` - on-demand hashing ✅
+- `StalenessChecker` - short-circuit staleness algorithm ✅
+- `DependencyAnalyzer` - AST analysis for dependency detection ✅
+- `AstNormalizer` - canonical AST form for cache keys ✅
+- `RefreshTriggerAnalyzer` - backtrace + verify for time triggers ✅
+- `DirectiveError` hierarchy - deterministic vs non-deterministic errors ✅
+- `LruCache` - thread-safe LRU cache with eviction ✅
+- `DirectiveCacheManager` - global + per-note cache coordination ✅
+- `FirestoreDirectiveCache` - L2 persistence layer ✅
+
+**Integration (Phases 7-10):**
+- `TransitiveDependencyCollector` - nested directive dependency merging ✅
+- `EditSessionManager` - inline editing without cache flicker ✅
+- `MutationValidator` - enforces mutation safety rules ✅
+- `CachedDirectiveExecutor` - main integration point ✅
+- `RefreshScheduler` - periodic time trigger checking ✅
+- Production integration with `CurrentNoteViewModel` ✅
+
+### Cache Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│                   ViewModel                      │
+│  ┌─────────────────────────────────────────┐    │
+│  │         In-Memory Cache (L1)            │    │
+│  │  - Global cache (self-less directives)  │    │
+│  │  - Per-note cache (self-referencing)    │    │
+│  └─────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────┘
+                        │
+                        ▼
+┌─────────────────────────────────────────────────┐
+│                   Firestore (L2)                 │
+│  users/{uid}/directiveCache/{hash}    (global)  │
+│  users/{uid}/notes/{id}/directiveResults/{hash} │
+└─────────────────────────────────────────────────┘
+```
+
+### Package Structure
+
+```
+dsl/cache/
+├── DirectiveDependencies.kt      # Dependency data structures
+├── CachedDirectiveResult.kt      # Cached result with metadata
+├── ContentHasher.kt              # Per-note content hashing
+├── MetadataHasher.kt             # Collection-level metadata hashing
+├── StalenessChecker.kt           # Staleness check algorithm
+├── DependencyAnalyzer.kt         # AST → dependencies analysis
+├── AstNormalizer.kt              # AST → cache key generation
+├── TimeTrigger.kt                # Time trigger types
+├── RefreshTriggerAnalyzer.kt     # Backtrace + verify algorithm
+├── DirectiveError.kt             # Error classification
+├── LruCache.kt                   # Generic LRU cache
+├── DirectiveCache.kt             # Global + per-note cache manager
+├── FirestoreDirectiveCache.kt    # L2 persistence
+├── TransitiveDependencyCollector.kt  # Nested dependency merging
+├── EditSessionManager.kt         # Inline edit suppression
+├── MutationValidator.kt          # Mutation safety rules
+└── CachedDirectiveExecutor.kt    # Main integration point
+```
 
 ---
 

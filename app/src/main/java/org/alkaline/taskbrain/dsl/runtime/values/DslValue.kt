@@ -71,6 +71,16 @@ sealed class DslValue {
                     val viewMap = value as Map<String, Any?>
                     ViewVal.deserialize(viewMap)
                 }
+                "button" -> {
+                    @Suppress("UNCHECKED_CAST")
+                    val buttonMap = value as Map<String, Any?>
+                    ButtonVal.deserialize(buttonMap)
+                }
+                "schedule" -> {
+                    @Suppress("UNCHECKED_CAST")
+                    val scheduleMap = value as Map<String, Any?>
+                    ScheduleVal.deserialize(scheduleMap)
+                }
                 else -> throw IllegalArgumentException("Unknown DslValue type: $type")
             }
         }

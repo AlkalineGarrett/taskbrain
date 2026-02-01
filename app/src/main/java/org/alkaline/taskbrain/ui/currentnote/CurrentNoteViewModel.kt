@@ -9,6 +9,7 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -46,10 +47,15 @@ import org.alkaline.taskbrain.dsl.directives.parseAllDirectiveLocations
 import org.alkaline.taskbrain.dsl.language.Lexer
 import org.alkaline.taskbrain.dsl.language.Parser
 import org.alkaline.taskbrain.dsl.language.RefreshExpr
+import org.alkaline.taskbrain.dsl.runtime.Environment
+import org.alkaline.taskbrain.dsl.runtime.Executor
 import org.alkaline.taskbrain.dsl.runtime.MutationType
+import org.alkaline.taskbrain.dsl.runtime.NoteContext
 import org.alkaline.taskbrain.dsl.runtime.NoteMutation
 import org.alkaline.taskbrain.dsl.runtime.NoteRepositoryOperations
+import org.alkaline.taskbrain.dsl.runtime.values.ButtonVal
 import org.alkaline.taskbrain.dsl.runtime.ViewVal
+import org.alkaline.taskbrain.dsl.ui.ButtonExecutionState
 import org.alkaline.taskbrain.ui.currentnote.undo.AlarmSnapshot
 import org.alkaline.taskbrain.util.PermissionHelper
 
@@ -143,6 +149,21 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     // Directive execution results - maps directive UUID to result
     private val _directiveResults = MutableLiveData<Map<String, DirectiveResult>>(emptyMap())
     val directiveResults: LiveData<Map<String, DirectiveResult>> = _directiveResults
+
+    // Button execution states - maps directive key to execution state
+    private val _buttonExecutionStates = MutableLiveData<Map<String, ButtonExecutionState>>(emptyMap())
+    val buttonExecutionStates: LiveData<Map<String, ButtonExecutionState>> = _buttonExecutionStates
+
+    // Button error messages - maps directive key to error message
+    private val _buttonErrors = MutableLiveData<Map<String, String>>(emptyMap())
+    val buttonErrors: LiveData<Map<String, String>> = _buttonErrors
+
+    /** Clear the button error for a specific directive */
+    fun clearButtonError(directiveKey: String) {
+        val current = _buttonErrors.value?.toMutableMap() ?: mutableMapOf()
+        current.remove(directiveKey)
+        _buttonErrors.value = current
+    }
 
     // Directive instances with stable UUIDs - survives text edits
     private var directiveInstances: List<DirectiveInstance> = emptyList()
@@ -606,8 +627,9 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      * - mutationType: The type of mutation that occurred
      * - alreadyPersisted: If true, the mutation was part of a save operation and is already
      *   persisted to Firestore, so isSaved should not be set to false
+     * - appendedText: For CONTENT_APPENDED, the text that was appended (without leading newline)
      */
-    var onEditorContentMutated: ((noteId: String, newContent: String, mutationType: MutationType, alreadyPersisted: Boolean) -> Unit)? = null
+    var onEditorContentMutated: ((noteId: String, newContent: String, mutationType: MutationType, alreadyPersisted: Boolean, appendedText: String?) -> Unit)? = null
 
     /**
      * Process mutations that occurred during directive execution.
@@ -653,7 +675,8 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                                 mutation.noteId,
                                 mutation.updatedNote.content,
                                 mutation.mutationType,
-                                alreadyPersisted
+                                alreadyPersisted,
+                                mutation.appendedText
                             )
                         }
                         MutationType.PATH_CHANGED -> {
@@ -1082,6 +1105,96 @@ class CurrentNoteViewModel @JvmOverloads constructor(
 
             Log.d(TAG, "Refreshed directive $directiveUuid with fresh result (kept expanded)")
         }
+    }
+
+    /**
+     * Executes a button directive's action.
+     * Called when user clicks a button rendered from a ButtonVal.
+     *
+     * Note: The buttonVal passed here has a placeholder lambda (lambdas can't be serialized).
+     * We need to re-parse the source text to get the real lambda for execution.
+     *
+     * @param directiveKey Position-based key (e.g., "3:15" for line 3, offset 15)
+     * @param buttonVal The ButtonVal (used for label display, action is placeholder)
+     * @param sourceText The original directive source text to re-parse for execution
+     */
+    fun executeButton(directiveKey: String, buttonVal: ButtonVal, sourceText: String? = null) {
+        viewModelScope.launch {
+            ensureNotesLoaded()
+
+            // Set loading state
+            updateButtonState(directiveKey, ButtonExecutionState.LOADING)
+
+            try {
+                // Create fresh environment for button execution with current context
+                // This ensures mutations are properly captured
+                val env = Environment(
+                    NoteContext(
+                        notes = cachedNotes ?: emptyList(),
+                        currentNote = cachedCurrentNote,
+                        noteOperations = noteOperations
+                    )
+                )
+
+                // Re-parse the directive source to get the fresh ButtonVal with real lambda
+                // The deserialized buttonVal has a placeholder lambda that can't execute the real action
+                if (sourceText != null) {
+                    val tokens = Lexer(sourceText).tokenize()
+                    val directive = Parser(tokens, sourceText).parseDirective()
+                    val executor = Executor()
+                    val freshValue = executor.execute(directive, env)
+
+                    // The freshValue should be a ButtonVal with the real lambda
+                    if (freshValue is ButtonVal) {
+                        // Execute the button's lambda in the environment
+                        executor.evaluate(freshValue.action.body, env)
+                    } else {
+                        Log.w(TAG, "Re-parsed directive did not produce ButtonVal: ${freshValue::class.simpleName}")
+                    }
+                } else {
+                    // Fallback: try to use the placeholder (will likely fail or do nothing)
+                    Log.w(TAG, "No sourceText provided, using placeholder lambda")
+                    val executor = Executor()
+                    executor.evaluate(buttonVal.action.body, env)
+                }
+
+                // Get and process mutations from the fresh environment
+                // For button clicks, we DO want to update the editor since we're not
+                // in the middle of an editing operation (unlike live directive execution)
+                val mutations = env.getMutations()
+                if (mutations.isNotEmpty()) {
+                    processMutations(mutations, skipEditorCallback = false)
+                }
+
+                // Clear any previous error and flash success state
+                clearButtonError(directiveKey)
+                updateButtonState(directiveKey, ButtonExecutionState.SUCCESS)
+                delay(500)
+                updateButtonState(directiveKey, ButtonExecutionState.IDLE)
+            } catch (e: Exception) {
+                Log.e(TAG, "Button execution failed: ${e.message}", e)
+                // Keep button in error state (don't reset to IDLE)
+                updateButtonState(directiveKey, ButtonExecutionState.ERROR)
+
+                // Store the error message for display
+                val current = _buttonErrors.value?.toMutableMap() ?: mutableMapOf()
+                current[directiveKey] = e.message ?: "Unknown error"
+                _buttonErrors.postValue(current)
+            }
+        }
+    }
+
+    /**
+     * Updates the execution state for a button directive.
+     */
+    private fun updateButtonState(directiveKey: String, state: ButtonExecutionState) {
+        val current = _buttonExecutionStates.value?.toMutableMap() ?: mutableMapOf()
+        if (state == ButtonExecutionState.IDLE) {
+            current.remove(directiveKey)
+        } else {
+            current[directiveKey] = state
+        }
+        _buttonExecutionStates.value = current
     }
 
     /**

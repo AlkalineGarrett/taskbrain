@@ -1,6 +1,10 @@
 package org.alkaline.taskbrain.dsl.directives
 
+import android.util.Log
+import org.alkaline.taskbrain.dsl.runtime.values.ButtonVal
 import org.alkaline.taskbrain.dsl.runtime.values.ViewVal
+
+private const val TAG = "DirectiveSegmenter"
 
 /**
  * Represents a segment of line content - either plain text or a directive.
@@ -160,9 +164,11 @@ object DirectiveSegmenter {
                     displayBuilder.append(displayText)
                     val displayEnd = displayBuilder.length
 
-                    // Check if the result is a ViewVal for special UI handling
+                    // Check if the result is a ViewVal or ButtonVal for special UI handling
                     val resultValue = segment.result?.toValue()
                     val isViewResult = resultValue is ViewVal
+                    val isButtonResult = resultValue is ButtonVal
+                    Log.d(TAG, "buildDisplayText: key=${segment.key}, resultValue=${resultValue?.javaClass?.simpleName}, isButton=$isButtonResult, isView=$isViewResult")
 
                     directiveRanges.add(
                         DirectiveDisplayRange(
@@ -174,7 +180,8 @@ object DirectiveSegmenter {
                             isComputed = segment.isComputed,
                             hasError = segment.result?.error != null,
                             hasWarning = segment.result?.hasWarning ?: false,
-                            isView = isViewResult
+                            isView = isViewResult,
+                            isButton = isButtonResult
                         )
                     )
                 }
@@ -203,6 +210,7 @@ data class DisplayTextResult(
  *
  * Milestone 8: Added hasWarning for no-effect warnings.
  * Milestone 10: Added isView for view directive special rendering.
+ * Button UI: Added isButton for button directive special rendering.
  */
 data class DirectiveDisplayRange(
     val key: String,             // Position-based key (e.g., "3:15" for line 3, offset 15)
@@ -213,5 +221,6 @@ data class DirectiveDisplayRange(
     val isComputed: Boolean,
     val hasError: Boolean,
     val hasWarning: Boolean = false,
-    val isView: Boolean = false  // True if result is a ViewVal
+    val isView: Boolean = false,  // True if result is a ViewVal
+    val isButton: Boolean = false // True if result is a ButtonVal
 )

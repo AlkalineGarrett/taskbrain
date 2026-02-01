@@ -4,8 +4,11 @@ import androidx.compose.foundation.clickable
 import org.alkaline.taskbrain.dsl.directives.DirectiveResult
 import org.alkaline.taskbrain.dsl.directives.DirectiveSegment
 import org.alkaline.taskbrain.dsl.directives.DirectiveSegmenter
+import android.util.Log
+import org.alkaline.taskbrain.dsl.runtime.values.ButtonVal
 import org.alkaline.taskbrain.dsl.runtime.values.ViewVal
 import org.alkaline.taskbrain.data.Note
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -14,10 +17,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -35,6 +41,18 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 
+private const val TAG = "DirectiveLineRenderer"
+
+/**
+ * Button execution state for tracking button click progress.
+ */
+enum class ButtonExecutionState {
+    IDLE,
+    LOADING,
+    SUCCESS,
+    ERROR
+}
+
 /**
  * Renders line content with computed directive results replacing source text.
  * Computed directives are displayed in dashed boxes and are tappable.
@@ -51,6 +69,9 @@ import androidx.compose.ui.unit.dp
  *        Parameters: (directiveKey, noteId, noteContent) - note content is the rendered content
  * @param onViewEditDirective Called when the edit button on a view directive is tapped.
  *        Parameters: (directiveKey, sourceText) - opens the directive editor overlay
+ * @param onButtonClick Called when a button directive is clicked.
+ *        Parameters: (directiveKey, buttonVal) - executes the button's action lambda
+ * @param buttonExecutionStates Map of directive key to current execution state (for loading/success/error display)
  * @param modifier Modifier for the root composable
  */
 @Composable
@@ -62,6 +83,8 @@ fun DirectiveLineContent(
     onDirectiveTap: (directiveKey: String, sourceText: String) -> Unit,
     onViewNoteTap: ((directiveKey: String, noteId: String, noteContent: String) -> Unit)? = null,
     onViewEditDirective: ((directiveKey: String, sourceText: String) -> Unit)? = null,
+    onButtonClick: ((directiveKey: String, buttonVal: ButtonVal, sourceText: String) -> Unit)? = null,
+    buttonExecutionStates: Map<String, ButtonExecutionState> = emptyMap(),
     modifier: Modifier = Modifier
 ) {
     // Build display text with directive results replacing source
@@ -84,8 +107,14 @@ fun DirectiveLineContent(
         range.isView && range.displayText.contains('\n')
     }
 
+    Log.d(TAG, "DirectiveLineContent: hasMultiLineView=$hasMultiLineView, rangesCount=${displayResult.directiveDisplayRanges.size}")
+    displayResult.directiveDisplayRanges.forEach { range ->
+        Log.d(TAG, "  Range: key=${range.key}, isView=${range.isView}, isButton=${range.isButton}, displayTextLength=${range.displayText.length}, hasNewline=${range.displayText.contains('\n')}")
+    }
+
     if (hasMultiLineView) {
         // Use Column layout for multi-line view content
+        Log.d(TAG, "DirectiveLineContent: Using Column layout for multi-line view")
         Column(modifier = modifier.fillMaxWidth()) {
             for (segment in displayResult.segments) {
                 when (segment) {
@@ -100,30 +129,57 @@ fun DirectiveLineContent(
                     is DirectiveSegment.Directive -> {
                         val directiveRange = displayResult.directiveDisplayRanges.find { it.key == segment.key }
                         val isView = directiveRange?.isView ?: false
+                        val isButton = directiveRange?.isButton ?: false
 
-                        if (isView && segment.isComputed && segment.result?.error == null) {
-                            // Extract ViewVal from result to get notes
-                            val viewVal = segment.result?.toValue() as? ViewVal
-                            ViewDirectiveContent(
-                                viewVal = viewVal,
-                                displayText = segment.displayText,
-                                textStyle = textStyle,
-                                onNoteTap = { noteId, noteContent ->
-                                    onViewNoteTap?.invoke(segment.key, noteId, noteContent)
-                                },
-                                onEditDirective = {
-                                    onViewEditDirective?.invoke(segment.key, segment.sourceText)
-                                        ?: onDirectiveTap(segment.key, segment.sourceText)
+                        Log.d(TAG, "Directive render: key=${segment.key}, isButton=$isButton, isView=$isView, isComputed=${segment.isComputed}, hasError=${segment.result?.error != null}")
+
+                        when {
+                            isView && segment.isComputed && segment.result?.error == null -> {
+                                // Extract ViewVal from result to get notes
+                                val viewVal = segment.result?.toValue() as? ViewVal
+                                ViewDirectiveContent(
+                                    viewVal = viewVal,
+                                    displayText = segment.displayText,
+                                    textStyle = textStyle,
+                                    onNoteTap = { noteId, noteContent ->
+                                        onViewNoteTap?.invoke(segment.key, noteId, noteContent)
+                                    },
+                                    onEditDirective = {
+                                        onViewEditDirective?.invoke(segment.key, segment.sourceText)
+                                            ?: onDirectiveTap(segment.key, segment.sourceText)
+                                    }
+                                )
+                            }
+                            isButton && segment.isComputed && segment.result?.error == null -> {
+                                // Extract ButtonVal from result
+                                val buttonVal = segment.result?.toValue() as? ButtonVal
+                                Log.d(TAG, "Button branch taken: key=${segment.key}, buttonVal=${buttonVal?.javaClass?.simpleName}")
+                                if (buttonVal != null) {
+                                    ButtonDirectiveContent(
+                                        buttonVal = buttonVal,
+                                        executionState = buttonExecutionStates[segment.key] ?: ButtonExecutionState.IDLE,
+                                        onButtonClick = { onButtonClick?.invoke(segment.key, buttonVal, segment.sourceText) },
+                                        onEditDirective = { onDirectiveTap(segment.key, segment.sourceText) }
+                                    )
+                                } else {
+                                    DirectiveResultBox(
+                                        displayText = segment.displayText,
+                                        isComputed = segment.isComputed,
+                                        hasError = segment.result?.error != null,
+                                        textStyle = textStyle,
+                                        onTap = { onDirectiveTap(segment.key, segment.sourceText) }
+                                    )
                                 }
-                            )
-                        } else {
-                            DirectiveResultBox(
-                                displayText = segment.displayText,
-                                isComputed = segment.isComputed,
-                                hasError = segment.result?.error != null,
-                                textStyle = textStyle,
-                                onTap = { onDirectiveTap(segment.key, segment.sourceText) }
-                            )
+                            }
+                            else -> {
+                                DirectiveResultBox(
+                                    displayText = segment.displayText,
+                                    isComputed = segment.isComputed,
+                                    hasError = segment.result?.error != null,
+                                    textStyle = textStyle,
+                                    onTap = { onDirectiveTap(segment.key, segment.sourceText) }
+                                )
+                            }
                         }
                     }
                 }
@@ -146,30 +202,57 @@ fun DirectiveLineContent(
                     is DirectiveSegment.Directive -> {
                         val directiveRange = displayResult.directiveDisplayRanges.find { it.key == segment.key }
                         val isView = directiveRange?.isView ?: false
+                        val isButton = directiveRange?.isButton ?: false
 
-                        if (isView && segment.isComputed && segment.result?.error == null) {
-                            // Extract ViewVal from result to get notes
-                            val viewVal = segment.result?.toValue() as? ViewVal
-                            ViewDirectiveContent(
-                                viewVal = viewVal,
-                                displayText = segment.displayText,
-                                textStyle = textStyle,
-                                onNoteTap = { noteId, noteContent ->
-                                    onViewNoteTap?.invoke(segment.key, noteId, noteContent)
-                                },
-                                onEditDirective = {
-                                    onViewEditDirective?.invoke(segment.key, segment.sourceText)
-                                        ?: onDirectiveTap(segment.key, segment.sourceText)
+                        Log.d(TAG, "Directive render: key=${segment.key}, isButton=$isButton, isView=$isView, isComputed=${segment.isComputed}, hasError=${segment.result?.error != null}")
+
+                        when {
+                            isView && segment.isComputed && segment.result?.error == null -> {
+                                // Extract ViewVal from result to get notes
+                                val viewVal = segment.result?.toValue() as? ViewVal
+                                ViewDirectiveContent(
+                                    viewVal = viewVal,
+                                    displayText = segment.displayText,
+                                    textStyle = textStyle,
+                                    onNoteTap = { noteId, noteContent ->
+                                        onViewNoteTap?.invoke(segment.key, noteId, noteContent)
+                                    },
+                                    onEditDirective = {
+                                        onViewEditDirective?.invoke(segment.key, segment.sourceText)
+                                            ?: onDirectiveTap(segment.key, segment.sourceText)
+                                    }
+                                )
+                            }
+                            isButton && segment.isComputed && segment.result?.error == null -> {
+                                // Extract ButtonVal from result
+                                val buttonVal = segment.result?.toValue() as? ButtonVal
+                                Log.d(TAG, "Button branch taken: key=${segment.key}, buttonVal=${buttonVal?.javaClass?.simpleName}")
+                                if (buttonVal != null) {
+                                    ButtonDirectiveContent(
+                                        buttonVal = buttonVal,
+                                        executionState = buttonExecutionStates[segment.key] ?: ButtonExecutionState.IDLE,
+                                        onButtonClick = { onButtonClick?.invoke(segment.key, buttonVal, segment.sourceText) },
+                                        onEditDirective = { onDirectiveTap(segment.key, segment.sourceText) }
+                                    )
+                                } else {
+                                    DirectiveResultBox(
+                                        displayText = segment.displayText,
+                                        isComputed = segment.isComputed,
+                                        hasError = segment.result?.error != null,
+                                        textStyle = textStyle,
+                                        onTap = { onDirectiveTap(segment.key, segment.sourceText) }
+                                    )
                                 }
-                            )
-                        } else {
-                            DirectiveResultBox(
-                                displayText = segment.displayText,
-                                isComputed = segment.isComputed,
-                                hasError = segment.result?.error != null,
-                                textStyle = textStyle,
-                                onTap = { onDirectiveTap(segment.key, segment.sourceText) }
-                            )
+                            }
+                            else -> {
+                                DirectiveResultBox(
+                                    displayText = segment.displayText,
+                                    isComputed = segment.isComputed,
+                                    hasError = segment.result?.error != null,
+                                    textStyle = textStyle,
+                                    onTap = { onDirectiveTap(segment.key, segment.sourceText) }
+                                )
+                            }
                         }
                     }
                 }
@@ -205,6 +288,12 @@ private fun ViewDirectiveContent(
 ) {
     val notes = viewVal?.notes ?: emptyList()
     val renderedContents = viewVal?.renderedContents
+
+    Log.d(TAG, "ViewDirectiveContent: notes.size=${notes.size}, renderedContents.size=${renderedContents?.size}")
+    notes.forEachIndexed { index, note ->
+        val content = renderedContents?.getOrNull(index) ?: note.content
+        Log.d(TAG, "  Note[$index]: id=${note.id}, contentPreview='${content.take(50)}...'")
+    }
 
     Box(
         modifier = Modifier
@@ -251,6 +340,7 @@ private fun ViewDirectiveContent(
             )
         } else {
             // Multiple notes with separators
+            Log.d(TAG, "ViewDirectiveContent: Rendering ${notes.size} notes in Column")
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -259,11 +349,13 @@ private fun ViewDirectiveContent(
                 notes.forEachIndexed { index, note ->
                     // Separator before each note except first
                     if (index > 0) {
+                        Log.d(TAG, "  Rendering separator before note[$index]")
                         NoteSeparator()
                     }
 
                     // Note section
                     val content = renderedContents?.getOrNull(index) ?: note.content
+                    Log.d(TAG, "  Rendering ViewNoteSection[$index]: contentLength=${content.length}")
                     ViewNoteSection(
                         note = note,
                         content = content,
@@ -314,6 +406,100 @@ private fun NoteSeparator() {
         style = TextStyle(color = DirectiveColors.ViewDivider),
         modifier = Modifier.padding(vertical = 4.dp)
     )
+}
+
+// Layout constants for button directive
+private val ButtonMinWidth = 80.dp
+private val ButtonHeight = 32.dp
+private val ButtonCornerRadius = 4.dp
+private val ButtonIconSize = 16.dp
+
+/**
+ * A button directive rendered as an interactive button.
+ * Shows the button label and executes the action when clicked.
+ *
+ * Features:
+ * - Clickable button with label from ButtonVal
+ * - Loading indicator while action executes
+ * - Success/error state display after execution
+ * - Settings icon to edit the directive source
+ *
+ * Button UI milestone.
+ */
+@Composable
+private fun ButtonDirectiveContent(
+    buttonVal: ButtonVal,
+    executionState: ButtonExecutionState,
+    onButtonClick: () -> Unit,
+    onEditDirective: () -> Unit
+) {
+    val backgroundColor = when (executionState) {
+        ButtonExecutionState.IDLE -> DirectiveColors.ButtonBackground
+        ButtonExecutionState.LOADING -> DirectiveColors.ButtonLoadingBackground
+        ButtonExecutionState.SUCCESS -> DirectiveColors.ButtonSuccessBackground
+        ButtonExecutionState.ERROR -> DirectiveColors.ButtonErrorBackground
+    }
+
+    val isEnabled = executionState != ButtonExecutionState.LOADING
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // The clickable button
+        Box(
+            modifier = Modifier
+                .height(ButtonHeight)
+                .background(
+                    color = backgroundColor,
+                    shape = RoundedCornerShape(ButtonCornerRadius)
+                )
+                .clickable(enabled = isEnabled) { onButtonClick() }
+                .padding(horizontal = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            when (executionState) {
+                ButtonExecutionState.LOADING -> {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(ButtonIconSize),
+                        color = DirectiveColors.ButtonContent,
+                        strokeWidth = 2.dp
+                    )
+                }
+                else -> {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            tint = DirectiveColors.ButtonContent,
+                            modifier = Modifier.size(ButtonIconSize)
+                        )
+                        Text(
+                            text = buttonVal.label,
+                            color = DirectiveColors.ButtonContent,
+                            modifier = Modifier.padding(start = 4.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        // Settings icon to edit the directive
+        IconButton(
+            onClick = onEditDirective,
+            modifier = Modifier
+                .size(ViewEditButtonSize)
+                .padding(start = 4.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Settings,
+                contentDescription = "Edit button directive",
+                tint = DirectiveColors.ViewIndicator,
+                modifier = Modifier.size(ViewEditIconSize)
+            )
+        }
+    }
 }
 
 /**

@@ -1,6 +1,6 @@
 package org.alkaline.taskbrain.dsl.runtime.values
 
-import org.alkaline.taskbrain.dsl.language.Expression
+import org.alkaline.taskbrain.dsl.language.StringLiteral
 import org.alkaline.taskbrain.dsl.runtime.Environment
 
 /**
@@ -39,6 +39,24 @@ data class ButtonVal(
         "label" to label
         // action (lambda) cannot be serialized
     )
+
+    companion object {
+        /**
+         * Deserialize a ButtonVal from a Firestore map.
+         * The action lambda cannot be restored, so a placeholder is used.
+         * The actual action will be re-created from the directive source when needed.
+         */
+        fun deserialize(map: Map<String, Any?>): ButtonVal {
+            val label = map["label"] as? String ?: "Button"
+            // Create a placeholder lambda - the actual action must be re-executed from source
+            val placeholderLambda = LambdaVal(
+                params = emptyList(),
+                body = StringLiteral("Placeholder - re-execute from source", 0),
+                capturedEnv = Environment()
+            )
+            return ButtonVal(label, placeholderLambda)
+        }
+    }
 }
 
 /**
@@ -68,4 +86,23 @@ data class ScheduleVal(
         "atTime" to atTime
         // action (lambda) cannot be serialized
     )
+
+    companion object {
+        /**
+         * Deserialize a ScheduleVal from a Firestore map.
+         * The action lambda cannot be restored, so a placeholder is used.
+         */
+        fun deserialize(map: Map<String, Any?>): ScheduleVal {
+            val frequencyId = map["frequency"] as? String ?: "daily"
+            val frequency = ScheduleFrequency.fromIdentifier(frequencyId) ?: ScheduleFrequency.DAILY
+            val atTime = map["atTime"] as? String
+            // Create a placeholder lambda - the actual action must be re-executed from source
+            val placeholderLambda = LambdaVal(
+                params = emptyList(),
+                body = StringLiteral("Placeholder - re-execute from source", 0),
+                capturedEnv = Environment()
+            )
+            return ScheduleVal(frequency, placeholderLambda, atTime)
+        }
+    }
 }

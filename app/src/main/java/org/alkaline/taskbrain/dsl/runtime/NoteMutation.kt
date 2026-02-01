@@ -9,7 +9,9 @@ import org.alkaline.taskbrain.data.Note
 data class NoteMutation(
     val noteId: String,
     val updatedNote: Note,
-    val mutationType: MutationType
+    val mutationType: MutationType,
+    /** For CONTENT_APPENDED, the text that was appended (without leading newline) */
+    val appendedText: String? = null
 )
 
 /**

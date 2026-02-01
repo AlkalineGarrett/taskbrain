@@ -1,11 +1,13 @@
 package org.alkaline.taskbrain.ui.currentnote.ime
 
+import android.util.Log
 import android.view.View
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
@@ -15,13 +17,17 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -52,17 +58,22 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import org.alkaline.taskbrain.data.Note
 import org.alkaline.taskbrain.dsl.directives.DirectiveResult
 import org.alkaline.taskbrain.dsl.directives.DirectiveSegment
 import org.alkaline.taskbrain.dsl.directives.DirectiveSegmenter
 import org.alkaline.taskbrain.dsl.directives.DisplayTextResult
+import org.alkaline.taskbrain.dsl.runtime.values.ButtonVal
 import org.alkaline.taskbrain.dsl.runtime.values.ViewVal
+import org.alkaline.taskbrain.dsl.ui.ButtonExecutionState
 import org.alkaline.taskbrain.dsl.ui.DirectiveEditRow
 import org.alkaline.taskbrain.dsl.ui.DirectiveTextInput
 import org.alkaline.taskbrain.ui.currentnote.EditorController
 import org.alkaline.taskbrain.ui.currentnote.LocalInlineEditState
 import org.alkaline.taskbrain.ui.currentnote.InlineEditSession
+
+private const val TAG = "DirectiveAwareLineInput"
 
 // Directive box colors
 private val DirectiveErrorColor = Color(0xFFF44336)    // Red
@@ -93,6 +104,16 @@ private val EmptyDirectiveTapWidth = 16.dp
 private val ViewEditButtonSize = 24.dp
 private val ViewEditIconSize = 16.dp
 
+// Button directive layout
+private val ButtonMinHeight = 32.dp
+private val ButtonCornerRadius = 4.dp
+private val ButtonIconSize = 16.dp
+private val ButtonBackground = Color(0xFF2196F3)  // Blue
+private val ButtonLoadingBackground = Color(0xFF90CAF9)  // Light blue
+private val ButtonSuccessBackground = Color(0xFF4CAF50)  // Green
+private val ButtonErrorBackground = Color(0xFFF44336)  // Red
+private val ButtonContentColor = Color.White
+
 /**
  * A directive-aware text input that allows editing around directives.
  *
@@ -122,6 +143,9 @@ internal fun DirectiveAwareLineInput(
     onViewDirectiveRefresh: ((lineIndex: Int, directiveKey: String, sourceText: String, newText: String) -> Unit)? = null,
     onViewDirectiveConfirm: ((lineIndex: Int, directiveKey: String, sourceText: String, newText: String) -> Unit)? = null,
     onViewDirectiveCancel: ((lineIndex: Int, directiveKey: String, sourceText: String) -> Unit)? = null,
+    onButtonClick: ((directiveKey: String, buttonVal: ButtonVal, sourceText: String) -> Unit)? = null,
+    buttonExecutionStates: Map<String, ButtonExecutionState> = emptyMap(),
+    buttonErrors: Map<String, String> = emptyMap(),
     modifier: Modifier = Modifier
 ) {
     val hostView = LocalView.current
@@ -176,6 +200,19 @@ internal fun DirectiveAwareLineInput(
         if (viewDirectiveRange != null) {
             val result = directiveResults[viewDirectiveRange.key]
             result?.toValue() as? ViewVal
+        } else null
+    }
+
+    // Check if this line has a button directive
+    val buttonDirectiveRange = remember(displayResult, directiveResults) {
+        displayResult.directiveDisplayRanges.find { range -> range.isButton }
+    }
+
+    // Get ButtonVal if this is a button directive
+    val buttonVal = remember(buttonDirectiveRange, directiveResults) {
+        if (buttonDirectiveRange != null) {
+            val result = directiveResults[buttonDirectiveRange.key]
+            result?.toValue() as? ButtonVal
         } else null
     }
 
@@ -234,6 +271,21 @@ internal fun DirectiveAwareLineInput(
                 },
                 onDirectiveCancel = {
                     onViewDirectiveCancel?.invoke(lineIndex, viewDirectiveRange.key, viewDirectiveRange.sourceText)
+                }
+            )
+        } else if (buttonDirectiveRange != null && buttonVal != null && buttonDirectiveRange.hasError.not()) {
+            // Button directive with successful result - render as clickable button
+            ButtonDirectiveInlineContent(
+                buttonVal = buttonVal,
+                directiveKey = buttonDirectiveRange.key,
+                sourceText = buttonDirectiveRange.sourceText,
+                executionState = buttonExecutionStates[buttonDirectiveRange.key] ?: ButtonExecutionState.IDLE,
+                errorMessage = buttonErrors[buttonDirectiveRange.key],
+                onButtonClick = {
+                    onButtonClick?.invoke(buttonDirectiveRange.key, buttonVal, buttonDirectiveRange.sourceText)
+                },
+                onEditDirective = {
+                    onDirectiveTap(buttonDirectiveRange.key, buttonDirectiveRange.sourceText)
                 }
             )
         } else {
@@ -610,6 +662,12 @@ private fun ViewDirectiveInlineContent(
     val notes = viewVal.notes
     val renderedContents = viewVal.renderedContents
 
+    Log.d(TAG, "ViewDirectiveInlineContent: notes.size=${notes.size}, renderedContents.size=${renderedContents?.size}")
+    notes.forEachIndexed { index, note ->
+        val displayContent = renderedContents?.getOrNull(index) ?: note.content
+        Log.d(TAG, "  Note[$index]: id=${note.id}, displayContentPreview='${displayContent.take(50)}...', rawContentPreview='${note.content.take(50)}...'")
+    }
+
     // Track which note is currently being edited (by index)
     var editingNoteIndex by remember { mutableStateOf<Int?>(null) }
 
@@ -682,6 +740,7 @@ private fun ViewDirectiveInlineContent(
                 )
             } else {
                 // Multiple notes with separators
+                Log.d(TAG, "ViewDirectiveInlineContent: Rendering ${notes.size} notes in Column")
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -690,12 +749,14 @@ private fun ViewDirectiveInlineContent(
                     notes.forEachIndexed { index, note ->
                         // Separator before each note except first
                         if (index > 0) {
+                            Log.d(TAG, "  Rendering separator before note[$index]")
                             NoteSeparator()
                         }
 
                         // Note section - display rendered content, but edit raw content
                         val displayContent = renderedContents?.getOrNull(index) ?: note.content
                         val editContent = note.content
+                        Log.d(TAG, "  Rendering EditableViewNoteSection[$index]: displayContentLength=${displayContent.length}, editContentLength=${editContent.length}")
                         EditableViewNoteSection(
                             note = note,
                             displayContent = displayContent,
@@ -760,6 +821,8 @@ private fun EditableViewNoteSection(
         sessionContent = activeSession?.currentContent,
         sessionDirectiveResults = activeSession?.directiveResults
     )
+
+    Log.d(TAG, "EditableViewNoteSection: noteId=${note.id}, isEditing=$isEditing, effectiveDisplayContentLength=${effectiveDisplayContent.length}, preview='${effectiveDisplayContent.take(30)}...'")
 
     // Reset hasBeenFocused when exiting edit mode
     LaunchedEffect(isEditing) {
@@ -840,6 +903,7 @@ private fun EditableViewNoteSection(
             }
         } else {
             // Display mode - uses effectiveDisplayContent which handles transitional state
+            Log.d(TAG, "EditableViewNoteSection DISPLAY MODE: noteId=${note.id}, textLength=${effectiveDisplayContent.length}")
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1457,6 +1521,102 @@ private fun NoteSeparator() {
             strokeWidth = 1.dp.toPx(),
             pathEffect = PathEffect.dashPathEffect(floatArrayOf(dashLength, gapLength))
         )
+    }
+}
+
+/**
+ * Button directive rendered as an interactive button with settings icon.
+ * Shows the button label and executes the action when clicked.
+ * Displays error message below the button if execution failed.
+ */
+@Composable
+private fun ButtonDirectiveInlineContent(
+    buttonVal: ButtonVal,
+    directiveKey: String,
+    sourceText: String,
+    executionState: ButtonExecutionState,
+    errorMessage: String? = null,
+    onButtonClick: () -> Unit,
+    onEditDirective: () -> Unit
+) {
+    val backgroundColor = when (executionState) {
+        ButtonExecutionState.IDLE -> ButtonBackground
+        ButtonExecutionState.LOADING -> ButtonLoadingBackground
+        ButtonExecutionState.SUCCESS -> ButtonSuccessBackground
+        ButtonExecutionState.ERROR -> ButtonErrorBackground
+    }
+
+    val isEnabled = executionState != ButtonExecutionState.LOADING
+
+    Column(modifier = Modifier.padding(vertical = 4.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // The clickable button
+            Box(
+                modifier = Modifier
+                    .height(ButtonMinHeight)
+                    .background(
+                        color = backgroundColor,
+                        shape = RoundedCornerShape(ButtonCornerRadius)
+                    )
+                    .clickable(enabled = isEnabled) { onButtonClick() }
+                    .padding(horizontal = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                when (executionState) {
+                    ButtonExecutionState.LOADING -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(ButtonIconSize),
+                            color = ButtonContentColor,
+                            strokeWidth = 2.dp
+                        )
+                    }
+                    else -> {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PlayArrow,
+                                contentDescription = null,
+                                tint = ButtonContentColor,
+                                modifier = Modifier.size(ButtonIconSize)
+                            )
+                            Text(
+                                text = buttonVal.label,
+                                color = ButtonContentColor,
+                                modifier = Modifier.padding(start = 4.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Settings icon to edit the directive
+            IconButton(
+                onClick = onEditDirective,
+                modifier = Modifier
+                    .size(ViewEditButtonSize)
+                    .padding(start = 4.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = "Edit button directive",
+                    tint = ViewIndicatorColor,
+                    modifier = Modifier.size(ViewEditIconSize)
+                )
+            }
+        }
+
+        // Error message display
+        if (errorMessage != null) {
+            Text(
+                text = errorMessage,
+                color = ButtonErrorBackground,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 package org.alkaline.taskbrain.dsl.directives
 
+import android.util.Log
 import org.alkaline.taskbrain.data.Note
 import org.alkaline.taskbrain.dsl.language.IdempotencyAnalyzer
 import org.alkaline.taskbrain.dsl.language.Lexer
@@ -15,6 +16,8 @@ import org.alkaline.taskbrain.dsl.runtime.NoteContext
 import org.alkaline.taskbrain.dsl.runtime.NoteMutation
 import org.alkaline.taskbrain.dsl.runtime.NoteOperations
 import org.alkaline.taskbrain.dsl.runtime.PatternVal
+
+private const val TAG = "DirectiveFinder"
 
 /**
  * Result of executing a directive, including any mutations that occurred.
@@ -136,13 +139,17 @@ object DirectiveFinder {
         viewStack: List<String> = emptyList(),
         cachedExecutor: CachedExecutorInterface? = null
     ): DirectiveExecutionResult {
+        Log.d(TAG, "executeDirective: sourceText='$sourceText'")
         val env = createEnvironment(notes, currentNote, noteOperations, viewStack, cachedExecutor)
         return try {
             val tokens = Lexer(sourceText).tokenize()
+            Log.d(TAG, "executeDirective: tokenized successfully, ${tokens.size} tokens")
             val directive = Parser(tokens, sourceText).parseDirective()
+            Log.d(TAG, "executeDirective: parsed successfully")
 
             // Check idempotency before execution
             val idempotencyResult = IdempotencyAnalyzer.analyze(directive.expression)
+            Log.d(TAG, "executeDirective: idempotency check - isIdempotent=${idempotencyResult.isIdempotent}, reason=${idempotencyResult.nonIdempotentReason}")
             if (!idempotencyResult.isIdempotent) {
                 return DirectiveExecutionResult(
                     DirectiveResult.failure(idempotencyResult.nonIdempotentReason ?: "Non-idempotent operation"),
@@ -152,6 +159,7 @@ object DirectiveFinder {
 
             // Check for unwrapped mutations (property assignments must be in once[])
             val mutationResult = IdempotencyAnalyzer.checkUnwrappedMutations(directive.expression)
+            Log.d(TAG, "executeDirective: mutation check - isIdempotent=${mutationResult.isIdempotent}, reason=${mutationResult.nonIdempotentReason}")
             if (!mutationResult.isIdempotent) {
                 return DirectiveExecutionResult(
                     DirectiveResult.failure(mutationResult.nonIdempotentReason ?: "Unwrapped mutation"),
@@ -160,10 +168,12 @@ object DirectiveFinder {
             }
 
             val value = Executor().execute(directive, env)
+            Log.d(TAG, "executeDirective: executed successfully, value type=${value::class.simpleName}")
 
             // Check for no-effect values that can't be meaningfully displayed
             val warningType = checkNoEffectValue(value)
             if (warningType != null) {
+                Log.d(TAG, "executeDirective: no-effect warning - $warningType")
                 return DirectiveExecutionResult(
                     DirectiveResult.warning(warningType),
                     env.getMutations()
@@ -172,12 +182,16 @@ object DirectiveFinder {
 
             DirectiveExecutionResult(DirectiveResult.success(value), env.getMutations())
         } catch (e: LexerException) {
+            Log.e(TAG, "executeDirective: LexerException", e)
             DirectiveExecutionResult(DirectiveResult.failure("Lexer error: ${e.message}"), env.getMutations())
         } catch (e: ParseException) {
+            Log.e(TAG, "executeDirective: ParseException", e)
             DirectiveExecutionResult(DirectiveResult.failure("Parse error: ${e.message}"), env.getMutations())
         } catch (e: ExecutionException) {
+            Log.e(TAG, "executeDirective: ExecutionException", e)
             DirectiveExecutionResult(DirectiveResult.failure("Execution error: ${e.message}"), env.getMutations())
         } catch (e: Exception) {
+            Log.e(TAG, "executeDirective: Unexpected Exception", e)
             DirectiveExecutionResult(DirectiveResult.failure("Unexpected error: ${e.message}"), env.getMutations())
         }
     }

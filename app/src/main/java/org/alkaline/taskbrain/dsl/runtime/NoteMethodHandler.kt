@@ -60,8 +60,11 @@ object NoteMethodHandler {
         position: Int
     ): DslValue {
         val text = args.require(0, "text")
-        val textStr = (text as? StringVal)?.value
-            ?: throw ExecutionException("'append' expects a string argument", position)
+        // Accept any value and convert to display string
+        val textStr = when (text) {
+            is StringVal -> text.value
+            else -> text.toDisplayString()
+        }
 
         val ops = env.getNoteOperations()
             ?: throw ExecutionException(
@@ -72,7 +75,7 @@ object NoteMethodHandler {
         val updatedNote = kotlinx.coroutines.runBlocking {
             ops.appendToNote(noteVal.note.id, textStr)
         }
-        env.registerMutation(NoteMutation(noteVal.note.id, updatedNote, MutationType.CONTENT_APPENDED))
+        env.registerMutation(NoteMutation(noteVal.note.id, updatedNote, MutationType.CONTENT_APPENDED, appendedText = textStr))
         return NoteVal(updatedNote)
     }
 }

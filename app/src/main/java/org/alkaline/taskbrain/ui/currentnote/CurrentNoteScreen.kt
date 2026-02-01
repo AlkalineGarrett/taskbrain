@@ -39,6 +39,8 @@ import org.alkaline.taskbrain.ui.currentnote.components.CommandBar
 import org.alkaline.taskbrain.ui.currentnote.components.NoteTextField
 import org.alkaline.taskbrain.ui.currentnote.components.StatusBar
 import org.alkaline.taskbrain.dsl.runtime.MutationType
+import org.alkaline.taskbrain.dsl.runtime.values.ButtonVal
+import org.alkaline.taskbrain.dsl.ui.ButtonExecutionState
 
 /**
  * Main screen for viewing and editing a note.
@@ -70,6 +72,10 @@ fun CurrentNoteScreen(
     val directiveResults = remember(directiveResultsRaw) {
         currentNoteViewModel.getResultsByPosition()
     }
+    // Button execution states for directive buttons
+    val buttonExecutionStates by currentNoteViewModel.buttonExecutionStates.observeAsState(emptyMap())
+    // Button error messages - maps directive key to error message
+    val buttonErrors by currentNoteViewModel.buttonErrors.observeAsState(emptyMap())
     // Log when directiveResults changes to trace timing
     LaunchedEffect(directiveResultsRaw) {
         val firstContent = directiveResultsRaw.values.firstOrNull()?.toValue()?.toDisplayString()?.take(60)?.replace("\n", "\\n")
@@ -305,7 +311,7 @@ fun CurrentNoteScreen(
     // Set up callback for directive mutations that affect the current note's content
     // When a directive like [.name: "new title"] runs, update the editor to show the change
     DisposableEffect(currentNoteViewModel, controller) {
-        currentNoteViewModel.onEditorContentMutated = { noteId, newContent, mutationType, alreadyPersisted ->
+        currentNoteViewModel.onEditorContentMutated = { noteId, newContent, mutationType, alreadyPersisted, appendedText ->
             if (noteId == currentNoteId) {
                 when (mutationType) {
                     MutationType.CONTENT_CHANGED -> {
@@ -325,11 +331,14 @@ fun CurrentNoteScreen(
                         textFieldValue = TextFieldValue(updatedContent, TextRange(updatedContent.length))
                     }
                     MutationType.CONTENT_APPENDED -> {
-                        // For CONTENT_APPENDED (e.g., .append()), we cannot safely update the editor
-                        // because newContent is just the note's content field, not including children.
-                        // The append modified Firestore directly; user will see changes after reload.
-                        // Updating the editor here would wipe out child notes from the display.
-                        Log.d("CurrentNoteScreen", "Skipping editor update for CONTENT_APPENDED - reload to see changes")
+                        // For CONTENT_APPENDED (e.g., .append()), we have the appended text
+                        // Append it to the current editor content with a leading newline
+                        if (appendedText != null) {
+                            val updatedContent = userContent + "\n" + appendedText
+                            editorState.updateFromText(updatedContent)
+                            userContent = updatedContent
+                            textFieldValue = TextFieldValue(updatedContent, TextRange(updatedContent.length))
+                        }
                     }
                     MutationType.PATH_CHANGED -> {
                         // Path changes don't affect editor content - shouldn't reach here
@@ -873,6 +882,11 @@ fun CurrentNoteScreen(
                         currentNoteViewModel.toggleDirectiveCollapsed(uuid, sourceText)
                     }
                 },
+                onButtonClick = { directiveKey, buttonVal, sourceText ->
+                    currentNoteViewModel.executeButton(directiveKey, buttonVal, sourceText)
+                },
+                buttonExecutionStates = buttonExecutionStates,
+                buttonErrors = buttonErrors,
                 modifier = Modifier.weight(1f)
             )
             }

@@ -7,6 +7,8 @@ import org.alkaline.taskbrain.ui.currentnote.selection.lineSelectionToContentSel
 import org.alkaline.taskbrain.ui.currentnote.ime.DirectiveAwareLineInput
 import org.alkaline.taskbrain.dsl.directives.DirectiveResult
 import org.alkaline.taskbrain.dsl.directives.DirectiveSegmenter
+import org.alkaline.taskbrain.dsl.runtime.values.ButtonVal
+import org.alkaline.taskbrain.dsl.ui.ButtonExecutionState
 import org.alkaline.taskbrain.dsl.directives.DisplayTextResult
 import org.alkaline.taskbrain.ui.currentnote.selection.lineSelectionToPrefixSelection
 import org.alkaline.taskbrain.ui.currentnote.EditorController
@@ -87,6 +89,9 @@ internal fun ControlledLineView(
     onViewDirectiveRefresh: ((lineIndex: Int, directiveKey: String, sourceText: String, newText: String) -> Unit)? = null,
     onViewDirectiveConfirm: ((lineIndex: Int, directiveKey: String, sourceText: String, newText: String) -> Unit)? = null,
     onViewDirectiveCancel: ((lineIndex: Int, directiveKey: String, sourceText: String) -> Unit)? = null,
+    onButtonClick: ((directiveKey: String, buttonVal: ButtonVal, sourceText: String) -> Unit)? = null,
+    buttonExecutionStates: Map<String, ButtonExecutionState> = emptyMap(),
+    buttonErrors: Map<String, String> = emptyMap(),
     modifier: Modifier = Modifier
 ) {
     val prefix = lineState.prefix
@@ -222,6 +227,9 @@ internal fun ControlledLineView(
                 onViewDirectiveRefresh = onViewDirectiveRefresh,
                 onViewDirectiveConfirm = onViewDirectiveConfirm,
                 onViewDirectiveCancel = onViewDirectiveCancel,
+                onButtonClick = onButtonClick,
+                buttonExecutionStates = buttonExecutionStates,
+                buttonErrors = buttonErrors,
                 modifier = Modifier.fillMaxWidth()
             )
         }
