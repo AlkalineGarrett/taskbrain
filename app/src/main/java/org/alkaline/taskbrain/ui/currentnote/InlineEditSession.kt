@@ -73,6 +73,13 @@ class InlineEditSession(
     var isCollapsingDirective: Boolean by mutableStateOf(false)
 
     /**
+     * Flag indicating a move operation is in progress.
+     * When true, focus loss should not trigger edit mode exit.
+     * This is set before moving and cleared after the move completes.
+     */
+    var isMoveInProgress: Boolean by mutableStateOf(false)
+
+    /**
      * Update directive results (called after execution completes).
      */
     fun updateDirectiveResults(results: Map<String, DirectiveResult>) {

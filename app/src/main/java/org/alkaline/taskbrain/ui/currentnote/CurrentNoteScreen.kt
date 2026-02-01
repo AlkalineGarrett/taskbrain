@@ -884,21 +884,33 @@ fun CurrentNoteScreen(
             onIndent = { activeController.indent() },
             onUnindent = { activeController.unindent() },
             onMoveUp = {
-                // Move operations only apply to host note, not inline editing
-                if (!inlineEditState.isActive && controller.moveUp()) {
-                    userContent = editorState.text
-                    isSaved = false
+                // Mark move in progress to prevent focus loss from exiting inline edit
+                // Flag is cleared when focus is regained (in InlineNoteEditor)
+                inlineEditState.activeSession?.let { it.isMoveInProgress = true }
+                if (activeController.moveUp()) {
+                    if (!inlineEditState.isActive) {
+                        // Host note - update content
+                        userContent = editorState.text
+                        isSaved = false
+                    }
+                    // Inline editing: content tracked by session, isDirty computed automatically
                 }
             },
             onMoveDown = {
-                // Move operations only apply to host note, not inline editing
-                if (!inlineEditState.isActive && controller.moveDown()) {
-                    userContent = editorState.text
-                    isSaved = false
+                // Mark move in progress to prevent focus loss from exiting inline edit
+                // Flag is cleared when focus is regained (in InlineNoteEditor)
+                inlineEditState.activeSession?.let { it.isMoveInProgress = true }
+                if (activeController.moveDown()) {
+                    if (!inlineEditState.isActive) {
+                        // Host note - update content
+                        userContent = editorState.text
+                        isSaved = false
+                    }
+                    // Inline editing: content tracked by session, isDirty computed automatically
                 }
             },
-            moveUpState = if (inlineEditState.isActive) MoveButtonState(isEnabled = false, isWarning = false) else controller.getMoveUpState(),
-            moveDownState = if (inlineEditState.isActive) MoveButtonState(isEnabled = false, isWarning = false) else controller.getMoveDownState(),
+            moveUpState = activeController.getMoveUpState(),
+            moveDownState = activeController.getMoveDownState(),
             onPaste = { clipText -> activeController.paste(clipText) },
             isPasteEnabled = (isMainContentFocused || inlineEditState.isActive) &&
                 !(inlineEditState.activeSession?.editorState?.hasSelection ?: editorState.hasSelection),

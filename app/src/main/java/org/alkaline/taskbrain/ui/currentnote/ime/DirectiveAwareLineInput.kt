@@ -7,6 +7,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -796,9 +797,11 @@ private fun EditableViewNoteSection(
                     } else if (hasBeenFocused && isEditing) {
                         // Check if focus moved to an expanded directive editor (part of inline editing)
                         // or if we're in the process of collapsing a directive (focus will return)
+                        // or if a move operation is in progress (focus will return)
                         val hasExpandedDirective = session.expandedDirectiveKey != null
                         val isCollapsing = session.isCollapsingDirective
-                        if (!hasExpandedDirective && !isCollapsing) {
+                        val isMoving = session.isMoveInProgress
+                        if (!hasExpandedDirective && !isCollapsing && !isMoving) {
                             // Only handle focus loss if we previously had focus and no directive interaction
                             // DON'T end the UI session here - let the save/refresh flow handle it
                             // to avoid showing stale directiveResults during the async refresh.
@@ -859,6 +862,11 @@ private fun EditableViewNoteSection(
  * Uses the InlineEditSession's EditorState and EditorController for full editing support.
  * Commands from CommandBar will route to this controller when active.
  *
+ * Uses focusGroup() to track focus at the editor level - focus loss is only reported
+ * when focus leaves the entire editor, not when it moves between lines.
+ *
+ * Each line has its own FocusRequester and IME connection for proper line move support.
+ *
  * Renders directives properly - collapsed by default, tappable to expand directive editor.
  * Shows DirectiveEditRow below lines with expanded directives.
  */
@@ -880,107 +888,211 @@ private fun InlineNoteEditor(
     val expandedDirectiveKey = session.expandedDirectiveKey
     val expandedDirectiveSourceText = session.expandedDirectiveSourceText
 
-    // Create IME state for the first line (or the focused line)
-    val lineIndex = editorState.focusedLineIndex
+    // Observe state version to trigger recomposition
+    @Suppress("UNUSED_VARIABLE")
+    val stateTrigger = editorState.stateVersion
+
+    // Create per-line focus requesters
+    val lineCount = editorState.lines.size
+    val lineFocusRequesters = remember(lineCount) { List(lineCount) { FocusRequester() } }
+
+    // Track overall editor focus state (managed at focusGroup level)
+    var isEditorFocused by remember { mutableStateOf(false) }
+
+    // Track which line is expecting focus from a tap (to prevent false focus loss)
+    var pendingFocusLineIndex by remember { mutableIntStateOf(-1) }
+
+    // Request focus on the focused line when focusedLineIndex changes
+    LaunchedEffect(editorState.focusedLineIndex, editorState.stateVersion) {
+        if (editorState.stateVersion > 0 && editorState.focusedLineIndex in lineFocusRequesters.indices) {
+            try {
+                lineFocusRequesters[editorState.focusedLineIndex].requestFocus()
+            } catch (_: Exception) {
+                // Focus request failed - ignore
+            }
+        }
+    }
+
+    // Request focus back when directive editor is closed
+    LaunchedEffect(expandedDirectiveKey) {
+        if (expandedDirectiveKey == null && session.isCollapsingDirective) {
+            // Directive was collapsed, request focus back to the focused line
+            val focusedIndex = editorState.focusedLineIndex
+            if (focusedIndex in lineFocusRequesters.indices) {
+                try {
+                    lineFocusRequesters[focusedIndex].requestFocus()
+                } catch (_: Exception) {
+                    session.clearCollapsingFlag()
+                }
+            }
+        }
+    }
+
+    // Also handle external focus requester for initial focus
+    LaunchedEffect(Unit) {
+        try {
+            if (editorState.focusedLineIndex in lineFocusRequesters.indices) {
+                lineFocusRequesters[editorState.focusedLineIndex].requestFocus()
+            }
+        } catch (_: Exception) {
+            // Focus request failed - ignore
+        }
+    }
+
+    // Use focusGroup to track focus at editor level
+    // Focus loss is only reported when focus leaves the ENTIRE group
+    // AND we're not expecting focus on another line (from a tap)
+    Column(
+        modifier = modifier
+            .focusGroup()
+            .onFocusChanged { focusState ->
+                val wasFocused = isEditorFocused
+                isEditorFocused = focusState.hasFocus
+                if (focusState.hasFocus && !wasFocused) {
+                    // Clear move-in-progress flag now that focus is restored
+                    session.isMoveInProgress = false
+                    onFocusChanged(true)
+                } else if (!focusState.hasFocus && wasFocused) {
+                    // Check if we're expecting focus on another line (tap in progress)
+                    if (pendingFocusLineIndex >= 0) {
+                        // Don't report focus loss - we're moving between lines
+                    } else {
+                        // Focus left the entire editor group
+                        onFocusChanged(false)
+                    }
+                }
+            }
+    ) {
+        // Render each line from the EditorState with its own IME connection
+        editorState.lines.forEachIndexed { index, lineState ->
+            if (index < lineFocusRequesters.size) {
+                InlineEditorLineWithIme(
+                    lineIndex = index,
+                    lineState = lineState,
+                    controller = controller,
+                    textStyle = textStyle,
+                    focusRequester = lineFocusRequesters[index],
+                    hostView = hostView,
+                    isFocused = isEditorFocused && index == editorState.focusedLineIndex,
+                    directiveResults = directiveResults,
+                    onTapStarting = {
+                        // Mark that we're expecting focus on this line
+                        pendingFocusLineIndex = index
+                    },
+                    onLineFocused = {
+                        // A line gained focus - clear pending and update controller
+                        pendingFocusLineIndex = -1
+                        controller.focusLine(index)
+                    },
+                    onDirectiveTap = { directiveKey, sourceText ->
+                        inlineEditState?.toggleDirectiveExpanded(directiveKey, sourceText)
+                    }
+                )
+
+                // Check if there's an expanded directive on this line
+                val expandedOnThisLine = expandedDirectiveKey?.startsWith("$index:") == true
+                if (expandedOnThisLine && expandedDirectiveSourceText != null) {
+                    // Get the result for error/warning messages
+                    val result = directiveResults[expandedDirectiveKey]
+                    val errorMessage = result?.error
+                    val warningMessage = result?.warning?.displayMessage
+
+                    DirectiveEditRow(
+                        initialText = expandedDirectiveSourceText,
+                        textStyle = textStyle,
+                        errorMessage = errorMessage,
+                        warningMessage = warningMessage,
+                        onRefresh = { currentText ->
+                            // Re-execute and update result
+                            inlineEditState?.refreshDirective(expandedDirectiveKey, currentText)
+                        },
+                        onConfirm = { newText ->
+                            // Confirm the edit
+                            inlineEditState?.confirmDirective(
+                                index,
+                                expandedDirectiveKey,
+                                expandedDirectiveSourceText,
+                                newText
+                            )
+                        },
+                        onCancel = {
+                            // Just collapse without saving changes
+                            inlineEditState?.collapseDirective()
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A single line in the inline editor with its own IME connection.
+ * Each line is independently focusable and handles its own keyboard input.
+ *
+ * Focus tracking is handled at the focusGroup level in InlineNoteEditor.
+ * This component only reports when it gains focus via onLineFocused.
+ */
+@Composable
+private fun InlineEditorLineWithIme(
+    lineIndex: Int,
+    lineState: org.alkaline.taskbrain.ui.currentnote.LineState,
+    controller: EditorController,
+    textStyle: TextStyle,
+    focusRequester: FocusRequester,
+    hostView: View,
+    isFocused: Boolean,
+    directiveResults: Map<String, DirectiveResult> = emptyMap(),
+    onTapStarting: () -> Unit,
+    onLineFocused: () -> Unit,
+    onDirectiveTap: ((directiveKey: String, sourceText: String) -> Unit)? = null
+) {
+    // Create IME state for this line
     val imeState = remember(lineIndex, controller) {
         LineImeState(lineIndex, controller)
     }
 
     // Sync IME state when content changes
-    val currentLine = editorState.lines.getOrNull(lineIndex)
-    LaunchedEffect(currentLine?.content, currentLine?.contentCursorPosition) {
+    val content = lineState.content
+    val cursorPosition = lineState.contentCursorPosition
+    LaunchedEffect(content, cursorPosition) {
         if (!imeState.isInBatchEdit) {
             imeState.syncFromController()
         }
     }
 
-    // Observe state version to trigger recomposition
-    @Suppress("UNUSED_VARIABLE")
-    val stateTrigger = editorState.stateVersion
-
-    var isFocused by remember { mutableStateOf(false) }
-
-    // Request focus back when directive editor is closed
-    LaunchedEffect(expandedDirectiveKey) {
-        if (expandedDirectiveKey == null && session.isCollapsingDirective) {
-            // Directive was collapsed, request focus back to the editor
-            try {
-                focusRequester.requestFocus()
-                // The collapsing flag will be cleared after a delay in EditableViewNoteSection
-            } catch (_: Exception) {
-                // Clear flag on exception to prevent getting stuck
-                session.clearCollapsingFlag()
-            }
-        }
-    }
-
-    Column(
-        modifier = modifier
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
             .focusRequester(focusRequester)
             .onFocusChanged { focusState ->
-                isFocused = focusState.isFocused
-                onFocusChanged(focusState.isFocused)
+                if (focusState.isFocused) {
+                    onLineFocused()
+                }
+                // Focus loss is handled at the focusGroup level in InlineNoteEditor
             }
-            .lineImeConnection(imeState, currentLine?.contentCursorPosition ?: 0, hostView)
+            .lineImeConnection(imeState, cursorPosition, hostView)
             .focusable()
     ) {
-        // Render each line from the EditorState
-        editorState.lines.forEachIndexed { index, lineState ->
-            // Render the line
-            InlineEditorLine(
-                lineIndex = index,
-                lineState = lineState,
-                controller = controller,
-                textStyle = textStyle,
-                isFocused = isFocused && index == editorState.focusedLineIndex,
-                directiveResults = directiveResults,
-                onDirectiveTap = { directiveKey, sourceText ->
-                    // Toggle expanded state for the directive
-                    inlineEditState?.toggleDirectiveExpanded(directiveKey, sourceText)
-                },
-                onContentTap = {
-                    // Request focus back to maintain edit mode
-                    try {
-                        focusRequester.requestFocus()
-                    } catch (_: Exception) {
-                        // Focus request failed - ignore
-                    }
+        // Render the line content
+        InlineEditorLine(
+            lineIndex = lineIndex,
+            lineState = lineState,
+            controller = controller,
+            textStyle = textStyle,
+            isFocused = isFocused,
+            directiveResults = directiveResults,
+            onDirectiveTap = onDirectiveTap,
+            onTapStarting = onTapStarting,
+            onContentTap = {
+                // Request focus on tap
+                try {
+                    focusRequester.requestFocus()
+                } catch (_: Exception) {
+                    // Focus request failed
                 }
-            )
-
-            // Check if there's an expanded directive on this line
-            val expandedOnThisLine = expandedDirectiveKey?.startsWith("$index:") == true
-            if (expandedOnThisLine && expandedDirectiveSourceText != null) {
-                // Get the result for error/warning messages
-                val result = directiveResults[expandedDirectiveKey]
-                val errorMessage = result?.error
-                val warningMessage = result?.warning?.displayMessage
-
-                DirectiveEditRow(
-                    initialText = expandedDirectiveSourceText,
-                    textStyle = textStyle,
-                    errorMessage = errorMessage,
-                    warningMessage = warningMessage,
-                    onRefresh = { currentText ->
-                        // Re-execute and update result
-                        inlineEditState?.refreshDirective(expandedDirectiveKey, currentText)
-                    },
-                    onConfirm = { newText ->
-                        // Confirm the edit
-                        inlineEditState?.confirmDirective(
-                            index,
-                            expandedDirectiveKey,
-                            expandedDirectiveSourceText,
-                            newText
-                        )
-                    },
-                    onCancel = {
-                        // Just collapse without saving changes
-                        inlineEditState?.collapseDirective()
-                    }
-                )
             }
-        }
+        )
     }
 }
 
@@ -997,6 +1109,7 @@ private fun InlineEditorLine(
     isFocused: Boolean,
     directiveResults: Map<String, DirectiveResult> = emptyMap(),
     onDirectiveTap: ((directiveKey: String, sourceText: String) -> Unit)? = null,
+    onTapStarting: (() -> Unit)? = null,
     onContentTap: (() -> Unit)? = null
 ) {
     val prefix = lineState.prefix
@@ -1100,6 +1213,8 @@ private fun InlineEditorLine(
                         .fillMaxWidth()
                         .pointerInput(Unit) {
                             detectTapGestures { offset ->
+                                // Notify that tap is starting BEFORE any focus changes
+                                onTapStarting?.invoke()
                                 textLayoutResult?.let { layout ->
                                     val charPos = layout.getOffsetForPosition(offset)
                                     controller.setCursor(lineIndex, charPos)
@@ -1138,6 +1253,7 @@ private fun InlineEditorLine(
                     controller = controller,
                     onDirectiveTap = onDirectiveTap,
                     onTextLayout = { textLayoutResult = it },
+                    onTapStarting = onTapStarting,
                     onContentTap = onContentTap
                 )
             }
@@ -1161,6 +1277,7 @@ private fun InlineDirectiveOverlayText(
     controller: EditorController,
     onDirectiveTap: ((directiveKey: String, sourceText: String) -> Unit)?,
     onTextLayout: (TextLayoutResult) -> Unit,
+    onTapStarting: (() -> Unit)? = null,
     onContentTap: (() -> Unit)? = null
 ) {
     var textLayoutResult: TextLayoutResult? by remember { mutableStateOf(null) }
@@ -1178,6 +1295,8 @@ private fun InlineDirectiveOverlayText(
                 .fillMaxWidth()
                 .pointerInput(displayResult) {
                     detectTapGestures { offset ->
+                        // Notify that tap is starting BEFORE any focus changes
+                        onTapStarting?.invoke()
                         textLayoutResult?.let { layout ->
                             val displayPosition = layout.getOffsetForPosition(offset)
                             val sourcePosition = mapDisplayToSourceCursor(displayPosition, displayResult)
