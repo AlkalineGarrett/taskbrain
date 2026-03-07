@@ -1,6 +1,15 @@
 import type { DslValue } from './DslValue'
 import type { Arguments } from './Arguments'
 import type { Environment } from './Environment'
+import { getDateFunctions } from '../builtins/DateFunctions'
+import { getCharacterConstants } from '../builtins/CharacterConstants'
+import { getArithmeticFunctions } from '../builtins/ArithmeticFunctions'
+import { getComparisonFunctions } from '../builtins/ComparisonFunctions'
+import { getPatternFunctions } from '../builtins/PatternFunctions'
+import { getNoteFunctions } from '../builtins/NoteFunctions'
+import { getListFunctions } from '../builtins/ListFunctions'
+import { getSortConstants } from '../builtins/SortConstants'
+import { getActionFunctions } from '../builtins/ActionFunctions'
 
 export interface BuiltinFunction {
   name: string
@@ -14,17 +23,6 @@ let initialized = false
 function ensureInitialized(): void {
   if (initialized) return
   initialized = true
-
-  // Lazy imports to avoid circular dependency issues
-  const { getDateFunctions } = require('../builtins/DateFunctions')
-  const { getCharacterConstants } = require('../builtins/CharacterConstants')
-  const { getArithmeticFunctions } = require('../builtins/ArithmeticFunctions')
-  const { getComparisonFunctions } = require('../builtins/ComparisonFunctions')
-  const { getPatternFunctions } = require('../builtins/PatternFunctions')
-  const { getNoteFunctions } = require('../builtins/NoteFunctions')
-  const { getListFunctions } = require('../builtins/ListFunctions')
-  const { getSortConstants } = require('../builtins/SortConstants')
-  const { getActionFunctions } = require('../builtins/ActionFunctions')
 
   const allFunctions: BuiltinFunction[] = [
     ...getDateFunctions(),
