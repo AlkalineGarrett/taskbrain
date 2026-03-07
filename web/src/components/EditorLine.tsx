@@ -1,16 +1,33 @@
 import { useRef, useEffect, useCallback, type KeyboardEvent, type ChangeEvent } from 'react'
 import type { EditorController } from '@/editor/EditorController'
 import type { EditorState } from '@/editor/EditorState'
+import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
 import { hasCheckbox } from '@/editor/LinePrefixes'
+import { hasDirectives } from '@/dsl/directives/DirectiveSegmenter'
+import { DirectiveLineContent } from './DirectiveLineContent'
 import styles from './EditorLine.module.css'
 
 interface EditorLineProps {
   lineIndex: number
   controller: EditorController
   editorState: EditorState
+  directiveResults?: Map<string, DirectiveResult>
+  onDirectiveEdit?: (key: string, newSourceText: string) => void
+  onDirectiveRefresh?: (key: string, sourceText: string) => void
+  onButtonClick?: (key: string) => void
+  onViewNoteClick?: (noteId: string) => void
 }
 
-export function EditorLine({ lineIndex, controller, editorState }: EditorLineProps) {
+export function EditorLine({
+  lineIndex,
+  controller,
+  editorState,
+  directiveResults,
+  onDirectiveEdit,
+  onDirectiveRefresh,
+  onButtonClick,
+  onViewNoteClick,
+}: EditorLineProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const line = editorState.lines[lineIndex]
   if (!line) return null
@@ -129,6 +146,9 @@ export function EditorLine({ lineIndex, controller, editorState }: EditorLinePro
     }
   }, [controller, line.text, lineIndex])
 
+  // Show directive chips for unfocused lines that contain directives
+  const showDirectiveChips = !isFocused && directiveResults && hasDirectives(content)
+
   return (
     <div className={`${styles.line} ${isFocused ? styles.focused : ''}`}>
       <div
@@ -140,16 +160,30 @@ export function EditorLine({ lineIndex, controller, editorState }: EditorLinePro
           <span className={styles.prefix}>{displayPrefix.trim()}</span>
         )}
       </div>
-      <input
-        ref={inputRef}
-        className={styles.input}
-        value={content}
-        onChange={handleChange}
-        onKeyDown={handleKeyDown}
-        onFocus={handleFocus}
-        spellCheck={false}
-        autoComplete="off"
-      />
+      {showDirectiveChips ? (
+        <div className={styles.directiveContent} onClick={handleFocus}>
+          <DirectiveLineContent
+            content={content}
+            lineIndex={lineIndex}
+            results={directiveResults}
+            onDirectiveEdit={onDirectiveEdit}
+            onDirectiveRefresh={onDirectiveRefresh}
+            onButtonClick={onButtonClick}
+            onViewNoteClick={onViewNoteClick}
+          />
+        </div>
+      ) : (
+        <input
+          ref={inputRef}
+          className={styles.input}
+          value={content}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          onFocus={handleFocus}
+          spellCheck={false}
+          autoComplete="off"
+        />
+      )}
     </div>
   )
 }

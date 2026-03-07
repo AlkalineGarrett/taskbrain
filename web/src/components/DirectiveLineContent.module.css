@@ -1,0 +1,30 @@
+.lineContent {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px;
+  min-height: 1.4em;
+}
+
+.textSegment {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.viewContent {
+  display: block;
+  width: 100%;
+  border-left: 3px solid #B0BEC5;
+  padding-left: 12px;
+  margin: 4px 0;
+}
+
+.viewNote {
+  padding: 4px 0;
+}
+
+.viewDivider {
+  border: none;
+  border-top: 1px solid #E0E0E0;
+  margin: 4px 0;
+}

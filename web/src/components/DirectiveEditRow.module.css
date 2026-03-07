@@ -1,0 +1,63 @@
+.editRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background-color: #F5F5F5;
+  border: 1px solid #E0E0E0;
+  border-radius: 4px;
+  margin: 4px 0;
+}
+
+.editInput {
+  flex: 1;
+  border: 1px solid #BDBDBD;
+  border-radius: 3px;
+  padding: 4px 8px;
+  font-family: monospace;
+  font-size: 0.85rem;
+  outline: none;
+}
+
+.editInput:focus {
+  border-color: #1976D2;
+}
+
+.editButton {
+  padding: 4px 8px;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  background-color: #E0E0E0;
+  color: #424242;
+}
+
+.editButton:hover {
+  background-color: #BDBDBD;
+}
+
+.confirmButton {
+  background-color: #4CAF50;
+  color: white;
+}
+
+.confirmButton:hover {
+  background-color: #388E3C;
+}
+
+.cancelButton {
+  background-color: #F44336;
+  color: white;
+}
+
+.cancelButton:hover {
+  background-color: #D32F2F;
+}
+
+.errorMessage {
+  font-size: 0.8rem;
+  color: #C62828;
+  margin-top: 2px;
+  padding: 2px 8px;
+}

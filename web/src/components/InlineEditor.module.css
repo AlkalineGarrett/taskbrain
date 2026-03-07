@@ -1,0 +1,74 @@
+.inlineEditor {
+  border: 2px solid #1976D2;
+  border-radius: 6px;
+  margin: 4px 0;
+  background: #FAFAFA;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: #E3F2FD;
+  border-bottom: 1px solid #BBDEFB;
+  font-size: 0.8rem;
+}
+
+.label {
+  color: #1565C0;
+  font-weight: 500;
+}
+
+.dirtyIndicator {
+  color: #E65100;
+  font-size: 0.75rem;
+}
+
+.saveButton {
+  margin-left: auto;
+  padding: 2px 8px;
+  border: none;
+  border-radius: 3px;
+  background: #1976D2;
+  color: white;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.saveButton:hover {
+  background: #1565C0;
+}
+
+.saveButton:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.cancelButton {
+  padding: 2px 8px;
+  border: none;
+  border-radius: 3px;
+  background: #E0E0E0;
+  color: #424242;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.cancelButton:hover {
+  background: #BDBDBD;
+}
+
+.textarea {
+  width: 100%;
+  border: none;
+  outline: none;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 0.9375rem;
+  line-height: 1.4;
+  padding: 8px;
+  background: transparent;
+  box-sizing: border-box;
+}

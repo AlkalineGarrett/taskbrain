@@ -1,0 +1,36 @@
+.viewContainer {
+  display: block;
+  width: 100%;
+  border-left: 3px solid #B0BEC5;
+  padding-left: 12px;
+  margin: 4px 0;
+}
+
+.emptyView {
+  color: #9E9E9E;
+  font-style: italic;
+  padding: 4px 0;
+}
+
+.separator {
+  border: none;
+  border-top: 1px solid #E0E0E0;
+  margin: 4px 0;
+}
+
+.noteSection {
+  padding: 4px 0;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.15s;
+}
+
+.noteSection:hover {
+  background-color: #F5F5F5;
+}
+
+.noteLine {
+  min-height: 1.4em;
+  line-height: 1.4;
+  font-size: 0.9375rem;
+}
