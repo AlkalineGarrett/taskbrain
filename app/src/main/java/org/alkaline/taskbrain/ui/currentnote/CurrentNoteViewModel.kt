@@ -500,9 +500,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         // Use the note ID from line tracker if available
         val noteId = if (lineIndex != null) getNoteIdForLine(lineIndex) else currentNoteId
 
-        // Auto-populate upcomingTime with the earliest scheduled time if not set
-        val effectiveUpcomingTime = upcomingTime ?: listOfNotNull(notifyTime, urgentTime, alarmTime)
-            .minByOrNull { it.toDate().time }
+        val effectiveUpcomingTime = resolveUpcomingTime(upcomingTime, notifyTime, urgentTime, alarmTime)
 
         val alarm = Alarm(
             noteId = noteId,
@@ -1536,6 +1534,17 @@ class CurrentNoteViewModel @JvmOverloads constructor(
 
     companion object {
         private const val TAG = "CurrentNoteViewModel"
+
+        /**
+         * If upcomingTime is not explicitly set, default to the earliest of the other alarm times.
+         */
+        internal fun resolveUpcomingTime(
+            upcomingTime: Timestamp?,
+            notifyTime: Timestamp?,
+            urgentTime: Timestamp?,
+            alarmTime: Timestamp?
+        ): Timestamp? = upcomingTime ?: listOfNotNull(notifyTime, urgentTime, alarmTime)
+            .minByOrNull { it.toDate().time }
     }
 
     /**
@@ -1549,8 +1558,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         alarmTime: Timestamp?
     ) {
         viewModelScope.launch {
-            val effectiveUpcomingTime = upcomingTime ?: listOfNotNull(notifyTime, urgentTime, alarmTime)
-                .minByOrNull { it.toDate().time }
+            val effectiveUpcomingTime = resolveUpcomingTime(upcomingTime, notifyTime, urgentTime, alarmTime)
 
             val updatedAlarm = alarm.copy(
                 upcomingTime = effectiveUpcomingTime,

@@ -132,7 +132,7 @@ fun NoteTextField(
                                     symbol = symbol,
                                     charOffset = charOffsetInLine,
                                     lineIndex = lineIndex,
-                                    symbolIndexOnLine = textBefore.count { it.toString() == symbol.char }
+                                    symbolIndexOnLine = textBefore.count { ch -> ch.toString() == symbol.char }
                                 ))
                             }
                         }

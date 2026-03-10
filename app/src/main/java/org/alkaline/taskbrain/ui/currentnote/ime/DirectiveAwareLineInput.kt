@@ -76,6 +76,28 @@ import org.alkaline.taskbrain.ui.currentnote.util.TappableSymbol
 
 private const val TAG = "DirectiveAwareLineInput"
 
+/**
+ * Finds the tappable symbol character index at or adjacent to a tap position.
+ * Handles the case where emoji renders wider than its layout slot, so the tap
+ * may resolve to the next character — checks the previous char's bounding box.
+ *
+ * @param content The source text to check against
+ * @param position The resolved character position from the tap
+ * @param getBoundingBox Returns the bounding box for a character at the given index
+ * @param tapX The raw x-coordinate of the tap
+ */
+private fun findTappedSymbol(
+    content: String,
+    position: Int,
+    getBoundingBox: (Int) -> Rect,
+    tapX: Float
+): Int? = when {
+    TappableSymbol.at(content, position) != null -> position
+    position > 0 && TappableSymbol.at(content, position - 1) != null
+        && tapX <= getBoundingBox(position - 1).right -> position - 1
+    else -> null
+}
+
 // Directive box colors
 private val DirectiveErrorColor = Color(0xFFF44336)    // Red
 private val DirectiveWarningColor = Color(0xFFFF9800)  // Orange
@@ -227,7 +249,7 @@ internal fun DirectiveAwareLineInput(
     ) {
         if (displayResult.directiveDisplayRanges.isEmpty()) {
             // No directives - render as simple text
-            val hasAlarmSymbol = onSymbolTap != null && TappableSymbol.containsAny(content)
+            val hasTappableSymbol = onSymbolTap != null && TappableSymbol.containsAny(content)
             BasicText(
                 text = content,
                 style = textStyle,
@@ -238,22 +260,16 @@ internal fun DirectiveAwareLineInput(
                 modifier = Modifier
                     .fillMaxWidth()
                     .then(
-                        if (hasAlarmSymbol) {
+                        if (hasTappableSymbol) {
                             Modifier.pointerInput(content, onSymbolTap) {
                                 detectTapGestures { offset ->
                                     textLayoutResultState?.let { layout ->
                                         val position = layout.getOffsetForPosition(offset)
-                                        val alarmCharIndex = when {
-                                            TappableSymbol.at(content, position) != null -> position
-                                            // Emoji renders wider than its layout slot, so
-                                            // tapping it may resolve past it; check previous
-                                            // char but only if tap is within its bounding box
-                                            position > 0 && TappableSymbol.at(content, position - 1) != null
-                                                && offset.x <= layout.getBoundingBox(position - 1).right -> position - 1
-                                            else -> null
-                                        }
-                                        if (alarmCharIndex != null) {
-                                            onSymbolTap?.invoke(lineIndex, alarmCharIndex)
+                                        val symbolIndex = findTappedSymbol(
+                                            content, position, layout::getBoundingBox, offset.x
+                                        )
+                                        if (symbolIndex != null) {
+                                            onSymbolTap?.invoke(lineIndex, symbolIndex)
                                         } else {
                                             controller.setContentCursor(lineIndex, position)
                                         }
@@ -382,16 +398,17 @@ private fun DirectiveOverlayText(
                         textLayoutResult?.let { layout ->
                             val displayPosition = layout.getOffsetForPosition(offset)
                             val sourcePosition = mapDisplayToSourceCursor(displayPosition, displayResult)
-                            val alarmCharIndex = when {
-                                TappableSymbol.at(content, sourcePosition) != null -> sourcePosition
-                                sourcePosition > 0 && TappableSymbol.at(content, sourcePosition - 1) != null && run {
-                                    val dispIdx = mapSourceToDisplayCursor(sourcePosition - 1, displayResult)
-                                    dispIdx < layout.layoutInput.text.length && offset.x <= layout.getBoundingBox(dispIdx).right
-                                } -> sourcePosition - 1
-                                else -> null
-                            }
-                            if (alarmCharIndex != null && onSymbolTap != null) {
-                                onSymbolTap(lineIndex, alarmCharIndex)
+                            val symbolIndex = findTappedSymbol(
+                                content, sourcePosition,
+                                getBoundingBox = { sourceIdx ->
+                                    val dispIdx = mapSourceToDisplayCursor(sourceIdx, displayResult)
+                                    if (dispIdx < layout.layoutInput.text.length) layout.getBoundingBox(dispIdx)
+                                    else Rect.Zero
+                                },
+                                tapX = offset.x
+                            )
+                            if (symbolIndex != null && onSymbolTap != null) {
+                                onSymbolTap(lineIndex, symbolIndex)
                             } else {
                                 onTapAtSourcePosition(sourcePosition)
                             }
