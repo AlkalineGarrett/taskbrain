@@ -1,6 +1,5 @@
 package org.alkaline.taskbrain.receiver
 
-import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -12,17 +11,16 @@ import org.alkaline.taskbrain.data.AlarmRepository
 import org.alkaline.taskbrain.data.AlarmUpdateEvent
 import org.alkaline.taskbrain.data.SnoozeDuration
 import org.alkaline.taskbrain.service.AlarmScheduler
+import org.alkaline.taskbrain.service.AlarmStateManager
 import org.alkaline.taskbrain.service.AlarmUtils
-import org.alkaline.taskbrain.service.UrgentStateManager
 
 /**
  * Handles notification action buttons (Done, Snooze, Cancel).
  *
  * When a user taps an action button on an alarm notification:
  * 1. This receiver gets the corresponding ACTION_* intent
- * 2. The handler updates the alarm status in Firestore via AlarmRepository
- * 3. Scheduled alarm triggers are cancelled via AlarmScheduler
- * 4. The notification is dismissed
+ * 2. The handler updates the alarm status in Firestore via AlarmStateManager
+ * 3. Scheduled alarm triggers are cancelled, urgent state exited, notification dismissed
  *
  * The AlarmsScreen will reflect these changes when it resumes (via lifecycle observation).
  */
@@ -42,20 +40,7 @@ class AlarmActionReceiver : BroadcastReceiver() {
         Log.d(TAG, "Marking alarm as done: $alarmId")
 
         CoroutineScope(Dispatchers.IO).launch {
-            val repository = AlarmRepository()
-            repository.markDone(alarmId)
-
-            // Cancel any scheduled triggers
-            val scheduler = AlarmScheduler(context)
-            scheduler.cancelAlarm(alarmId)
-
-            // Exit urgent state if this alarm was in it
-            UrgentStateManager(context).exitUrgentState(alarmId)
-
-            // Dismiss the notification
-            dismissNotification(context, alarmId)
-
-            // Notify observers to refresh their data
+            AlarmStateManager(context).markDone(alarmId)
             AlarmUpdateEvent.notifyAlarmUpdated()
         }
     }
@@ -69,6 +54,7 @@ class AlarmActionReceiver : BroadcastReceiver() {
         Log.d(TAG, "Snoozing alarm for ${duration.minutes} minutes: $alarmId")
 
         CoroutineScope(Dispatchers.IO).launch {
+            val stateManager = AlarmStateManager(context)
             val repository = AlarmRepository()
             val result = repository.getAlarm(alarmId)
 
@@ -79,20 +65,15 @@ class AlarmActionReceiver : BroadcastReceiver() {
                     // Update snooze time in database
                     repository.snoozeAlarm(alarmId, duration)
 
+                    // Deactivate current state (cancel triggers, exit urgent, dismiss notification)
+                    stateManager.deactivate(alarmId)
+
                     // Schedule a new alarm for the snooze time
                     val scheduler = AlarmScheduler(context)
                     val snoozeTime = AlarmUtils.calculateSnoozeEndTime(duration.minutes)
                     val alarmType = AlarmUtils.determineAlarmTypeForSnooze(alarm)
-
                     scheduler.scheduleSnooze(alarmId, snoozeTime, alarmType)
 
-                    // Exit urgent state if this alarm was in it
-                    UrgentStateManager(context).exitUrgentState(alarmId)
-
-                    // Dismiss the current notification
-                    dismissNotification(context, alarmId)
-
-                    // Notify observers to refresh their data
                     AlarmUpdateEvent.notifyAlarmUpdated()
                 },
                 onFailure = { e ->
@@ -106,27 +87,9 @@ class AlarmActionReceiver : BroadcastReceiver() {
         Log.d(TAG, "Cancelling alarm: $alarmId")
 
         CoroutineScope(Dispatchers.IO).launch {
-            val repository = AlarmRepository()
-            repository.markCancelled(alarmId)
-
-            // Cancel any scheduled triggers
-            val scheduler = AlarmScheduler(context)
-            scheduler.cancelAlarm(alarmId)
-
-            // Exit urgent state if this alarm was in it
-            UrgentStateManager(context).exitUrgentState(alarmId)
-
-            // Dismiss the notification
-            dismissNotification(context, alarmId)
-
-            // Notify observers to refresh their data
+            AlarmStateManager(context).markCancelled(alarmId)
             AlarmUpdateEvent.notifyAlarmUpdated()
         }
-    }
-
-    private fun dismissNotification(context: Context, alarmId: String) {
-        val notificationManager = context.getSystemService(NotificationManager::class.java)
-        notificationManager?.cancel(AlarmUtils.getNotificationId(alarmId))
     }
 
     companion object {

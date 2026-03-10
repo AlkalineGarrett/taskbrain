@@ -1,6 +1,5 @@
 package org.alkaline.taskbrain.ui.alarm
 
-import android.app.NotificationManager
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -49,8 +48,7 @@ import org.alkaline.taskbrain.data.AlarmRepository
 import org.alkaline.taskbrain.data.AlarmType
 import org.alkaline.taskbrain.data.SnoozeDuration
 import org.alkaline.taskbrain.receiver.AlarmActionReceiver
-import org.alkaline.taskbrain.service.AlarmScheduler
-import org.alkaline.taskbrain.service.AlarmUtils
+import org.alkaline.taskbrain.service.AlarmStateManager
 
 /**
  * Full-screen activity shown when an alarm fires.
@@ -101,24 +99,19 @@ class AlarmActivity : ComponentActivity() {
 
     private fun snoozeAlarm(alarmId: String, duration: SnoozeDuration) {
         AlarmActionReceiver().handleSnoozeWithDuration(this, alarmId, duration)
-        dismissNotification(alarmId)
     }
 
     private fun markDone(alarmId: String) {
-        val scheduler = AlarmScheduler(this)
-        scheduler.cancelAlarm(alarmId)
-
         CoroutineScope(Dispatchers.Main).launch {
             withContext(Dispatchers.IO) {
-                AlarmRepository().markDone(alarmId)
+                AlarmStateManager(this@AlarmActivity).markDone(alarmId)
             }
         }
-        dismissNotification(alarmId)
     }
 
     private fun dismissNotification(alarmId: String) {
-        val notificationManager = getSystemService(NotificationManager::class.java)
-        notificationManager?.cancel(AlarmUtils.getNotificationId(alarmId))
+        val notificationManager = getSystemService(android.app.NotificationManager::class.java)
+        notificationManager?.cancel(org.alkaline.taskbrain.service.AlarmUtils.getNotificationId(alarmId))
     }
 
     companion object {

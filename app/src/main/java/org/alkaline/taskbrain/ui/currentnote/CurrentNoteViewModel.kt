@@ -23,6 +23,7 @@ import org.alkaline.taskbrain.data.AlarmRepository
 import org.alkaline.taskbrain.data.Note
 import org.alkaline.taskbrain.service.AlarmScheduleResult
 import org.alkaline.taskbrain.service.AlarmScheduler
+import org.alkaline.taskbrain.service.AlarmStateManager
 import org.alkaline.taskbrain.data.NoteLine
 import org.alkaline.taskbrain.data.NoteLineTracker
 import org.alkaline.taskbrain.data.NoteRepository
@@ -66,6 +67,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     private val repository: NoteRepository = NoteRepository(),
     private val alarmRepository: AlarmRepository = AlarmRepository(),
     private val alarmScheduler: AlarmScheduler = AlarmScheduler(application),
+    private val alarmStateManager: AlarmStateManager = AlarmStateManager(application),
     private val sharedPreferences: SharedPreferences = application.getSharedPreferences("taskbrain_prefs", Context.MODE_PRIVATE),
     private val agent: PrompterAgent = PrompterAgent(),
     private val directiveResultRepository: DirectiveResultRepository = DirectiveResultRepository(),
@@ -1543,8 +1545,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             notifyTime: Timestamp?,
             urgentTime: Timestamp?,
             alarmTime: Timestamp?
-        ): Timestamp? = upcomingTime ?: listOfNotNull(notifyTime, urgentTime, alarmTime)
-            .minByOrNull { it.toDate().time }
+        ): Timestamp? = AlarmStateManager.resolveUpcomingTime(upcomingTime, notifyTime, urgentTime, alarmTime)
     }
 
     /**
@@ -1558,27 +1559,13 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         alarmTime: Timestamp?
     ) {
         viewModelScope.launch {
-            val effectiveUpcomingTime = resolveUpcomingTime(upcomingTime, notifyTime, urgentTime, alarmTime)
-
-            val updatedAlarm = alarm.copy(
-                upcomingTime = effectiveUpcomingTime,
-                notifyTime = notifyTime,
-                urgentTime = urgentTime,
-                alarmTime = alarmTime
-            )
-
-            val result = alarmRepository.updateAlarm(updatedAlarm)
-            result.fold(
-                onSuccess = {
-                    // Cancel old schedule and reschedule
-                    alarmScheduler.cancelAlarm(alarm.id)
-                    val scheduleResult = alarmScheduler.scheduleAlarm(updatedAlarm)
+            alarmStateManager.update(alarm, upcomingTime, notifyTime, urgentTime, alarmTime).fold(
+                onSuccess = { scheduleResult ->
                     if (!scheduleResult.success) {
                         _schedulingWarning.value = scheduleResult.message
                     }
                 },
                 onFailure = { e ->
-                    Log.e("CurrentNoteViewModel", "Error updating alarm: ${alarm.id}", e)
                     _alarmError.value = e
                 }
             )
@@ -1590,9 +1577,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      */
     fun markAlarmDone(alarmId: String) {
         viewModelScope.launch {
-            alarmScheduler.cancelAlarm(alarmId)
-            alarmRepository.markDone(alarmId).onFailure { e ->
-                Log.e("CurrentNoteViewModel", "Error marking alarm done: $alarmId", e)
+            alarmStateManager.markDone(alarmId).onFailure { e ->
                 _alarmError.value = e
             }
         }
@@ -1603,9 +1588,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      */
     fun cancelAlarm(alarmId: String) {
         viewModelScope.launch {
-            alarmScheduler.cancelAlarm(alarmId)
-            alarmRepository.markCancelled(alarmId).onFailure { e ->
-                Log.e("CurrentNoteViewModel", "Error cancelling alarm: $alarmId", e)
+            alarmStateManager.markCancelled(alarmId).onFailure { e ->
                 _alarmError.value = e
             }
         }
@@ -1626,16 +1609,11 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     fun deleteAlarmPermanently(alarmId: String, onComplete: (() -> Unit)? = null) {
         _isAlarmOperationPending.value = true
         viewModelScope.launch {
-            try {
-                alarmScheduler.cancelAlarm(alarmId)
-                alarmRepository.deleteAlarm(alarmId)
-                onComplete?.invoke()
-            } catch (e: Exception) {
-                Log.e("CurrentNoteViewModel", "Error deleting alarm: $alarmId", e)
-                _alarmError.value = e
-            } finally {
-                _isAlarmOperationPending.value = false
-            }
+            alarmStateManager.delete(alarmId).fold(
+                onSuccess = { onComplete?.invoke() },
+                onFailure = { e -> _alarmError.value = e }
+            )
+            _isAlarmOperationPending.value = false
         }
     }
 

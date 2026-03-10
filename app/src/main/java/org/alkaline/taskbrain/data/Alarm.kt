@@ -54,6 +54,14 @@ data class Alarm(
         result.trim()
     }
 
+    /**
+     * The latest configured threshold time across all four thresholds.
+     * An alarm is past due when this time is in the past.
+     */
+    val latestThresholdTime: Timestamp?
+        get() = listOfNotNull(upcomingTime, notifyTime, urgentTime, alarmTime)
+            .maxByOrNull { it.toDate().time }
+
     companion object {
         private const val ALARM_SYMBOL = "⏰"
         private val DISPLAY_PREFIXES = listOf("• ", "☐ ", "☑ ")

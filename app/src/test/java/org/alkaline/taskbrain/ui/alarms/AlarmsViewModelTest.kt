@@ -321,6 +321,74 @@ class AlarmsViewModelTest {
         assertEquals(AlarmStatus.CANCELLED, cancelledResult?.first()?.status)
     }
 
+    // ==================== Past Due Partitioning Tests ====================
+
+    @Test
+    fun `isPastDue returns true when latest threshold is in the past`() {
+        val pastTime = Timestamp(Date(System.currentTimeMillis() - 3600000))
+        val alarm = createTestAlarm(
+            upcomingTime = pastTime,
+            lineContent = "Overdue task"
+        )
+        val now = Timestamp.now()
+
+        assertTrue(AlarmsViewModel.isPastDue(alarm, now))
+    }
+
+    @Test
+    fun `isPastDue returns false when latest threshold is in the future`() {
+        val futureTime = Timestamp(Date(System.currentTimeMillis() + 3600000))
+        val alarm = createTestAlarm(
+            upcomingTime = futureTime,
+            lineContent = "Future task"
+        )
+        val now = Timestamp.now()
+
+        assertFalse(AlarmsViewModel.isPastDue(alarm, now))
+    }
+
+    @Test
+    fun `isPastDue returns false when no thresholds are set`() {
+        val alarm = createTestAlarm(upcomingTime = null)
+        val now = Timestamp.now()
+
+        assertFalse(AlarmsViewModel.isPastDue(alarm, now))
+    }
+
+    @Test
+    fun `isPastDue uses latest threshold not earliest`() {
+        val pastTime = Timestamp(Date(System.currentTimeMillis() - 3600000))
+        val futureTime = Timestamp(Date(System.currentTimeMillis() + 3600000))
+        val alarm = Alarm(
+            id = "test",
+            noteId = "note1",
+            lineContent = "Test",
+            upcomingTime = pastTime,
+            alarmTime = futureTime // latest threshold is still future
+        )
+        val now = Timestamp.now()
+
+        assertFalse(AlarmsViewModel.isPastDue(alarm, now))
+    }
+
+    @Test
+    fun `isPastDue returns true when all thresholds are past`() {
+        val past1 = Timestamp(Date(System.currentTimeMillis() - 7200000))
+        val past2 = Timestamp(Date(System.currentTimeMillis() - 3600000))
+        val past3 = Timestamp(Date(System.currentTimeMillis() - 1800000))
+        val alarm = Alarm(
+            id = "test",
+            noteId = "note1",
+            lineContent = "Test",
+            upcomingTime = past1,
+            urgentTime = past2,
+            alarmTime = past3
+        )
+        val now = Timestamp.now()
+
+        assertTrue(AlarmsViewModel.isPastDue(alarm, now))
+    }
+
     @Test
     fun `loadAlarms reflects alarm marked done externally`() = runTest {
         // First load: alarm is pending

@@ -1,7 +1,6 @@
 package org.alkaline.taskbrain.ui.alarms
 
 import android.app.Application
-import android.app.NotificationManager
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
@@ -10,19 +9,19 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import com.google.firebase.Timestamp
 import org.alkaline.taskbrain.data.Alarm
 import org.alkaline.taskbrain.data.AlarmRepository
 import org.alkaline.taskbrain.data.AlarmUpdateEvent
-import org.alkaline.taskbrain.service.AlarmScheduler
-import org.alkaline.taskbrain.service.AlarmUtils
-import org.alkaline.taskbrain.service.LockScreenWallpaperManager
+import org.alkaline.taskbrain.service.AlarmStateManager
 
 class AlarmsViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = AlarmRepository()
-    private val alarmScheduler = AlarmScheduler(application)
-    private val notificationManager = application.getSystemService(NotificationManager::class.java)
-    private val lockScreenWallpaperManager = LockScreenWallpaperManager(application)
+    private val alarmStateManager = AlarmStateManager(application)
+
+    private val _pastDueAlarms = MutableLiveData<List<Alarm>>(emptyList())
+    val pastDueAlarms: LiveData<List<Alarm>> = _pastDueAlarms
 
     private val _upcomingAlarms = MutableLiveData<List<Alarm>>(emptyList())
     val upcomingAlarms: LiveData<List<Alarm>> = _upcomingAlarms
@@ -66,7 +65,14 @@ class AlarmsViewModel(application: Application) : AndroidViewModel(application) 
             var firstError: Throwable? = null
 
             upcomingResult.fold(
-                onSuccess = { _upcomingAlarms.value = it },
+                onSuccess = { alarms ->
+                    val now = Timestamp.now()
+                    val (pastDue, upcoming) = alarms.partition { alarm ->
+                        isPastDue(alarm, now)
+                    }
+                    _pastDueAlarms.value = pastDue
+                    _upcomingAlarms.value = upcoming
+                },
                 onFailure = {
                     Log.e(TAG, "Error loading upcoming alarms", it)
                     if (firstError == null) firstError = it
@@ -106,48 +112,20 @@ class AlarmsViewModel(application: Application) : AndroidViewModel(application) 
 
     fun markDone(alarmId: String) {
         viewModelScope.launch {
-            repository.markDone(alarmId).fold(
-                onSuccess = {
-                    Log.d(TAG, "Alarm marked done: $alarmId")
-                    // Cancel any scheduled triggers
-                    alarmScheduler.cancelAlarm(alarmId)
-                    // Restore lock screen wallpaper if this alarm set it
-                    lockScreenWallpaperManager.restoreWallpaper(alarmId)
-                    // Dismiss any existing notification
-                    dismissNotification(alarmId)
-                    loadAlarms()
-                },
-                onFailure = {
-                    Log.e(TAG, "Error marking alarm done", it)
-                    _error.value = it
-                }
+            alarmStateManager.markDone(alarmId).fold(
+                onSuccess = { loadAlarms() },
+                onFailure = { _error.value = it }
             )
         }
     }
 
     fun markCancelled(alarmId: String) {
         viewModelScope.launch {
-            repository.markCancelled(alarmId).fold(
-                onSuccess = {
-                    Log.d(TAG, "Alarm marked cancelled: $alarmId")
-                    // Cancel any scheduled triggers
-                    alarmScheduler.cancelAlarm(alarmId)
-                    // Restore lock screen wallpaper if this alarm set it
-                    lockScreenWallpaperManager.restoreWallpaper(alarmId)
-                    // Dismiss any existing notification
-                    dismissNotification(alarmId)
-                    loadAlarms()
-                },
-                onFailure = {
-                    Log.e(TAG, "Error marking alarm cancelled", it)
-                    _error.value = it
-                }
+            alarmStateManager.markCancelled(alarmId).fold(
+                onSuccess = { loadAlarms() },
+                onFailure = { _error.value = it }
             )
         }
-    }
-
-    private fun dismissNotification(alarmId: String) {
-        notificationManager?.cancel(AlarmUtils.getNotificationId(alarmId))
     }
 
     fun updateAlarm(
@@ -158,59 +136,32 @@ class AlarmsViewModel(application: Application) : AndroidViewModel(application) 
         alarmTime: com.google.firebase.Timestamp?
     ) {
         viewModelScope.launch {
-            val effectiveUpcomingTime = upcomingTime ?: listOfNotNull(notifyTime, urgentTime, alarmTime)
-                .minByOrNull { it.toDate().time }
-
-            val updatedAlarm = alarm.copy(
-                upcomingTime = effectiveUpcomingTime,
-                notifyTime = notifyTime,
-                urgentTime = urgentTime,
-                alarmTime = alarmTime
-            )
-
-            repository.updateAlarm(updatedAlarm).fold(
-                onSuccess = {
-                    alarmScheduler.cancelAlarm(alarm.id)
-                    val scheduleResult = alarmScheduler.scheduleAlarm(updatedAlarm)
+            alarmStateManager.update(alarm, upcomingTime, notifyTime, urgentTime, alarmTime).fold(
+                onSuccess = { scheduleResult ->
                     if (!scheduleResult.success) {
                         Log.w(TAG, "Alarm scheduling warning: ${scheduleResult.message}")
                     }
                     loadAlarms()
                 },
-                onFailure = {
-                    Log.e(TAG, "Error updating alarm", it)
-                    _error.value = it
-                }
+                onFailure = { _error.value = it }
             )
         }
     }
 
     fun deleteAlarm(alarmId: String) {
         viewModelScope.launch {
-            alarmScheduler.cancelAlarm(alarmId)
-            lockScreenWallpaperManager.restoreWallpaper(alarmId)
-            dismissNotification(alarmId)
-            repository.deleteAlarm(alarmId).fold(
+            alarmStateManager.delete(alarmId).fold(
                 onSuccess = { loadAlarms() },
-                onFailure = {
-                    Log.e(TAG, "Error deleting alarm", it)
-                    _error.value = it
-                }
+                onFailure = { _error.value = it }
             )
         }
     }
 
     fun reactivateAlarm(alarmId: String) {
         viewModelScope.launch {
-            repository.reactivateAlarm(alarmId).fold(
-                onSuccess = {
-                    Log.d(TAG, "Alarm reactivated: $alarmId")
-                    loadAlarms()
-                },
-                onFailure = {
-                    Log.e(TAG, "Error reactivating alarm", it)
-                    _error.value = it
-                }
+            alarmStateManager.reactivate(alarmId).fold(
+                onSuccess = { loadAlarms() },
+                onFailure = { _error.value = it }
             )
         }
     }
@@ -221,5 +172,13 @@ class AlarmsViewModel(application: Application) : AndroidViewModel(application) 
 
     companion object {
         private const val TAG = "AlarmsViewModel"
+
+        /**
+         * An alarm is past due when its latest configured threshold time is in the past.
+         */
+        internal fun isPastDue(alarm: Alarm, now: Timestamp): Boolean {
+            val latest = alarm.latestThresholdTime ?: return false
+            return latest < now
+        }
     }
 }

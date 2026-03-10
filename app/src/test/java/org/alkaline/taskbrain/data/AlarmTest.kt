@@ -141,4 +141,49 @@ class AlarmTest {
     }
 
     // endregion
+
+    // region latestThresholdTime tests
+
+    @Test
+    fun `latestThresholdTime returns null when no thresholds set`() {
+        val alarm = Alarm(id = "test")
+        assertNull(alarm.latestThresholdTime)
+    }
+
+    @Test
+    fun `latestThresholdTime returns single threshold when only one set`() {
+        val time = Timestamp(Date(5000))
+        val alarm = Alarm(id = "test", notifyTime = time)
+        assertEquals(time, alarm.latestThresholdTime)
+    }
+
+    @Test
+    fun `latestThresholdTime returns latest across all thresholds`() {
+        val t1 = Timestamp(Date(1000))
+        val t2 = Timestamp(Date(2000))
+        val t3 = Timestamp(Date(3000))
+        val t4 = Timestamp(Date(4000))
+        val alarm = Alarm(
+            id = "test",
+            upcomingTime = t1,
+            notifyTime = t2,
+            urgentTime = t4,
+            alarmTime = t3
+        )
+        assertEquals(t4, alarm.latestThresholdTime)
+    }
+
+    @Test
+    fun `latestThresholdTime skips null thresholds`() {
+        val t1 = Timestamp(Date(1000))
+        val t3 = Timestamp(Date(3000))
+        val alarm = Alarm(
+            id = "test",
+            upcomingTime = t1,
+            alarmTime = t3
+        )
+        assertEquals(t3, alarm.latestThresholdTime)
+    }
+
+    // endregion
 }

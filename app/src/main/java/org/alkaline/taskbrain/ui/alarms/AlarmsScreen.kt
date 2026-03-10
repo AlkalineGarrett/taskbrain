@@ -56,6 +56,7 @@ fun AlarmsScreen(
     alarmsViewModel: AlarmsViewModel = viewModel()
 ) {
     val context = LocalContext.current
+    val pastDueAlarms by alarmsViewModel.pastDueAlarms.observeAsState(emptyList())
     val upcomingAlarms by alarmsViewModel.upcomingAlarms.observeAsState(emptyList())
     val laterAlarms by alarmsViewModel.laterAlarms.observeAsState(emptyList())
     val completedAlarms by alarmsViewModel.completedAlarms.observeAsState(emptyList())
@@ -122,8 +123,8 @@ fun AlarmsScreen(
         if (isLoading) {
             CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
         } else {
-            val hasNoAlarms = upcomingAlarms.isEmpty() && laterAlarms.isEmpty() &&
-                    completedAlarms.isEmpty() && cancelledAlarms.isEmpty()
+            val hasNoAlarms = pastDueAlarms.isEmpty() && upcomingAlarms.isEmpty() &&
+                    laterAlarms.isEmpty() && completedAlarms.isEmpty() && cancelledAlarms.isEmpty()
 
             if (hasNoAlarms) {
                 Text(
@@ -137,6 +138,25 @@ fun AlarmsScreen(
                     contentPadding = PaddingValues(16.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
+                    // Past Due section
+                    if (pastDueAlarms.isNotEmpty()) {
+                        item {
+                            SectionHeader(
+                                title = "Past Due",
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        items(pastDueAlarms) { alarm ->
+                            AlarmItem(
+                                alarm = alarm,
+                                onTap = { selectedAlarm = alarm },
+                                onMarkDone = { alarmsViewModel.markDone(alarm.id) },
+                                onCancel = { alarmsViewModel.markCancelled(alarm.id) }
+                            )
+                        }
+                        item { Spacer(modifier = Modifier.height(16.dp)) }
+                    }
+
                     // Upcoming section
                     if (upcomingAlarms.isNotEmpty()) {
                         item {
@@ -257,12 +277,15 @@ private fun PermissionWarningBanner(permissionStatus: PermissionHelper.AlarmPerm
 }
 
 @Composable
-private fun SectionHeader(title: String) {
+private fun SectionHeader(
+    title: String,
+    color: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.primary
+) {
     Text(
         text = title,
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.primary,
+        color = color,
         modifier = Modifier.padding(vertical = 8.dp)
     )
 }
