@@ -18,6 +18,7 @@ import kotlinx.coroutines.withContext
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
 import org.alkaline.taskbrain.data.Alarm
 import org.alkaline.taskbrain.data.AlarmRepository
 import org.alkaline.taskbrain.data.AlarmStatus
@@ -216,6 +217,10 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         }
     }
 
+    // Firestore snapshot listener for real-time external change detection
+    private var snapshotListener: ListenerRegistration? = null
+    private var suppressSnapshotUpdate = false
+
     // Current Note ID being edited
     private var currentNoteId = "root_note"
     private val LAST_VIEWED_NOTE_KEY = "last_viewed_note_id"
@@ -238,6 +243,57 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      */
     fun getTrackedLines(): List<NoteLine> = lineTracker.getTrackedLines()
 
+    /**
+     * Starts a Firestore snapshot listener on the current note's parent document.
+     * When an external change is detected (not from our own save), reloads the full note.
+     */
+    private fun startSnapshotListener(noteId: String, recentTabsViewModel: RecentTabsViewModel?) {
+        snapshotListener?.remove()
+        // Suppress the initial snapshot that fires immediately on registration
+        suppressSnapshotUpdate = true
+        val db = FirebaseFirestore.getInstance()
+        snapshotListener = db.collection("notes").document(noteId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.e(TAG, "Snapshot listener error for $noteId", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                if (noteId != currentNoteId) return@addSnapshotListener
+
+                // Skip the initial snapshot and our own saves
+                if (suppressSnapshotUpdate) {
+                    suppressSnapshotUpdate = false
+                    return@addSnapshotListener
+                }
+
+                // Skip local pending writes (optimistic updates from our own writes)
+                if (snapshot.metadata.hasPendingWrites()) return@addSnapshotListener
+
+                Log.d(TAG, "Snapshot listener detected external change for $noteId")
+                // Reload the full note (parent + children) from Firestore
+                viewModelScope.launch {
+                    val result = repository.loadNoteWithChildren(noteId)
+                    result.fold(
+                        onSuccess = { freshLines ->
+                            if (noteId != currentNoteId) return@fold
+                            lineTracker.setTrackedLines(freshLines)
+                            val freshContent = freshLines.joinToString("\n") { it.content }
+                            _loadStatus.value = LoadStatus.Success(freshContent)
+                            recentTabsViewModel?.cacheNoteContent(
+                                noteId, freshLines, _isNoteDeleted.value ?: false
+                            )
+                            loadDirectiveResults(freshContent)
+                            loadAlarmStates()
+                        },
+                        onFailure = { e ->
+                            Log.e(TAG, "Snapshot-triggered reload failed for $noteId", e)
+                        }
+                    )
+                }
+            }
+    }
+
     fun loadContent(noteId: String? = null, recentTabsViewModel: RecentTabsViewModel? = null) {
         // If noteId is provided, use it. Otherwise, load from preferences. If neither, default to "root_note"
         currentNoteId = noteId ?: sharedPreferences.getString(LAST_VIEWED_NOTE_KEY, "root_note") ?: "root_note"
@@ -246,6 +302,9 @@ class CurrentNoteViewModel @JvmOverloads constructor(
 
         // Save the current note as the last viewed note
         sharedPreferences.edit().putString(LAST_VIEWED_NOTE_KEY, currentNoteId).apply()
+
+        // Start real-time listener for external changes on this note
+        startSnapshotListener(currentNoteId, recentTabsViewModel)
 
         // Note: Don't clear cachedNotes here - it persists until a save happens
         // This allows view directives to use cached content when switching tabs
@@ -269,6 +328,32 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 loadDirectiveResults(fullContent)
             }
             loadAlarmStates()
+
+            // Background refresh: fetch from Firebase to pick up external changes (e.g. web edits)
+            val cachedNoteId = currentNoteId
+            viewModelScope.launch {
+                val result = repository.loadNoteWithChildren(cachedNoteId)
+                result.fold(
+                    onSuccess = { freshLines ->
+                        val freshContent = freshLines.joinToString("\n") { it.content }
+                        if (freshContent != fullContent && cachedNoteId == currentNoteId) {
+                            Log.d(TAG, "loadContent: background refresh found changes for $cachedNoteId")
+                            lineTracker.setTrackedLines(freshLines)
+                            _loadStatus.value = LoadStatus.Success(freshContent)
+                            recentTabsViewModel?.cacheNoteContent(
+                                cachedNoteId,
+                                freshLines,
+                                _isNoteDeleted.value ?: false
+                            )
+                            loadDirectiveResults(freshContent)
+                            loadAlarmStates()
+                        }
+                    },
+                    onFailure = { e ->
+                        Log.e(TAG, "Background refresh failed for $cachedNoteId", e)
+                    }
+                )
+            }
             return
         }
         Log.d(TAG, "loadContent: cache miss for $currentNoteId, fetching from Firebase")
@@ -324,6 +409,9 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     fun saveContent(content: String) {
         // Update tracked lines before saving to ensure we have the latest state mapping
         updateTrackedLines(content)
+
+        // Suppress the next snapshot update since it will be from our own save
+        suppressSnapshotUpdate = true
 
         _saveStatus.value = SaveStatus.Saving
 
@@ -1759,6 +1847,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
 
     override fun onCleared() {
         super.onCleared()
+        snapshotListener?.remove()
         refreshScheduler.stop()
     }
 

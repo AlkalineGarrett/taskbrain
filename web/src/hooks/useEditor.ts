@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { doc, onSnapshot } from 'firebase/firestore'
 import { EditorState } from '@/editor/EditorState'
 import { EditorController } from '@/editor/EditorController'
 import { UndoManager, type UndoManagerState } from '@/editor/UndoManager'
@@ -152,12 +153,55 @@ export function useEditor(noteId: string | undefined) {
     return () => { cancelled = true }
   }, [noteId, editorState, controller, undoManager])
 
+  // Real-time listener for external changes (e.g. from Android app)
+  const suppressSnapshotRef = useRef(false)
+  useEffect(() => {
+    if (!noteId) return
+    // Suppress the initial snapshot fired on registration
+    suppressSnapshotRef.current = true
+
+    const noteDocRef = doc(db, 'notes', noteId)
+    const unsubscribe = onSnapshot(noteDocRef, (snapshot) => {
+      if (!snapshot.exists()) return
+      if (suppressSnapshotRef.current) {
+        suppressSnapshotRef.current = false
+        return
+      }
+      // Skip local pending writes (our own saves)
+      if (snapshot.metadata.hasPendingWrites) return
+
+      // Reload the full note (parent + children) to pick up external changes
+      void (async () => {
+        try {
+          const freshLines = await repo.loadNoteWithChildren(noteId)
+          const freshContent = freshLines.map((l) => l.content).join('\n')
+          const currentContent = editorState.lines.map((l) => l.text).join('\n')
+          if (freshContent === currentContent) return
+
+          console.log('Snapshot listener detected external change for', noteId)
+          editorState.lines = freshLines.map((l) => new LineState(l.content))
+          editorState.focusedLineIndex = 0
+          editorState.clearSelection()
+          editorState.requestFocusUpdate()
+          trackedLinesRef.current = freshLines
+          setDirty(false)
+          setRenderVersion((v) => v + 1)
+        } catch (e) {
+          console.error('Snapshot-triggered reload failed:', e)
+        }
+      })()
+    })
+
+    return unsubscribe
+  }, [noteId, editorState])
+
   // Save
   const save = useCallback(async () => {
     if (!noteId || !dirty) return
 
     try {
       setSaving(true)
+      suppressSnapshotRef.current = true
       controller.commitUndoState(true)
 
       // Build tracked lines from current editor state + tracked IDs
