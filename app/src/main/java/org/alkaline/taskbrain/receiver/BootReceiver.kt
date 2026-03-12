@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.alkaline.taskbrain.data.AlarmRepository
 import org.alkaline.taskbrain.service.AlarmScheduler
+import org.alkaline.taskbrain.service.RecurrenceScheduler
 
 /**
  * Reschedules all pending alarms after device boot.
@@ -42,6 +43,14 @@ class BootReceiver : BroadcastReceiver() {
                         Log.e(TAG, "Error fetching pending alarms", e)
                     }
                 )
+
+                // Bootstrap recurring alarms (create missing instances)
+                try {
+                    RecurrenceScheduler(context).bootstrapRecurringAlarms()
+                    Log.d(TAG, "Bootstrapped recurring alarms")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error bootstrapping recurring alarms", e)
+                }
             } catch (e: Exception) {
                 // User may not be signed in yet after boot
                 Log.w(TAG, "Could not reschedule alarms (user may not be signed in)", e)

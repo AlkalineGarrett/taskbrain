@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -30,14 +32,16 @@ import org.alkaline.taskbrain.data.Alarm
 import org.alkaline.taskbrain.ui.components.DateTimePickerRow
 
 /**
- * Dialog for configuring an alarm's time thresholds.
+ * Dialog for configuring an alarm's time thresholds and optional recurrence.
  * Shows the line content at the top and four date/time pickers.
  */
 @Composable
 fun AlarmConfigDialog(
     lineContent: String,
     existingAlarm: Alarm?,
+    existingRecurrenceConfig: RecurrenceConfig? = null,
     onSave: (upcomingTime: Timestamp?, notifyTime: Timestamp?, urgentTime: Timestamp?, alarmTime: Timestamp?) -> Unit,
+    onSaveRecurring: ((upcomingTime: Timestamp?, notifyTime: Timestamp?, urgentTime: Timestamp?, alarmTime: Timestamp?, recurrenceConfig: RecurrenceConfig) -> Unit)? = null,
     onMarkDone: (() -> Unit)? = null,
     onCancel: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
@@ -47,6 +51,12 @@ fun AlarmConfigDialog(
     var notifyTime by remember { mutableStateOf(existingAlarm?.notifyTime) }
     var urgentTime by remember { mutableStateOf(existingAlarm?.urgentTime) }
     var alarmTime by remember { mutableStateOf(existingAlarm?.alarmTime) }
+    var recurrenceConfig by remember(existingRecurrenceConfig) {
+        mutableStateOf(existingRecurrenceConfig ?: RecurrenceConfig())
+    }
+
+    val hasAnyThreshold = upcomingTime != null || notifyTime != null || urgentTime != null || alarmTime != null
+    val isNewAlarm = existingAlarm == null
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -56,6 +66,7 @@ fun AlarmConfigDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .padding(vertical = 16.dp)
             ) {
                 // Line content preview
@@ -95,6 +106,18 @@ fun AlarmConfigDialog(
                     value = alarmTime,
                     onValueChange = { alarmTime = it }
                 )
+
+                // Recurrence config (for new alarms or existing recurring alarms)
+                if (onSaveRecurring != null && (isNewAlarm || existingRecurrenceConfig != null)) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    HorizontalDivider()
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    RecurrenceConfigSection(
+                        config = recurrenceConfig,
+                        onConfigChange = { recurrenceConfig = it }
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(8.dp))
                 HorizontalDivider()
@@ -163,10 +186,14 @@ fun AlarmConfigDialog(
 
                         Button(
                             onClick = {
-                                onSave(upcomingTime, notifyTime, urgentTime, alarmTime)
+                                if (recurrenceConfig.enabled && onSaveRecurring != null) {
+                                    onSaveRecurring(upcomingTime, notifyTime, urgentTime, alarmTime, recurrenceConfig)
+                                } else {
+                                    onSave(upcomingTime, notifyTime, urgentTime, alarmTime)
+                                }
                                 onDismiss()
                             },
-                            enabled = upcomingTime != null || notifyTime != null || urgentTime != null || alarmTime != null
+                            enabled = hasAnyThreshold
                         ) {
                             Text(if (existingAlarm != null) "Update" else "Save")
                         }

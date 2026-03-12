@@ -21,9 +21,13 @@ import com.google.firebase.firestore.FirebaseFirestore
 import org.alkaline.taskbrain.data.Alarm
 import org.alkaline.taskbrain.data.AlarmRepository
 import org.alkaline.taskbrain.data.Note
+import org.alkaline.taskbrain.data.RecurringAlarmRepository
 import org.alkaline.taskbrain.service.AlarmScheduleResult
 import org.alkaline.taskbrain.service.AlarmScheduler
 import org.alkaline.taskbrain.service.AlarmStateManager
+import org.alkaline.taskbrain.service.RecurrenceConfigMapper
+import org.alkaline.taskbrain.service.RecurrenceScheduler
+import org.alkaline.taskbrain.ui.currentnote.components.RecurrenceConfig
 import org.alkaline.taskbrain.data.NoteLine
 import org.alkaline.taskbrain.data.NoteLineTracker
 import org.alkaline.taskbrain.data.NoteRepository
@@ -414,6 +418,10 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     private val _lineAlarms = MutableLiveData<List<Alarm>>()
     val lineAlarms: LiveData<List<Alarm>> = _lineAlarms
 
+    // Recurrence config for the currently selected alarm (if recurring)
+    private val _recurrenceConfig = MutableLiveData<RecurrenceConfig?>()
+    val recurrenceConfig: LiveData<RecurrenceConfig?> = _recurrenceConfig
+
     fun fetchAlarmsForLine(lineIndex: Int, onComplete: (() -> Unit)? = null) {
         val noteId = getNoteIdForLine(lineIndex)
         viewModelScope.launch {
@@ -428,6 +436,22 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 }
             )
             onComplete?.invoke()
+        }
+    }
+
+    /**
+     * Fetches the recurrence config for an alarm, if it's recurring.
+     * Call this when opening the alarm dialog for an existing alarm.
+     */
+    fun fetchRecurrenceConfig(alarm: Alarm?) {
+        if (alarm?.recurringAlarmId == null) {
+            _recurrenceConfig.value = null
+            return
+        }
+        viewModelScope.launch {
+            val recurringRepo = RecurringAlarmRepository()
+            val recurring = recurringRepo.get(alarm.recurringAlarmId).getOrNull()
+            _recurrenceConfig.value = recurring?.let { RecurrenceConfigMapper.toRecurrenceConfig(it) }
         }
     }
 
@@ -519,6 +543,135 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 }
             )
         }
+    }
+
+    /**
+     * Saves content, then creates a recurring alarm template and its first instance.
+     */
+    fun saveAndCreateRecurringAlarm(
+        content: String,
+        lineContent: String,
+        lineIndex: Int? = null,
+        upcomingTime: Timestamp?,
+        notifyTime: Timestamp?,
+        urgentTime: Timestamp?,
+        alarmTime: Timestamp?,
+        recurrenceConfig: RecurrenceConfig
+    ) {
+        viewModelScope.launch {
+            // Save content first to ensure line tracker has correct note IDs
+            updateTrackedLines(content)
+            val trackedLines = lineTracker.getTrackedLines()
+            val saveResult = repository.saveNoteWithChildren(currentNoteId, trackedLines)
+
+            saveResult.fold(
+                onSuccess = { newIdsMap ->
+                    for ((index, newId) in newIdsMap) {
+                        lineTracker.updateLineNoteId(index, newId)
+                    }
+                    syncAlarmLineContent(trackedLines)
+                    _saveStatus.value = SaveStatus.Success
+                    _saveCompleted.tryEmit(Unit)
+                    markAsSaved()
+
+                    createRecurringAlarmInternal(
+                        lineContent, lineIndex, upcomingTime, notifyTime,
+                        urgentTime, alarmTime, recurrenceConfig
+                    )
+                },
+                onFailure = { e ->
+                    _saveStatus.value = SaveStatus.Error(e)
+                }
+            )
+        }
+    }
+
+    private suspend fun createRecurringAlarmInternal(
+        lineContent: String,
+        lineIndex: Int?,
+        upcomingTime: Timestamp?,
+        notifyTime: Timestamp?,
+        urgentTime: Timestamp?,
+        alarmTime: Timestamp?,
+        recurrenceConfig: RecurrenceConfig
+    ) {
+        val noteId = if (lineIndex != null) getNoteIdForLine(lineIndex) else currentNoteId
+        val context = getApplication<Application>()
+
+        // Create the recurring alarm template
+        val recurringAlarm = RecurrenceConfigMapper.toRecurringAlarm(
+            noteId = noteId,
+            lineContent = lineContent,
+            upcomingTime = upcomingTime,
+            notifyTime = notifyTime,
+            urgentTime = urgentTime,
+            alarmTime = alarmTime,
+            config = recurrenceConfig
+        )
+
+        val recurringRepo = RecurringAlarmRepository()
+        val createResult = recurringRepo.create(recurringAlarm)
+        val recurringId = createResult.getOrNull()
+        if (recurringId == null) {
+            val cause = createResult.exceptionOrNull()
+            Log.e(TAG, "Failed to create recurring alarm", cause)
+            _alarmError.value = cause ?: Exception("Failed to create recurring alarm")
+            return
+        }
+
+        // Compute the first instance time (use the threshold times from the dialog directly)
+        val effectiveUpcomingTime = resolveUpcomingTime(upcomingTime, notifyTime, urgentTime, alarmTime)
+        val firstAlarm = Alarm(
+            noteId = noteId,
+            lineContent = lineContent,
+            upcomingTime = effectiveUpcomingTime,
+            notifyTime = notifyTime,
+            urgentTime = urgentTime,
+            alarmTime = alarmTime,
+            recurringAlarmId = recurringId
+        )
+
+        val alarmResult = alarmRepository.createAlarm(firstAlarm)
+        alarmResult.fold(
+            onSuccess = { alarmId ->
+                // Update recurring alarm with current instance ID
+                recurringRepo.updateCurrentAlarmId(recurringId, alarmId)
+
+                // Check permissions
+                if (!alarmScheduler.canScheduleExactAlarms()) {
+                    _alarmPermissionWarning.value = true
+                }
+                if (!PermissionHelper.hasNotificationPermission(context)) {
+                    _notificationPermissionWarning.value = true
+                }
+
+                // Schedule the first instance
+                val createdAlarm = firstAlarm.copy(id = alarmId)
+                val scheduleResult = alarmScheduler.scheduleAlarm(createdAlarm)
+                if (!scheduleResult.success) {
+                    _schedulingWarning.value = scheduleResult.message
+                }
+
+                // Create alarm snapshot for undo/redo
+                val alarmSnapshot = AlarmSnapshot(
+                    id = alarmId,
+                    noteId = firstAlarm.noteId,
+                    lineContent = firstAlarm.lineContent,
+                    upcomingTime = firstAlarm.upcomingTime,
+                    notifyTime = firstAlarm.notifyTime,
+                    urgentTime = firstAlarm.urgentTime,
+                    alarmTime = firstAlarm.alarmTime
+                )
+
+                _alarmCreated.value = AlarmCreatedEvent(alarmId, lineContent, alarmSnapshot)
+                loadAlarmStates()
+            },
+            onFailure = { e ->
+                // Clean up the recurring alarm if first instance creation failed
+                recurringRepo.delete(recurringId)
+                _alarmError.value = e
+            }
+        )
     }
 
     /**
@@ -1618,6 +1771,72 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 onFailure = { e ->
                     _alarmError.value = e
                 }
+            )
+        }
+    }
+
+    /**
+     * Updates an existing recurring alarm's thresholds and recurrence config.
+     * Updates both the template and the current instance.
+     */
+    fun updateRecurringAlarm(
+        alarm: Alarm,
+        upcomingTime: Timestamp?,
+        notifyTime: Timestamp?,
+        urgentTime: Timestamp?,
+        alarmTime: Timestamp?,
+        recurrenceConfig: RecurrenceConfig
+    ) {
+        viewModelScope.launch {
+            val recurringAlarmId = alarm.recurringAlarmId
+            if (recurringAlarmId == null) {
+                // Not actually recurring — fall back to normal update
+                updateAlarm(alarm, upcomingTime, notifyTime, urgentTime, alarmTime)
+                return@launch
+            }
+
+            val recurringRepo = RecurringAlarmRepository()
+            val existing = recurringRepo.get(recurringAlarmId).getOrNull()
+            if (existing == null) {
+                Log.e(TAG, "Recurring alarm template not found: $recurringAlarmId")
+                _alarmError.value = Exception("Recurring alarm template not found")
+                return@launch
+            }
+
+            // Update the template with new recurrence config
+            val updatedTemplate = RecurrenceConfigMapper.toRecurringAlarm(
+                noteId = alarm.noteId,
+                lineContent = alarm.lineContent,
+                upcomingTime = upcomingTime,
+                notifyTime = notifyTime,
+                urgentTime = urgentTime,
+                alarmTime = alarmTime,
+                config = recurrenceConfig
+            ).copy(
+                id = existing.id,
+                userId = existing.userId,
+                completionCount = existing.completionCount,
+                lastCompletionDate = existing.lastCompletionDate,
+                currentAlarmId = existing.currentAlarmId,
+                status = if (recurrenceConfig.enabled) existing.status
+                         else org.alkaline.taskbrain.data.RecurringAlarmStatus.ENDED,
+                createdAt = existing.createdAt
+            )
+
+            recurringRepo.update(updatedTemplate).fold(
+                onSuccess = {
+                    // Also update the current alarm instance
+                    alarmStateManager.update(alarm, upcomingTime, notifyTime, urgentTime, alarmTime).fold(
+                        onSuccess = { scheduleResult ->
+                            if (!scheduleResult.success) {
+                                _schedulingWarning.value = scheduleResult.message
+                            }
+                            loadAlarmStates()
+                        },
+                        onFailure = { e -> _alarmError.value = e }
+                    )
+                },
+                onFailure = { e -> _alarmError.value = e }
             )
         }
     }

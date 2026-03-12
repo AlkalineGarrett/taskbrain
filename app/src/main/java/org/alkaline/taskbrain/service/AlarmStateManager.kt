@@ -20,14 +20,16 @@ class AlarmStateManager(
     private val repository: AlarmRepository = AlarmRepository(),
     private val scheduler: AlarmScheduler,
     private val urgentStateManager: UrgentStateManager,
-    private val notificationManager: NotificationManager?
+    private val notificationManager: NotificationManager?,
+    private val recurrenceScheduler: RecurrenceScheduler? = null
 ) {
 
     constructor(context: Context) : this(
         repository = AlarmRepository(),
         scheduler = AlarmScheduler(context),
         urgentStateManager = UrgentStateManager(context),
-        notificationManager = context.getSystemService(NotificationManager::class.java)
+        notificationManager = context.getSystemService(NotificationManager::class.java),
+        recurrenceScheduler = RecurrenceScheduler(context)
     )
 
     /**
@@ -44,6 +46,7 @@ class AlarmStateManager(
     suspend fun markDone(alarmId: String): Result<Unit> {
         deactivate(alarmId)
         return repository.markDone(alarmId).also { result ->
+            result.onSuccess { scheduleNextRecurrence(alarmId, completed = true) }
             result.onFailure { Log.e(TAG, "Error marking alarm done: $alarmId", it) }
         }
     }
@@ -51,7 +54,27 @@ class AlarmStateManager(
     suspend fun markCancelled(alarmId: String): Result<Unit> {
         deactivate(alarmId)
         return repository.markCancelled(alarmId).also { result ->
+            result.onSuccess { scheduleNextRecurrence(alarmId, completed = false) }
             result.onFailure { Log.e(TAG, "Error marking alarm cancelled: $alarmId", it) }
+        }
+    }
+
+    /**
+     * If this alarm belongs to a recurring alarm, triggers creation of the next instance.
+     */
+    private suspend fun scheduleNextRecurrence(alarmId: String, completed: Boolean) {
+        val scheduler = recurrenceScheduler ?: return
+        val alarm = repository.getAlarm(alarmId).getOrNull() ?: return
+        if (alarm.recurringAlarmId == null) return
+
+        try {
+            if (completed) {
+                scheduler.onInstanceCompleted(alarm)
+            } else {
+                scheduler.onInstanceCancelled(alarm)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error scheduling next recurrence for $alarmId", e)
         }
     }
 

@@ -422,7 +422,8 @@ class AlarmRepository(
         "urgentTime" to alarm.urgentTime,
         "alarmTime" to alarm.alarmTime,
         "status" to alarm.status.name,
-        "snoozedUntil" to alarm.snoozedUntil
+        "snoozedUntil" to alarm.snoozedUntil,
+        "recurringAlarmId" to alarm.recurringAlarmId
     )
 
     private fun mapToAlarm(id: String, data: Map<String, Any?>): Alarm = Alarm(
@@ -441,7 +442,8 @@ class AlarmRepository(
         } catch (e: IllegalArgumentException) {
             AlarmStatus.PENDING
         },
-        snoozedUntil = data["snoozedUntil"] as? Timestamp
+        snoozedUntil = data["snoozedUntil"] as? Timestamp,
+        recurringAlarmId = data["recurringAlarmId"] as? String
     )
 
     companion object {

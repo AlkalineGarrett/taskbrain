@@ -14,6 +14,7 @@ import org.alkaline.taskbrain.data.AlarmType
 import org.alkaline.taskbrain.service.AlarmScheduler
 import org.alkaline.taskbrain.service.AlarmUtils
 import org.alkaline.taskbrain.service.NotificationHelper
+import org.alkaline.taskbrain.service.RecurrenceScheduler
 import org.alkaline.taskbrain.service.UrgentStateManager
 import org.alkaline.taskbrain.ui.alarm.AlarmErrorActivity
 
@@ -78,6 +79,16 @@ class AlarmReceiver : BroadcastReceiver() {
                         }
 
                         Log.d(TAG, "About to show alarm: type=$alarmType, content=${alarm.lineContent}")
+
+                        // For FIXED recurring alarms, schedule the next instance
+                        // when the alarm fires (regardless of user action)
+                        if (alarm.recurringAlarmId != null) {
+                            try {
+                                RecurrenceScheduler(context).onFixedInstanceTriggered(alarm)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error scheduling next recurrence", e)
+                            }
+                        }
 
                         withContext(Dispatchers.Main) {
                             showAlarmTrigger(context, alarm, alarmType)

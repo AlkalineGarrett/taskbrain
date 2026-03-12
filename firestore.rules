@@ -49,6 +49,12 @@ service cloud.firestore {
       allow read, write: if isAuthenticated() && userOwnsPath(userId);
     }
 
+    // ==================== Recurring Alarms Collection ====================
+
+    match /users/{userId}/recurringAlarms/{recurringAlarmId} {
+      allow read, write: if isAuthenticated() && userOwnsPath(userId);
+    }
+
     // ==================== Open Tabs Collection ====================
 
     match /users/{userId}/openTabs/{tabId} {

@@ -212,6 +212,7 @@ fun CurrentNoteScreen(
     val alarmDialogExistingAlarm = lineAlarms
         .sortedBy { it.createdAt?.toDate()?.time ?: 0L }
         .getOrNull(alarmDialogSymbolIndex)
+    val alarmDialogRecurrenceConfig by currentNoteViewModel.recurrenceConfig.observeAsState()
 
     // Auto-save when navigating away or app goes to background
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -563,9 +564,15 @@ fun CurrentNoteScreen(
 
     // Alarm configuration dialog
     if (showAlarmDialog) {
+        // Fetch recurrence config when dialog opens for an existing alarm
+        LaunchedEffect(alarmDialogExistingAlarm?.id) {
+            currentNoteViewModel.fetchRecurrenceConfig(alarmDialogExistingAlarm)
+        }
+
         AlarmConfigDialog(
             lineContent = alarmDialogLineContent,
             existingAlarm = alarmDialogExistingAlarm,
+            existingRecurrenceConfig = alarmDialogRecurrenceConfig,
             onSave = { upcomingTime, notifyTime, urgentTime, alarmTime ->
                 val existing = alarmDialogExistingAlarm
                 if (existing != null) {
@@ -590,6 +597,32 @@ fun CurrentNoteScreen(
                     )
                 }
             },
+            onSaveRecurring = { upcomingTime, notifyTime, urgentTime, alarmTime, recurrenceConfig ->
+                val existing = alarmDialogExistingAlarm
+                if (existing != null) {
+                    // Update existing recurring alarm
+                    currentNoteViewModel.updateRecurringAlarm(
+                        alarm = existing,
+                        upcomingTime = upcomingTime,
+                        notifyTime = notifyTime,
+                        urgentTime = urgentTime,
+                        alarmTime = alarmTime,
+                        recurrenceConfig = recurrenceConfig
+                    )
+                } else {
+                    // Create new recurring alarm
+                    currentNoteViewModel.saveAndCreateRecurringAlarm(
+                        content = userContent,
+                        lineContent = alarmDialogLineContent,
+                        lineIndex = alarmDialogLineIndex,
+                        upcomingTime = upcomingTime,
+                        notifyTime = notifyTime,
+                        urgentTime = urgentTime,
+                        alarmTime = alarmTime,
+                        recurrenceConfig = recurrenceConfig
+                    )
+                }
+            },
             onMarkDone = alarmDialogExistingAlarm?.let { alarm ->
                 { currentNoteViewModel.markAlarmDone(alarm.id) }
             },
@@ -602,6 +635,7 @@ fun CurrentNoteScreen(
             onDismiss = {
                 showAlarmDialog = false
                 alarmDialogLineIndex = null
+                currentNoteViewModel.fetchRecurrenceConfig(null) // clear
             }
         )
     }
@@ -980,6 +1014,7 @@ fun CurrentNoteScreen(
                     val lineContent = editorState.currentLine?.text ?: ""
                     alarmDialogLineContent = TextLineUtils.trimLineForAlarm(lineContent)
                     alarmDialogLineIndex = editorState.focusedLineIndex
+                    alarmDialogSymbolIndex = -1 // No existing symbol — forces new alarm dialog
                     showAlarmDialog = true
                 }
             },

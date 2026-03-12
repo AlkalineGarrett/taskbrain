@@ -21,7 +21,10 @@ data class Alarm(
     val alarmTime: Timestamp? = null,          // Audible alarm with snooze
 
     val status: AlarmStatus = AlarmStatus.PENDING,
-    val snoozedUntil: Timestamp? = null        // If snoozed, when to fire again
+    val snoozedUntil: Timestamp? = null,       // If snoozed, when to fire again
+
+    /** If this alarm was spawned by a recurring alarm template, its ID. */
+    val recurringAlarmId: String? = null
 ) {
     /**
      * Display-friendly name with bullets, checkboxes, tabs, and alarm symbols removed.
