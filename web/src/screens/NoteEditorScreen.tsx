@@ -205,33 +205,6 @@ export function NoteEditorScreen() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [saveWithDirectives])
 
-  // Keep a ref to the save function so cleanup effects can use it
-  const saveRef = useRef(save)
-  saveRef.current = save
-  const dirtyRef = useRef(dirty)
-  dirtyRef.current = dirty
-
-  // Auto-save on beforeunload (tab close/refresh)
-  useEffect(() => {
-    const handler = (e: BeforeUnloadEvent) => {
-      if (dirtyRef.current) {
-        // Trigger save — use sendBeacon pattern for reliability
-        void saveRef.current()
-        e.preventDefault()
-      }
-    }
-    window.addEventListener('beforeunload', handler)
-    return () => window.removeEventListener('beforeunload', handler)
-  }, [])
-
-  // Auto-save on unmount (navigation away)
-  useEffect(() => {
-    return () => {
-      if (dirtyRef.current) {
-        void saveRef.current()
-      }
-    }
-  }, [noteId])
 
   // --- Drag selection across lines ---
   const editorRef = useRef<HTMLDivElement>(null)

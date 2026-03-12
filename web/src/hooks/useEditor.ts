@@ -129,6 +129,7 @@ export function useEditor(noteId: string | undefined) {
     if (cached) {
       populateEditor(cached.lines, true, cached.dirty, cached.editorTexts)
       contentCache.delete(noteId)
+      setShowLoading(false)
       void repo.updateLastAccessed(noteId)
       return () => { cancelled = true }
     }
@@ -149,6 +150,7 @@ export function useEditor(noteId: string | undefined) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : ERROR_LOAD)
           setLoading(false)
+          setShowLoading(false)
         }
       }
     }
