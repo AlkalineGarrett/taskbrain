@@ -9,7 +9,8 @@ import { useDirectives } from '@/hooks/useDirectives'
 import { CommandBar } from '@/components/CommandBar'
 import { EditorLine } from '@/components/EditorLine'
 import { InlineEditor } from '@/components/InlineEditor'
-import { RecentTabsBar, addOrUpdateTab } from '@/components/RecentTabsBar'
+import { RecentTabsBar, addOrUpdateTab, updateTabDisplayText } from '@/components/RecentTabsBar'
+import { extractDisplayText } from '@/data/TabState'
 import { db, auth } from '@/firebase/config'
 import { LineState } from '@/editor/LineState'
 import { findDirectives } from '@/dsl/directives/DirectiveFinder'
@@ -20,7 +21,7 @@ const noteRepo = new NoteRepository(db, auth)
 export function NoteEditorScreen() {
   const { noteId } = useParams<{ noteId: string }>()
   const navigate = useNavigate()
-  const { controller, editorState, loading, saving, error, dirty, save } = useEditor(noteId)
+  const { controller, editorState, loading, showLoading, saving, error, dirty, save } = useEditor(noteId)
 
   // Load all notes for DSL context
   const [allNotes, setAllNotes] = useState<Note[]>([])
@@ -141,11 +142,22 @@ export function NoteEditorScreen() {
     void loadAndExecute(content)
   }, [loading, noteId, allNotes.length])
 
-  // Update recent tab when note loads
+  // Add/move tab to front when note first opens
+  useEffect(() => {
+    if (!noteId || loading) return
+    const displayText = extractDisplayText(editorState.lines[0]?.text ?? '')
+    void addOrUpdateTab(noteId, displayText)
+  }, [noteId, loading])
+
+  // Update tab display text when title changes (without reordering)
+  const prevFirstLineRef = useRef<string>('')
   useEffect(() => {
     if (!noteId || loading) return
     const firstLine = editorState.lines[0]?.text ?? ''
-    void addOrUpdateTab(noteId, firstLine || '(empty)')
+    if (firstLine === prevFirstLineRef.current) return
+    prevFirstLineRef.current = firstLine
+    const displayText = extractDisplayText(firstLine)
+    void updateTabDisplayText(noteId, displayText)
   }, [noteId, loading, editorState.lines])
 
   // Save with directive execution
@@ -227,7 +239,7 @@ export function NoteEditorScreen() {
     navigate('/')
   }, [navigate])
 
-  if (loading) {
+  if (showLoading) {
     return <div className="loading">Loading note...</div>
   }
 

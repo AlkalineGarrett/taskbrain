@@ -1,7 +1,6 @@
 package org.alkaline.taskbrain.ui.currentnote
 
 import android.util.Log
-import org.alkaline.taskbrain.ui.currentnote.util.AlarmSymbolUtils
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
@@ -10,6 +9,7 @@ import kotlinx.coroutines.launch
 import org.alkaline.taskbrain.data.NoteLine
 import org.alkaline.taskbrain.data.RecentTab
 import org.alkaline.taskbrain.data.RecentTabsRepository
+import org.alkaline.taskbrain.data.TabState
 
 /**
  * Cached note content for instant tab switching.
@@ -94,20 +94,12 @@ class RecentTabsViewModel : ViewModel() {
      * @param content The note content (first line will be used as display text)
      */
     fun onNoteOpened(noteId: String, content: String) {
-        val displayText = extractDisplayText(content)
+        val displayText = TabState.extractDisplayText(content)
 
         // OPTIMISTIC UPDATE: Immediately move/add tab to front for instant animation
-        _tabs.value = _tabs.value?.let { currentTabs ->
-            val existingTab = currentTabs.find { it.noteId == noteId }
-            if (existingTab != null) {
-                // Move existing tab to front with updated display text
-                listOf(existingTab.copy(displayText = displayText)) +
-                    currentTabs.filter { it.noteId != noteId }
-            } else {
-                // Add new tab at front
-                listOf(RecentTab(noteId = noteId, displayText = displayText)) + currentTabs
-            }
-        } ?: listOf(RecentTab(noteId = noteId, displayText = displayText))
+        _tabs.value = TabState.addOrUpdate(
+            _tabs.value ?: emptyList(), noteId, displayText
+        )
 
         // Persist to Firestore in background (no loadTabs() call on success)
         viewModelScope.launch {
@@ -132,8 +124,7 @@ class RecentTabsViewModel : ViewModel() {
             val result = repository.removeTab(noteId)
             result.fold(
                 onSuccess = {
-                    // Update local state immediately for responsive UI
-                    _tabs.value = _tabs.value?.filter { it.noteId != noteId }
+                    _tabs.value = TabState.remove(_tabs.value ?: emptyList(), noteId)
                 },
                 onFailure = { e ->
                     Log.e(TAG, "Error closing tab: $noteId", e)
@@ -156,8 +147,7 @@ class RecentTabsViewModel : ViewModel() {
                 Log.e(TAG, "Error removing tab for deleted note: $noteId", e)
                 // Don't show error for this - it's a background cleanup
             }
-            // Update local state immediately
-            _tabs.value = _tabs.value?.filter { it.noteId != noteId }
+            _tabs.value = TabState.remove(_tabs.value ?: emptyList(), noteId)
         }
     }
 
@@ -165,15 +155,14 @@ class RecentTabsViewModel : ViewModel() {
      * Updates the display text for a tab (e.g., after note content changes).
      */
     fun updateTabDisplayText(noteId: String, content: String) {
-        val displayText = extractDisplayText(content)
+        val displayText = TabState.extractDisplayText(content)
         viewModelScope.launch {
             val result = repository.updateTabDisplayText(noteId, displayText)
             result.fold(
                 onSuccess = {
-                    // Update local state immediately
-                    _tabs.value = _tabs.value?.map { tab ->
-                        if (tab.noteId == noteId) tab.copy(displayText = displayText) else tab
-                    }
+                    _tabs.value = TabState.updateDisplayText(
+                        _tabs.value ?: emptyList(), noteId, displayText
+                    )
                 },
                 onFailure = { e ->
                     Log.e(TAG, "Error updating tab display text: $noteId", e)
@@ -183,26 +172,8 @@ class RecentTabsViewModel : ViewModel() {
         }
     }
 
-    /**
-     * Extracts display text from note content.
-     * Uses the first line, truncated if needed.
-     */
-    private fun extractDisplayText(content: String): String {
-        val firstLine = content.lines().firstOrNull() ?: ""
-        // Remove any special characters/markers that shouldn't be in tab display
-        val cleanedLine = firstLine
-            .replace(AlarmSymbolUtils.ALARM_SYMBOL, "")
-            .trim()
-        return if (cleanedLine.length > MAX_DISPLAY_LENGTH) {
-            cleanedLine.take(MAX_DISPLAY_LENGTH - 1) + "…"
-        } else {
-            cleanedLine.ifEmpty { "New Note" }
-        }
-    }
-
     companion object {
         private const val TAG = "RecentTabsViewModel"
-        private const val MAX_DISPLAY_LENGTH = 12
     }
 }
 

@@ -2,6 +2,8 @@ package org.alkaline.taskbrain.ui.currentnote
 
 import android.util.Log
 import androidx.compose.foundation.background
+import org.alkaline.taskbrain.data.CloseTabResult
+import org.alkaline.taskbrain.data.TabState
 import org.alkaline.taskbrain.ui.currentnote.rendering.ButtonCallbacks
 import org.alkaline.taskbrain.ui.currentnote.rendering.DirectiveCallbacks
 import org.alkaline.taskbrain.ui.currentnote.util.AlarmSymbolUtils
@@ -679,19 +681,11 @@ fun CurrentNoteScreen(
                 displayedNoteId = targetNoteId
             },
             onTabClose = { targetNoteId ->
-                val isClosingCurrentTab = targetNoteId == displayedNoteId
                 recentTabsViewModel.closeTab(targetNoteId)
-                if (isClosingCurrentTab) {
-                    // Find the next tab to switch to
-                    val currentIndex = recentTabs.indexOfFirst { it.noteId == targetNoteId }
-                    val remainingTabs = recentTabs.filter { it.noteId != targetNoteId }
-                    if (remainingTabs.isEmpty()) {
-                        onNavigateBack()
-                    } else {
-                        // Switch to next tab, or previous if we closed the last one
-                        val nextIndex = minOf(currentIndex, remainingTabs.size - 1)
-                        displayedNoteId = remainingTabs[nextIndex].noteId
-                    }
+                when (val result = TabState.closeTabNavigationTarget(recentTabs, targetNoteId, displayedNoteId ?: "")) {
+                    is CloseTabResult.StayOnCurrent -> { /* no-op */ }
+                    is CloseTabResult.NavigateBack -> onNavigateBack()
+                    is CloseTabResult.SwitchTo -> { displayedNoteId = result.noteId }
                 }
             }
         )

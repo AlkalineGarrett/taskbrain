@@ -23,6 +23,7 @@ export function useEditor(noteId: string | undefined) {
   const [controller] = useState(() => new EditorController(editorState, undoManager))
 
   const [loading, setLoading] = useState(true)
+  const [showLoading, setShowLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
@@ -67,7 +68,7 @@ export function useEditor(noteId: string | undefined) {
   useEffect(() => {
     return () => {
       const prevId = currentNoteIdRef.current
-      if (prevId) {
+      if (prevId && trackedLinesRef.current.length > 0) {
         contentCache.set(prevId, {
           lines: trackedLinesRef.current,
           editorTexts: editorState.lines.map((l) => l.text),
@@ -127,13 +128,14 @@ export function useEditor(noteId: string | undefined) {
     }
 
     // Load from Firestore
+    setLoading(true)
     const loadNote = async () => {
       try {
-        setLoading(true)
         setError(null)
         const lines = await repo.loadNoteWithChildren(noteId)
 
         populateEditor(lines, false, false)
+        setShowLoading(false)
 
         // Update last accessed
         void repo.updateLastAccessed(noteId)
@@ -189,6 +191,7 @@ export function useEditor(noteId: string | undefined) {
     controller,
     editorState,
     loading,
+    showLoading,
     saving,
     error,
     dirty,
