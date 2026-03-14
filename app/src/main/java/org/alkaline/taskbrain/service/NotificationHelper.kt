@@ -54,9 +54,8 @@ class NotificationHelper(private val context: Context) {
             .addAction(createCancelAction(alarm))
 
         if (silent) {
-            // Silent notification: low priority, no sound/vibration, no heads-up
-            builder.setPriority(NotificationCompat.PRIORITY_LOW)
-                .setNotificationSilent()
+            builder.setSilent(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
         } else {
             builder.setPriority(NotificationCompat.PRIORITY_HIGH)
         }
@@ -81,9 +80,8 @@ class NotificationHelper(private val context: Context) {
             .addAction(createCancelAction(alarm))
 
         if (silent) {
-            // Silent notification: low priority, no sound/vibration, no full-screen intent
-            builder.setPriority(NotificationCompat.PRIORITY_LOW)
-                .setNotificationSilent()
+            builder.setSilent(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
         } else {
             // Full urgent notification with full-screen intent:
             // - If device is LOCKED: Android shows the full-screen activity
