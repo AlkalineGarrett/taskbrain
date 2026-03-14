@@ -16,8 +16,15 @@ import org.alkaline.taskbrain.ui.currentnote.undo.UndoStatePersistence
 import androidx.compose.ui.res.stringResource
 import org.alkaline.taskbrain.R
 import org.alkaline.taskbrain.ui.currentnote.util.TextLineUtils
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -25,6 +32,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.livedata.observeAsState
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -37,6 +45,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.tooling.preview.Preview
+import kotlinx.coroutines.delay
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -322,9 +331,29 @@ fun CurrentNoteScreen(
         }
     }
 
-    // Load tabs on initial composition
+    // Auto-retry on transient load failures (e.g., slow Firebase auth token refresh on startup)
+    var loadRetryCount by remember(displayedNoteId) { mutableIntStateOf(0) }
+    LaunchedEffect(loadStatus, loadRetryCount) {
+        if (loadStatus is LoadStatus.Error && loadRetryCount < 2) {
+            delay(1500)
+            loadRetryCount++
+            currentNoteViewModel.loadContent(displayedNoteId, recentTabsViewModel)
+        }
+    }
+
+    // Load tabs on initial composition, with retry on failure
     LaunchedEffect(Unit) {
         recentTabsViewModel.loadTabs()
+    }
+    val tabsError2 = tabsError
+    var tabsRetryCount by remember { mutableIntStateOf(0) }
+    LaunchedEffect(tabsError2, tabsRetryCount) {
+        if (tabsError2 != null && tabsRetryCount < 2) {
+            delay(1500)
+            tabsRetryCount++
+            recentTabsViewModel.clearError()
+            recentTabsViewModel.loadTabs()
+        }
     }
 
     // Set up callback for directive mutations that affect the current note's content
@@ -759,10 +788,30 @@ fun CurrentNoteScreen(
             }
         )
 
+        // Show loading indicator while waiting for initial content from Firebase
+        val isInitialLoad = loadStatus is LoadStatus.Loading && userContent.isEmpty()
+        if (isInitialLoad) {
+            Box(
+                modifier = Modifier.weight(1f).fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator()
+                    Text(
+                        text = stringResource(R.string.loading_note),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 16.dp)
+                    )
+                }
+            }
+        }
+
         // Key on displayedNoteId to force full recreation of editor tree when switching tabs.
         // Without this, Compose reuses composables by position, causing stale state in
         // remember blocks (like interactionSource) that breaks touch handling.
         // Provide InlineEditState via CompositionLocal for view directive inline editing
+        if (!isInitialLoad) {
         ProvideInlineEditState(inlineEditState) {
             key(displayedNoteId) {
                 NoteTextField(
@@ -955,6 +1004,7 @@ fun CurrentNoteScreen(
                 modifier = Modifier.weight(1f)
             )
             }
+        }
         }
 
         CommandBar(

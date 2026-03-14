@@ -298,7 +298,7 @@ internal fun DirectiveAwareLineInput(
                         hasExternalSelection = hasExternalSelection,
                         cursorPosition = contentCursor,
                         textLength = content.length,
-                        textLayoutResult = textLayoutResultState,
+                        textLayoutResultProvider = { textLayoutResultState },
                         cursorAlpha = cursorAlpha
                     )
                     .then(
@@ -592,15 +592,24 @@ private fun DirectiveOverlayText(
 /**
  * Modifier that draws a cursor at the specified position.
  */
+/**
+ * Draws a blinking cursor at the given position.
+ *
+ * [textLayoutResultProvider] is a lambda (not a direct value) so the TextLayoutResult
+ * is read during the draw phase — after layout has measured the new text. Reading it
+ * during composition would give a stale layout from the previous frame, causing the
+ * cursor to flash at position 0 whenever getCursorRect throws for an out-of-range index.
+ */
 private fun Modifier.drawCursor(
     isFocused: Boolean,
     hasExternalSelection: Boolean,
     cursorPosition: Int,
     textLength: Int,
-    textLayoutResult: TextLayoutResult?,
+    textLayoutResultProvider: () -> TextLayoutResult?,
     cursorAlpha: Float
 ): Modifier = this.drawWithContent {
     drawContent()
+    val textLayoutResult = textLayoutResultProvider()
     if (isFocused && !hasExternalSelection && textLayoutResult != null) {
         val cursorPos = cursorPosition.coerceIn(0, textLength)
         val cursorRect = try {

@@ -222,9 +222,11 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     private var snapshotListener: ListenerRegistration? = null
     private var suppressSnapshotUpdate = false
 
-    // Current Note ID being edited
-    private var currentNoteId = "root_note"
+    // Current Note ID being edited — initialized from SharedPreferences so that LiveData
+    // exposes the correct value immediately, preventing a race where the sync LaunchedEffect
+    // in CurrentNoteScreen sets displayedNoteId to a stale default before loadContent runs.
     private val LAST_VIEWED_NOTE_KEY = "last_viewed_note_id"
+    private var currentNoteId = sharedPreferences.getString(LAST_VIEWED_NOTE_KEY, "root_note") ?: "root_note"
 
     // Expose current note ID for UI (e.g., undo state persistence)
     private val _currentNoteIdLiveData = MutableLiveData<String>(currentNoteId)

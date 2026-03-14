@@ -50,6 +50,7 @@
     <string name="action_collapse">Collapse</string>
     <string name="action_refresh">Refresh</string>
     <string name="action_loading">Loading…</string>
+    <string name="loading_note">Loading note…</string>
 
     <!-- Error Strings -->
     <string name="error_title">Error</string>
