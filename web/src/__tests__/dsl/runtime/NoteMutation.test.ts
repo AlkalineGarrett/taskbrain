@@ -38,6 +38,7 @@ function makeNote(overrides: Partial<Note> & { id: string }): Note {
     containedNotes: [],
     state: null,
     path: overrides.path ?? '',
+    rootNoteId: null,
     ...overrides,
   }
 }

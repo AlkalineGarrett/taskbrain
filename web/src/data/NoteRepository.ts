@@ -5,18 +5,26 @@ import {
   getDocs,
   query,
   where,
-  addDoc,
   runTransaction,
   serverTimestamp,
   writeBatch,
   updateDoc,
   type Firestore,
   type DocumentReference,
-  type Transaction,
 } from 'firebase/firestore'
 import type { Auth } from 'firebase/auth'
 import { noteFromFirestore, type Note, type NoteLine } from './Note'
+import { flattenTreeToLines } from './NoteTree'
 
+/**
+ * Repository for managing composable notes in Firestore.
+ *
+ * Notes form a tree: parentNoteId points to immediate parent, rootNoteId enables
+ * single-query loading of all descendants. Indentation is derived from tree depth
+ * (no tabs stored in Firestore content).
+ *
+ * Old-format notes (flat children, tabs in content) are migrated lazily on save.
+ */
 export class NoteRepository {
   private readonly notesRef
 
@@ -27,7 +35,6 @@ export class NoteRepository {
     this.notesRef = collection(db, 'notes')
   }
 
-  /** Run an async operation with error logging. Rethrows after logging. */
   private async logged<T>(operation: string, fn: () => Promise<T>): Promise<T> {
     try {
       return await fn()
@@ -65,38 +72,64 @@ export class NoteRepository {
     }
   }
 
-  // --- Load operations ---
+  // ── Load operations ─────────────────────────────────────────────────
 
+  /**
+   * Loads a note and its descendants, returning a flat list of tab-prefixed NoteLines.
+   */
   async loadNoteWithChildren(noteId: string): Promise<NoteLine[]> {
     return this.logged('loadNoteWithChildren', async () => {
-    this.requireUserId()
-    const docSnap = await getDoc(this.noteRef(noteId))
+      this.requireUserId()
+      const docSnap = await getDoc(this.noteRef(noteId))
 
-    if (!docSnap.exists()) {
-      return [{ content: '', noteId }]
-    }
+      if (!docSnap.exists()) {
+        return [{ content: '', noteId }]
+      }
 
-    const note = noteFromFirestore(docSnap.id, docSnap.data())
-    const content = note.content
-    const containedNotes = note.containedNotes
+      const note = noteFromFirestore(docSnap.id, docSnap.data())
+      const allLines = await this.loadNoteLines(note)
 
-    const parentLine: NoteLine = { content, noteId }
-    const childLines = await this.loadChildNotes(containedNotes)
-    const allLines = [parentLine, ...childLines]
-
-    // Append empty line for typing, unless note is a single empty line
-    if (allLines.length === 1 && allLines[0]!.content === '') {
-      return allLines
-    }
-    return [...allLines, { content: '', noteId: null }]
+      // Append empty line for typing, unless note is a single empty line
+      if (allLines.length === 1 && allLines[0]!.content === '') {
+        return allLines
+      }
+      return [...allLines, { content: '', noteId: null }]
     })
   }
 
-  private async loadChildNotes(childIds: string[]): Promise<NoteLine[]> {
-    return Promise.all(childIds.map((id) => this.loadChildNote(id)))
+  /**
+   * Loads note lines using tree query (new format) or individual reads (old format).
+   */
+  private async loadNoteLines(note: Note): Promise<NoteLine[]> {
+    // Try tree query first
+    const userId = this.requireUserId()
+    const descendantQuery = query(this.notesRef, where('rootNoteId', '==', note.id), where('userId', '==', userId))
+    const descendantSnap = await getDocs(descendantQuery)
+
+    const descendants = descendantSnap.docs
+      .map((d) => noteFromFirestore(d.id, d.data()))
+      .filter((n) => n.state !== 'deleted')
+
+    if (descendants.length > 0) {
+      return flattenTreeToLines(note, descendants)
+    }
+
+    // Old format or no children
+    if (note.containedNotes.length === 0) {
+      return [{ content: note.content, noteId: note.id }]
+    }
+
+    // Old format: load children individually
+    const parentLine: NoteLine = { content: note.content, noteId: note.id }
+    const childLines = await this.loadOldFormatChildren(note.containedNotes)
+    return [parentLine, ...childLines]
   }
 
-  private async loadChildNote(childId: string): Promise<NoteLine> {
+  private async loadOldFormatChildren(childIds: string[]): Promise<NoteLine[]> {
+    return Promise.all(childIds.map((id) => this.loadOldFormatChild(id)))
+  }
+
+  private async loadOldFormatChild(childId: string): Promise<NoteLine> {
     if (childId === '') return { content: '', noteId: null }
 
     try {
@@ -109,6 +142,60 @@ export class NoteRepository {
     } catch {
       return { content: '', noteId: null }
     }
+  }
+
+  /**
+   * Loads all top-level notes with full content reconstructed.
+   */
+  async loadNotesWithFullContent(): Promise<Note[]> {
+    return this.logged('loadNotesWithFullContent', async () => {
+      const userId = this.requireUserId()
+      const q = query(this.notesRef, where('userId', '==', userId))
+      const snapshot = await getDocs(q)
+
+      const allNotes = snapshot.docs
+        .map((d) => noteFromFirestore(d.id, d.data()))
+        .filter((n) => n.state !== 'deleted')
+
+      const notesById = new Map(allNotes.map((n) => [n.id, n]))
+      const topLevelNotes = allNotes.filter((n) => n.parentNoteId == null)
+      const descendantsByRoot = new Map<string, Note[]>()
+      for (const n of allNotes) {
+        if (n.rootNoteId != null) {
+          const list = descendantsByRoot.get(n.rootNoteId)
+          if (list) list.push(n)
+          else descendantsByRoot.set(n.rootNoteId, [n])
+        }
+      }
+
+      return topLevelNotes.map((note) =>
+        this.reconstructNoteContent(note, notesById, descendantsByRoot.get(note.id)),
+      )
+    })
+  }
+
+  private reconstructNoteContent(
+    note: Note,
+    allNotesById: Map<string, Note>,
+    treeDescendants: Note[] | undefined,
+  ): Note {
+    if (note.containedNotes.length === 0) return note
+
+    if (treeDescendants) {
+      const lines = flattenTreeToLines(note, treeDescendants)
+      return { ...note, content: lines.map((l) => l.content).join('\n') }
+    }
+
+    // Old format
+    const parts = [note.content]
+    for (const childId of note.containedNotes) {
+      if (childId !== '') {
+        parts.push(allNotesById.get(childId)?.content ?? '')
+      } else {
+        parts.push('')
+      }
+    }
+    return { ...note, content: parts.join('\n') }
   }
 
   async loadUserNotes(): Promise<Note[]> {
@@ -144,221 +231,348 @@ export class NoteRepository {
     })
   }
 
-  async loadNotesWithFullContent(): Promise<Note[]> {
-    return this.logged('loadNotesWithFullContent', async () => {
-      const userId = this.requireUserId()
-      const q = query(this.notesRef, where('userId', '==', userId))
-      const snapshot = await getDocs(q)
-
-      const topLevelNotes = snapshot.docs
-        .map((d) => noteFromFirestore(d.id, d.data()))
-        .filter((n) => n.parentNoteId == null && n.state !== 'deleted')
-
-      return Promise.all(topLevelNotes.map((n) => this.reconstructNoteContent(n)))
+  async isNoteDeleted(noteId: string): Promise<boolean> {
+    return this.logged('isNoteDeleted', async () => {
+      this.requireUserId()
+      const docSnap = await getDoc(this.noteRef(noteId))
+      if (!docSnap.exists()) return false
+      return docSnap.data().state === 'deleted'
     })
   }
 
-  private async reconstructNoteContent(note: Note): Promise<Note> {
-    if (note.containedNotes.length === 0) return note
+  // ── Save operations ─────────────────────────────────────────────────
 
-    const childContents = await this.loadChildNotes(note.containedNotes)
-    const fullContent = [
-      note.content,
-      ...childContents.map((c) => c.content),
-    ].join('\n')
-    return { ...note, content: fullContent }
-  }
-
-  // --- Write operations ---
-
+  /**
+   * Saves a note with tree structure derived from tab-indented lines.
+   * Returns a map of line indices to newly created note IDs.
+   *
+   * Note: Firestore transactions can read/write at most 500 documents.
+   * Notes with >500 descendants will fail. Add batched transaction support if needed.
+   */
   async saveNoteWithChildren(
     noteId: string,
     trackedLines: NoteLine[],
   ): Promise<Map<number, string>> {
     return this.logged('saveNoteWithChildren', async () => {
+      if (trackedLines.length === 0) return new Map()
+
       const userId = this.requireUserId()
       const parentRef = this.noteRef(noteId)
-      const parentContent = trackedLines[0]?.content ?? ''
+      const rootContent = trackedLines[0]!.content.replace(/^\t+/, '')
+
+      // Drop trailing empty lines (editor's typing line)
+      const childPortion = dropLastWhile(trackedLines.slice(1), (l) => l.content === '')
+      const linesToSave = [trackedLines[0]!, ...childPortion]
+
+      // Pre-allocate refs for new notes
+      const newRefs = new Map<number, DocumentReference>()
+      for (let i = 1; i < linesToSave.length; i++) {
+        const content = linesToSave[i]!.content.replace(/^\t+/, '')
+        if (linesToSave[i]!.noteId == null && content !== '') {
+          newRefs.set(i, doc(this.notesRef))
+        }
+      }
+
+      function effectiveId(lineIndex: number): string {
+        if (lineIndex === 0) return noteId
+        if (linesToSave[lineIndex]!.noteId != null) return linesToSave[lineIndex]!.noteId!
+        return newRefs.get(lineIndex)?.id ?? ''
+      }
+
+      // Compute tree structure from indentation
+      const parentOfLine = new Array<number>(linesToSave.length).fill(0)
+      const childrenOfLine = linesToSave.map(() => [] as string[])
+
+      const stack: { depth: number; lineIndex: number }[] = [{ depth: 0, lineIndex: 0 }]
+
+      for (let i = 1; i < linesToSave.length; i++) {
+        const tabMatch = linesToSave[i]!.content.match(/^\t*/)
+        const depth = tabMatch ? tabMatch[0]!.length : 0
+        const content = linesToSave[i]!.content.replace(/^\t+/, '')
+
+        while (stack.length > 1 && stack[stack.length - 1]!.depth >= depth) {
+          stack.pop()
+        }
+        parentOfLine[i] = stack[stack.length - 1]!.lineIndex
+
+        if (content === '') {
+          childrenOfLine[parentOfLine[i]!]!.push('')
+        } else {
+          childrenOfLine[parentOfLine[i]!]!.push(effectiveId(i))
+          stack.push({ depth, lineIndex: i })
+        }
+      }
+
+      // Fetch existing descendants for deletion tracking
+      const existingDescendantIds = await this.fetchExistingDescendantIds(noteId)
 
       return runTransaction(this.db, async (transaction) => {
-        const oldChildIds = this.getExistingChildIds(transaction, parentRef)
-        const idsToDelete = new Set(
-          (await oldChildIds).filter((id) => id !== ''),
+        const survivingIds = new Set<string>()
+
+        // Update root
+        transaction.set(
+          parentRef,
+          { ...this.baseNoteData(userId, rootContent), containedNotes: childrenOfLine[0]! },
+          { merge: true },
         )
 
-        // Drop trailing empty lines before saving
-        const childLines = dropLastWhile(trackedLines.slice(1), (l) => l.content === '')
+        // Write each descendant
+        for (let i = 1; i < linesToSave.length; i++) {
+          const content = linesToSave[i]!.content.replace(/^\t+/, '')
+          if (content === '') continue // spacer
 
-        const { containedNotes, createdIds } = await this.processChildLines(
-          transaction,
-          userId,
-          noteId,
-          childLines,
-          idsToDelete,
-        )
+          const id = effectiveId(i)
+          const parentId = effectiveId(parentOfLine[i]!)
+          survivingIds.add(id)
 
-        this.updateParentNote(transaction, parentRef, userId, parentContent, containedNotes)
-        this.softDeleteRemovedNotes(transaction, idsToDelete)
+          if (linesToSave[i]!.noteId != null) {
+            transaction.set(
+              this.noteRef(id),
+              {
+                content,
+                parentNoteId: parentId,
+                rootNoteId: noteId,
+                containedNotes: childrenOfLine[i]!,
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true },
+            )
+          } else {
+            transaction.set(newRefs.get(i)!, {
+              userId,
+              content,
+              parentNoteId: parentId,
+              rootNoteId: noteId,
+              containedNotes: childrenOfLine[i]!,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            })
+          }
+        }
 
+        // Soft-delete removed notes
+        for (const id of existingDescendantIds) {
+          if (!survivingIds.has(id)) {
+            transaction.update(this.noteRef(id), {
+              state: 'deleted',
+              updatedAt: serverTimestamp(),
+            })
+          }
+        }
+
+        const createdIds = new Map<number, string>()
+        for (const [lineIndex, ref] of newRefs) {
+          createdIds.set(lineIndex, ref.id)
+        }
         return createdIds
       })
     })
   }
 
-  private async getExistingChildIds(
-    transaction: Transaction,
-    parentRef: DocumentReference,
-  ): Promise<string[]> {
-    const snapshot = await transaction.get(parentRef)
-    if (!snapshot.exists()) return []
-    return (snapshot.data().containedNotes as string[]) ?? []
-  }
+  private async fetchExistingDescendantIds(noteId: string): Promise<Set<string>> {
+    const userId = this.requireUserId()
+    const descendantQuery = query(this.notesRef, where('rootNoteId', '==', noteId), where('userId', '==', userId))
+    const descendantSnap = await getDocs(descendantQuery)
 
-  private processChildLines(
-    transaction: Transaction,
-    userId: string,
-    parentNoteId: string,
-    childLines: NoteLine[],
-    idsToDelete: Set<string>,
-  ): { containedNotes: string[]; createdIds: Map<number, string> } {
-    const containedNotes: string[] = []
-    const createdIds = new Map<number, string>()
-
-    childLines.forEach((line, index) => {
-      const lineIndex = index + 1
-      const childId = this.processChildLine(
-        transaction, userId, parentNoteId, line, idsToDelete,
+    if (descendantSnap.docs.length > 0) {
+      return new Set(
+        descendantSnap.docs
+          .filter((d) => d.data().state !== 'deleted')
+          .map((d) => d.id),
       )
-      containedNotes.push(childId)
-      if (line.noteId == null && line.content !== '') {
-        createdIds.set(lineIndex, childId)
-      }
+    }
+
+    // Old format fallback
+    const rootDoc = await getDoc(this.noteRef(noteId))
+    if (!rootDoc.exists()) return new Set()
+    const containedNotes = (rootDoc.data().containedNotes as string[]) ?? []
+    return new Set(containedNotes.filter((id) => id !== ''))
+  }
+
+  /**
+   * Saves a note with full multi-line content.
+   * Used for inline editing of notes within view directives.
+   */
+  async saveNoteWithFullContent(noteId: string, newContent: string): Promise<void> {
+    return this.logged('saveNoteWithFullContent', async () => {
+      this.requireUserId()
+
+      // Load existing structure (tree-aware)
+      const existingLines = await this.loadNoteWithChildren(noteId)
+      const existingLinesNoTrailing =
+        existingLines.length > 1 && existingLines[existingLines.length - 1]!.content === ''
+          ? existingLines.slice(0, -1)
+          : existingLines
+
+      const newLinesContent = newContent.split('\n')
+      const trackedLines = matchLinesToIds(noteId, existingLinesNoTrailing, newLinesContent)
+      await this.saveNoteWithChildren(noteId, trackedLines)
     })
-
-    return { containedNotes, createdIds }
-  }
-
-  private processChildLine(
-    transaction: Transaction,
-    userId: string,
-    parentNoteId: string,
-    line: NoteLine,
-    idsToDelete: Set<string>,
-  ): string {
-    if (line.content === '') return ''
-
-    if (line.noteId != null) {
-      this.updateExistingChild(transaction, line.noteId, line.content)
-      idsToDelete.delete(line.noteId)
-      return line.noteId
-    }
-    return this.createNewChild(transaction, userId, parentNoteId, line.content)
-  }
-
-  private updateExistingChild(
-    transaction: Transaction,
-    noteId: string,
-    content: string,
-  ) {
-    transaction.set(
-      this.noteRef(noteId),
-      { content, updatedAt: serverTimestamp() },
-      { merge: true },
-    )
-  }
-
-  private createNewChild(
-    transaction: Transaction,
-    userId: string,
-    parentNoteId: string,
-    content: string,
-  ): string {
-    const newRef = doc(this.notesRef)
-    transaction.set(newRef, this.newNoteData(userId, content, parentNoteId))
-    return newRef.id
-  }
-
-  private updateParentNote(
-    transaction: Transaction,
-    parentRef: DocumentReference,
-    userId: string,
-    content: string,
-    containedNotes: string[],
-  ) {
-    transaction.set(
-      parentRef,
-      { ...this.baseNoteData(userId, content), containedNotes },
-      { merge: true },
-    )
-  }
-
-  private softDeleteRemovedNotes(
-    transaction: Transaction,
-    idsToDelete: Set<string>,
-  ) {
-    for (const id of idsToDelete) {
-      transaction.update(this.noteRef(id), {
-        state: 'deleted',
-        updatedAt: serverTimestamp(),
-      })
-    }
   }
 
   async createNote(): Promise<string> {
     return this.logged('createNote', async () => {
       const userId = this.requireUserId()
+      const { addDoc } = await import('firebase/firestore')
       const ref = await addDoc(this.notesRef, this.newNoteData(userId, ''))
       return ref.id
     })
   }
 
+  /**
+   * Creates a new multi-line note with tree structure derived from indentation.
+   */
   async createMultiLineNote(content: string): Promise<string> {
     return this.logged('createMultiLineNote', async () => {
       const userId = this.requireUserId()
       const lines = content.split('\n')
-      const firstLine = lines[0] ?? ''
+      const firstLine = (lines[0] ?? '').replace(/^\t+/, '')
       const childLines = lines.slice(1)
 
-      const batch = writeBatch(this.db)
+      if (childLines.length === 0 || childLines.every((l) => l.replace(/^\t+/, '') === '')) {
+        const { addDoc } = await import('firebase/firestore')
+        const ref = await addDoc(this.notesRef, this.newNoteData(userId, firstLine))
+        return ref.id
+      }
+
       const parentRef = doc(this.notesRef)
 
-      const childIds = childLines.map((line) => {
-        if (line !== '') {
-          const childRef = doc(this.notesRef)
-          batch.set(childRef, this.newNoteData(userId, line, parentRef.id))
-          return childRef.id
+      interface NodeInfo {
+        ref: DocumentReference
+        content: string
+        parentId: string
+        children: string[]
+      }
+
+      const nodes: NodeInfo[] = []
+      const rootChildren: string[] = []
+
+      const stack: { depth: number; id: string; children: string[] }[] = [
+        { depth: 0, id: parentRef.id, children: rootChildren },
+      ]
+
+      for (let i = 1; i < lines.length; i++) {
+        const tabMatch = lines[i]!.match(/^\t*/)
+        const depth = tabMatch ? tabMatch[0]!.length : 0
+        const lineContent = lines[i]!.replace(/^\t+/, '')
+
+        while (stack.length > 1 && stack[stack.length - 1]!.depth >= depth) {
+          stack.pop()
         }
-        return ''
-      })
+        const parent = stack[stack.length - 1]!
+
+        if (lineContent === '') {
+          parent.children.push('')
+        } else {
+          const ref = doc(this.notesRef)
+          const nodeChildren: string[] = []
+          nodes.push({ ref, content: lineContent, parentId: parent.id, children: nodeChildren })
+          parent.children.push(ref.id)
+          stack.push({ depth, id: ref.id, children: nodeChildren })
+        }
+      }
+
+      const batch = writeBatch(this.db)
 
       batch.set(parentRef, {
         ...this.newNoteData(userId, firstLine),
-        containedNotes: childIds,
+        containedNotes: rootChildren,
       })
+
+      for (const node of nodes) {
+        batch.set(node.ref, {
+          userId,
+          content: node.content,
+          parentNoteId: node.parentId,
+          rootNoteId: parentRef.id,
+          containedNotes: node.children,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+      }
+
       await batch.commit()
       return parentRef.id
     })
   }
 
+  // ── Delete/restore operations ───────────────────────────────────────
+
+  /**
+   * Soft-deletes a note and all its descendants.
+   */
   async softDeleteNote(noteId: string): Promise<void> {
     return this.logged('softDeleteNote', async () => {
-      this.requireUserId()
-      await updateDoc(this.noteRef(noteId), {
-        state: 'deleted',
-        updatedAt: serverTimestamp(),
-      })
+      const userId = this.requireUserId()
+      const idsToDelete = new Set([noteId])
+
+      // New-format descendants
+      const descendantQuery = query(this.notesRef, where('rootNoteId', '==', noteId), where('userId', '==', userId))
+      const descendantSnap = await getDocs(descendantQuery)
+      for (const d of descendantSnap.docs) {
+        idsToDelete.add(d.id)
+      }
+
+      // Old-format fallback
+      if (descendantSnap.empty) {
+        const rootDoc = await getDoc(this.noteRef(noteId))
+        if (rootDoc.exists()) {
+          const containedNotes = (rootDoc.data().containedNotes as string[]) ?? []
+          for (const childId of containedNotes) {
+            if (childId !== '') idsToDelete.add(childId)
+          }
+        }
+      }
+
+      const batch = writeBatch(this.db)
+      for (const id of idsToDelete) {
+        batch.update(this.noteRef(id), {
+          state: 'deleted',
+          updatedAt: serverTimestamp(),
+        })
+      }
+      await batch.commit()
     })
   }
 
+  /**
+   * Restores a deleted note and all its descendants.
+   */
   async undeleteNote(noteId: string): Promise<void> {
     return this.logged('undeleteNote', async () => {
-      this.requireUserId()
-      await updateDoc(this.noteRef(noteId), {
-        state: null,
-        updatedAt: serverTimestamp(),
-      })
+      const userId = this.requireUserId()
+
+      const idsToRestore = new Set([noteId])
+
+      const descendantQuery = query(this.notesRef, where('rootNoteId', '==', noteId), where('userId', '==', userId))
+      const descendantSnap = await getDocs(descendantQuery)
+      for (const d of descendantSnap.docs) {
+        idsToRestore.add(d.id)
+      }
+
+      // Old-format fallback
+      if (descendantSnap.empty) {
+        const rootDoc = await getDoc(this.noteRef(noteId))
+        if (rootDoc.exists()) {
+          const containedNotes = (rootDoc.data().containedNotes as string[]) ?? []
+          for (const childId of containedNotes) {
+            if (childId !== '') idsToRestore.add(childId)
+          }
+        }
+      }
+
+      const batch = writeBatch(this.db)
+      for (const id of idsToRestore) {
+        batch.update(this.noteRef(id), {
+          state: null,
+          updatedAt: serverTimestamp(),
+        })
+      }
+      await batch.commit()
     })
   }
+
+  // ── Utility operations ──────────────────────────────────────────────
 
   async updateLastAccessed(noteId: string): Promise<void> {
     return this.logged('updateLastAccessed', async () => {
@@ -366,39 +580,6 @@ export class NoteRepository {
       await updateDoc(this.noteRef(noteId), {
         lastAccessedAt: serverTimestamp(),
       })
-    })
-  }
-
-  async saveNoteWithFullContent(noteId: string, newContent: string): Promise<void> {
-    return this.logged('saveNoteWithFullContent', async () => {
-      this.requireUserId()
-
-      const existingNote = await this.loadNoteById(noteId)
-      if (!existingNote) throw new Error(`Note not found: ${noteId}`)
-
-      const existingLines = await this.buildExistingLines(noteId, existingNote)
-      const newLinesContent = newContent.split('\n')
-      const trackedLines = matchLinesToIds(noteId, existingLines, newLinesContent)
-
-      await this.saveNoteWithChildren(noteId, trackedLines)
-    })
-  }
-
-  private async buildExistingLines(noteId: string, note: Note): Promise<NoteLine[]> {
-    const lines: NoteLine[] = [{ content: note.content, noteId }]
-    if (note.containedNotes.length > 0) {
-      const childLines = await this.loadChildNotes(note.containedNotes)
-      lines.push(...childLines)
-    }
-    return lines
-  }
-
-  async isNoteDeleted(noteId: string): Promise<boolean> {
-    return this.logged('isNoteDeleted', async () => {
-      this.requireUserId()
-      const docSnap = await getDoc(this.noteRef(noteId))
-      if (!docSnap.exists()) return false
-      return docSnap.data().state === 'deleted'
     })
   }
 }
@@ -414,9 +595,7 @@ function dropLastWhile<T>(arr: T[], predicate: (item: T) => boolean): T[] {
 }
 
 /**
- * Two-phase line matching algorithm:
- * 1. Exact content matches (preserves IDs when lines are reordered)
- * 2. Positional fallback (for modified lines)
+ * Two-phase line matching: exact content match first, then positional fallback.
  */
 export function matchLinesToIds(
   parentNoteId: string,
@@ -430,7 +609,6 @@ export function matchLinesToIds(
     }))
   }
 
-  // Map content to list of indices in existing lines
   const contentToOldIndices = new Map<string, number[]>()
   existingLines.forEach((line, index) => {
     const indices = contentToOldIndices.get(line.content)
@@ -454,7 +632,7 @@ export function matchLinesToIds(
     }
   })
 
-  // Phase 2: Positional matches for modifications
+  // Phase 2: Positional matches
   newLinesContent.forEach((_, index) => {
     if (newIds[index] == null) {
       if (index < existingLines.length && !oldConsumed[index]) {
@@ -469,7 +647,6 @@ export function matchLinesToIds(
     noteId: newIds[index] ?? null,
   }))
 
-  // Ensure first line always has parent ID
   if (trackedLines.length > 0 && trackedLines[0]!.noteId !== parentNoteId) {
     trackedLines[0] = { ...trackedLines[0]!, noteId: parentNoteId }
   }

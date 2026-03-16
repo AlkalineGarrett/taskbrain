@@ -23,7 +23,8 @@ Path: `/notes/{noteId}`
     "String (noteId)"
   ],
   "state": "String: null or 'deleted'",
-  "path": "String: Unique path identifier (URL-safe: alphanumeric, -, _, /). Used by DSL find()."
+  "path": "String: Unique path identifier (URL-safe: alphanumeric, -, _, /). Used by DSL find().",
+  "rootNoteId": "String (noteId) [optional]: Root note ID for tree queries. Null for root notes, set on all descendants."
 }
 ```
 
@@ -33,6 +34,7 @@ Path: `/notes/{noteId}`
 - **containedNotes**: Array of note IDs representing the contents of the present note (except the first line).
   - Notes are composed recursively.
   - Empty lines don't have their own note. They are indicated by an empty string in the containedNotes array.
+- **rootNoteId**: Set on all non-root notes to enable `where('rootNoteId', '==', rootId)` single-query loading. Null for root notes. During tree save, all descendants get this set to the root note's ID. Old-format notes without this field are migrated lazily on save.
 - **path**: Unique identifier for the note, used by DSL `find(path: ...)` for pattern matching.
   - URL-safe characters only: alphanumeric, `-`, `_`, `/` (for hierarchy).
   - Can be set via DSL: `[.path: "journal/2026-01-25"]`

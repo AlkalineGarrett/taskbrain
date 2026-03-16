@@ -6,16 +6,21 @@ import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
-import com.google.firebase.firestore.Transaction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
 /**
  * Repository for managing composable notes in Firestore.
- * Notes can contain other notes via the containedNotes field.
+ *
+ * Notes form a tree: parentNoteId points to immediate parent, rootNoteId enables
+ * single-query loading of all descendants. Indentation is derived from tree depth
+ * (no tabs stored in Firestore content).
+ *
+ * Old-format notes (flat children, tabs in content) are migrated lazily on save.
  */
 class NoteRepository(
     private val db: FirebaseFirestore = FirebaseFirestore.getInstance(),
@@ -45,8 +50,13 @@ class NoteRepository(
             "parentNoteId" to parentNoteId
         )
 
+    // ── Load operations ─────────────────────────────────────────────────
+
     /**
-     * Loads a note and its child notes, returning a flat list of NoteLines.
+     * Loads a note and its descendants, returning a flat list of tab-prefixed NoteLines.
+     *
+     * New format: single query via rootNoteId, tree flattened with tabs from depth.
+     * Old format: individual child reads, content already has tabs.
      */
     suspend fun loadNoteWithChildren(noteId: String): Result<List<NoteLine>> = runCatching {
         withContext(Dispatchers.IO) {
@@ -57,16 +67,13 @@ class NoteRepository(
                 return@withContext listOf(NoteLine("", noteId))
             }
 
-            val note = document.toObject(Note::class.java)
+            val note = document.toObject(Note::class.java)?.copy(id = noteId)
                 ?: return@withContext listOf(NoteLine("", noteId))
 
-            val parentLine = NoteLine(note.content, noteId)
-            val childLines = loadChildNotes(note.containedNotes)
-
-            val allLines = listOf(parentLine) + childLines
+            val allLines = loadNoteLines(note)
 
             // Append an empty line for user to type on, unless the note is already
-            // a single empty line (new note case - the existing empty line suffices)
+            // a single empty line (new note case — the existing empty line suffices)
             if (allLines.size == 1 && allLines[0].content.isEmpty()) {
                 allLines
             } else {
@@ -75,14 +82,47 @@ class NoteRepository(
         }
     }.onFailure { Log.e(TAG, "Error loading note", it) }
 
-    private suspend fun loadChildNotes(childIds: List<String>): List<NoteLine> =
-        withContext(Dispatchers.IO) {
-            childIds.map { childId ->
-                async { loadChildNote(childId) }
-            }.awaitAll()
+    /**
+     * Loads note lines using tree query (new format) or individual reads (old format).
+     */
+    private suspend fun loadNoteLines(note: Note): List<NoteLine> {
+        // Try tree query first
+        val userId = requireUserId()
+        val descendantDocs = notesCollection
+            .whereEqualTo("rootNoteId", note.id)
+            .whereEqualTo("userId", userId)
+            .get().await()
+
+        val descendants = descendantDocs.mapNotNull { doc ->
+            try {
+                doc.toObject(Note::class.java).copy(id = doc.id)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error parsing descendant", e)
+                null
+            }
+        }.filter { it.state != "deleted" }
+
+        if (descendants.isNotEmpty()) {
+            return flattenTreeToLines(note, descendants)
         }
 
-    private suspend fun loadChildNote(childId: String): NoteLine {
+        // Old format or no children
+        if (note.containedNotes.isEmpty()) {
+            return listOf(NoteLine(note.content, note.id))
+        }
+
+        // Old format: load children individually
+        val parentLine = NoteLine(note.content, note.id)
+        val childLines = loadOldFormatChildren(note.containedNotes)
+        return listOf(parentLine) + childLines
+    }
+
+    private suspend fun loadOldFormatChildren(childIds: List<String>): List<NoteLine> =
+        coroutineScope {
+            childIds.map { childId -> async { loadOldFormatChild(childId) } }.awaitAll()
+        }
+
+    private suspend fun loadOldFormatChild(childId: String): NoteLine {
         if (childId.isEmpty()) return NoteLine("", null)
 
         return try {
@@ -100,180 +140,64 @@ class NoteRepository(
     }
 
     /**
-     * Saves a note with its child notes structure.
-     * Returns a map of line indices to newly created note IDs.
-     */
-    suspend fun saveNoteWithChildren(
-        noteId: String,
-        trackedLines: List<NoteLine>
-    ): Result<Map<Int, String>> = runCatching {
-        withContext(Dispatchers.IO) {
-            val userId = requireUserId()
-            val parentRef = noteRef(noteId)
-
-            val parentContent = trackedLines.firstOrNull()?.content ?: ""
-
-            val result = db.runTransaction { transaction ->
-                val oldChildIds = getExistingChildIds(transaction, parentRef)
-                val idsToDelete = oldChildIds.filter { it.isNotEmpty() }.toMutableSet()
-
-                // Drop trailing empty lines (user's typing line) before saving
-                val childLines = trackedLines.drop(1).dropLastWhile { it.content.isEmpty() }
-
-                val (newContainedNotes, createdIds) = processChildLines(
-                    transaction, userId, noteId, childLines, idsToDelete
-                )
-
-                updateParentNote(transaction, parentRef, userId, parentContent, newContainedNotes)
-                softDeleteRemovedNotes(transaction, idsToDelete)
-
-                createdIds
-            }.await()
-
-            result
-        }
-    }.onFailure { Log.e(TAG, "Error saving note", it) }
-
-    private fun getExistingChildIds(transaction: Transaction, parentRef: DocumentReference): List<String> {
-        val snapshot = transaction.get(parentRef)
-        if (!snapshot.exists()) return emptyList()
-        @Suppress("UNCHECKED_CAST")
-        return snapshot.get("containedNotes") as? List<String> ?: emptyList()
-    }
-
-    private fun processChildLines(
-        transaction: Transaction,
-        userId: String,
-        parentNoteId: String,
-        childLines: List<NoteLine>,
-        idsToDelete: MutableSet<String>
-    ): Pair<List<String>, Map<Int, String>> {
-        val newContainedNotes = mutableListOf<String>()
-        val createdIds = mutableMapOf<Int, String>()
-
-        childLines.forEachIndexed { index, line ->
-            val lineIndex = index + 1 // Offset for parent line
-            val childId = processChildLine(transaction, userId, parentNoteId, line, idsToDelete)
-            newContainedNotes.add(childId)
-            if (line.noteId == null && line.content.isNotEmpty()) {
-                createdIds[lineIndex] = childId
-            }
-        }
-
-        return newContainedNotes to createdIds
-    }
-
-    private fun processChildLine(
-        transaction: Transaction,
-        userId: String,
-        parentNoteId: String,
-        line: NoteLine,
-        idsToDelete: MutableSet<String>
-    ): String {
-        if (line.content.isEmpty()) return ""
-
-        return if (line.noteId != null) {
-            updateExistingChild(transaction, line.noteId, line.content)
-            idsToDelete.remove(line.noteId)
-            line.noteId
-        } else {
-            createNewChild(transaction, userId, parentNoteId, line.content)
-        }
-    }
-
-    private fun updateExistingChild(transaction: Transaction, noteId: String, content: String) {
-        transaction.set(
-            noteRef(noteId),
-            mapOf("content" to content, "updatedAt" to FieldValue.serverTimestamp()),
-            SetOptions.merge()
-        )
-    }
-
-    private fun createNewChild(
-        transaction: Transaction,
-        userId: String,
-        parentNoteId: String,
-        content: String
-    ): String {
-        val newRef = newNoteRef()
-        transaction.set(newRef, newNoteData(userId, content, parentNoteId))
-        return newRef.id
-    }
-
-    private fun updateParentNote(
-        transaction: Transaction,
-        parentRef: DocumentReference,
-        userId: String,
-        content: String,
-        containedNotes: List<String>
-    ) {
-        val data = baseNoteData(userId, content).apply {
-            put("containedNotes", containedNotes)
-        }
-        transaction.set(parentRef, data, SetOptions.merge())
-    }
-
-    private fun softDeleteRemovedNotes(transaction: Transaction, idsToDelete: Set<String>) {
-        for (id in idsToDelete) {
-            transaction.update(
-                noteRef(id),
-                mapOf("state" to "deleted", "updatedAt" to FieldValue.serverTimestamp())
-            )
-        }
-    }
-
-    /**
-     * Loads all top-level notes for the current user with their full content reconstructed.
-     * Multi-line notes (those with containedNotes) will have their child content appended
-     * to the parent content, separated by newlines.
-     *
-     * Use this method when you need the complete text of notes (e.g., for view() directives).
-     * For just metadata/first line, use loadUserNotes() instead.
+     * Loads all top-level notes with full content reconstructed.
+     * Uses the already-loaded notes collection to avoid extra queries.
      */
     suspend fun loadNotesWithFullContent(): Result<List<Note>> = runCatching {
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             val result = notesCollection.whereEqualTo("userId", userId).get().await()
 
-            val topLevelNotes = result.mapNotNull { doc ->
+            val allNotes = result.mapNotNull { doc ->
                 try {
                     doc.toObject(Note::class.java).copy(id = doc.id)
                 } catch (e: Exception) {
                     Log.e(TAG, "Error parsing note", e)
                     null
                 }
-            }.filter { it.parentNoteId == null && it.state != "deleted" }
+            }.filter { it.state != "deleted" }
 
-            // Load full content for notes with children
+            val notesById = allNotes.associateBy { it.id }
+            val topLevelNotes = allNotes.filter { it.parentNoteId == null }
+            val descendantsByRoot = allNotes
+                .filter { it.rootNoteId != null }
+                .groupBy { it.rootNoteId!! }
+
             topLevelNotes.map { note ->
-                async { reconstructNoteContent(note) }
-            }.awaitAll()
+                reconstructNoteContent(note, notesById, descendantsByRoot[note.id])
+            }
         }
     }.onFailure { Log.e(TAG, "Error loading notes with full content", it) }
 
     /**
-     * Reconstructs the full content of a note by loading its children.
-     * Returns the note with content = parent content + newline-separated child contents.
+     * Reconstructs full content from tree or flat structure.
+     * No additional queries needed — uses data already loaded.
      */
-    private suspend fun reconstructNoteContent(note: Note): Note {
-        if (note.containedNotes.isEmpty()) {
-            return note
+    private fun reconstructNoteContent(
+        note: Note,
+        allNotesById: Map<String, Note>,
+        treeDescendants: List<Note>?,
+    ): Note {
+        if (note.containedNotes.isEmpty()) return note
+
+        if (treeDescendants != null) {
+            val lines = flattenTreeToLines(note, treeDescendants)
+            return note.copy(content = lines.joinToString("\n") { it.content })
         }
 
-        val childContents = loadChildNotes(note.containedNotes)
+        // Old format: look up children from the loaded notes
         val fullContent = buildString {
             append(note.content)
-            for (childLine in childContents) {
+            for (childId in note.containedNotes) {
                 append('\n')
-                append(childLine.content)
+                if (childId.isNotEmpty()) {
+                    append(allNotesById[childId]?.content ?: "")
+                }
             }
         }
         return note.copy(content = fullContent)
     }
 
-    /**
-     * Loads all top-level notes for the current user (excludes children and deleted).
-     */
     suspend fun loadUserNotes(): Result<List<Note>> = runCatching {
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
@@ -290,9 +214,6 @@ class NoteRepository(
         }
     }.onFailure { Log.e(TAG, "Error loading notes", it) }
 
-    /**
-     * Loads all top-level notes for the current user, including deleted ones.
-     */
     suspend fun loadAllUserNotes(): Result<List<Note>> = runCatching {
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
@@ -309,10 +230,6 @@ class NoteRepository(
         }
     }.onFailure { Log.e(TAG, "Error loading all notes", it) }
 
-    /**
-     * Loads a single note by ID.
-     * Returns null if the note doesn't exist.
-     */
     suspend fun loadNoteById(noteId: String): Result<Note?> = runCatching {
         withContext(Dispatchers.IO) {
             requireUserId()
@@ -322,9 +239,6 @@ class NoteRepository(
         }
     }.onFailure { Log.e(TAG, "Error loading note by ID: $noteId", it) }
 
-    /**
-     * Checks if a note is deleted.
-     */
     suspend fun isNoteDeleted(noteId: String): Result<Boolean> = runCatching {
         withContext(Dispatchers.IO) {
             requireUserId()
@@ -335,31 +249,190 @@ class NoteRepository(
         }
     }.onFailure { Log.e(TAG, "Error checking note state", it) }
 
-    /**
-     * Soft-deletes a note by setting its state to "deleted".
-     */
-    suspend fun softDeleteNote(noteId: String): Result<Unit> = runCatching {
-        withContext(Dispatchers.IO) {
-            requireUserId()
-            noteRef(noteId).update(
-                mapOf("state" to "deleted", "updatedAt" to FieldValue.serverTimestamp())
-            ).await()
-            Unit
-        }
-    }.onFailure { Log.e(TAG, "Error soft-deleting note", it) }
+    // ── Save operations ─────────────────────────────────────────────────
 
     /**
-     * Restores a deleted note by clearing its state.
+     * Saves a note with tree structure derived from tab-indented lines.
+     *
+     * Computes parentNoteId and containedNotes from indentation, sets rootNoteId
+     * on all descendants, and strips tabs from stored content.
+     * Lazily migrates old-format notes to tree format.
+     *
+     * Returns a map of line indices to newly created note IDs.
+     *
+     * Note: Firestore transactions can read/write at most 500 documents.
+     * Notes with >500 descendants will fail. Add batched transaction support if needed.
      */
-    suspend fun undeleteNote(noteId: String): Result<Unit> = runCatching {
+    suspend fun saveNoteWithChildren(
+        noteId: String,
+        trackedLines: List<NoteLine>
+    ): Result<Map<Int, String>> = runCatching {
+        withContext(Dispatchers.IO) {
+            if (trackedLines.isEmpty()) return@withContext emptyMap()
+
+            val userId = requireUserId()
+            val parentRef = noteRef(noteId)
+            val rootContent = trackedLines[0].content.trimStart('\t')
+
+            // Drop trailing empty lines (editor's typing line)
+            val childPortion = trackedLines.drop(1).dropLastWhile { it.content.isEmpty() }
+            val linesToSave = listOf(trackedLines[0]) + childPortion
+
+            // Pre-allocate refs for new notes
+            val newRefs = mutableMapOf<Int, DocumentReference>()
+            for (i in 1 until linesToSave.size) {
+                val content = linesToSave[i].content.trimStart('\t')
+                if (linesToSave[i].noteId == null && content.isNotEmpty()) {
+                    newRefs[i] = newNoteRef()
+                }
+            }
+
+            fun effectiveId(lineIndex: Int): String = when {
+                lineIndex == 0 -> noteId
+                linesToSave[lineIndex].noteId != null -> linesToSave[lineIndex].noteId!!
+                else -> newRefs[lineIndex]?.id ?: ""
+            }
+
+            // Compute tree structure from indentation
+            val parentOfLine = IntArray(linesToSave.size)
+            val childrenOfLine = Array(linesToSave.size) { mutableListOf<String>() }
+
+            data class StackEntry(val depth: Int, val lineIndex: Int)
+            val stack = mutableListOf(StackEntry(0, 0))
+
+            for (i in 1 until linesToSave.size) {
+                val depth = linesToSave[i].content.takeWhile { it == '\t' }.length
+                val content = linesToSave[i].content.trimStart('\t')
+
+                while (stack.size > 1 && stack.last().depth >= depth) {
+                    stack.removeLast()
+                }
+                parentOfLine[i] = stack.last().lineIndex
+
+                if (content.isEmpty()) {
+                    childrenOfLine[parentOfLine[i]].add("")
+                } else {
+                    childrenOfLine[parentOfLine[i]].add(effectiveId(i))
+                    stack.add(StackEntry(depth, i))
+                }
+            }
+
+            // Fetch existing descendants for deletion tracking
+            val existingDescendantIds = fetchExistingDescendantIds(noteId)
+
+            val result = db.runTransaction { transaction ->
+                val survivingIds = mutableSetOf<String>()
+
+                // Update root
+                val rootData = baseNoteData(userId, rootContent).apply {
+                    put("containedNotes", childrenOfLine[0].toList())
+                }
+                transaction.set(parentRef, rootData, SetOptions.merge())
+
+                // Write each descendant
+                for (i in 1 until linesToSave.size) {
+                    val content = linesToSave[i].content.trimStart('\t')
+                    if (content.isEmpty()) continue // spacer
+
+                    val id = effectiveId(i)
+                    val parentId = effectiveId(parentOfLine[i])
+                    survivingIds.add(id)
+
+                    if (linesToSave[i].noteId != null) {
+                        transaction.set(
+                            noteRef(id),
+                            mapOf(
+                                "content" to content,
+                                "parentNoteId" to parentId,
+                                "rootNoteId" to noteId,
+                                "containedNotes" to childrenOfLine[i].toList(),
+                                "updatedAt" to FieldValue.serverTimestamp(),
+                            ),
+                            SetOptions.merge()
+                        )
+                    } else {
+                        transaction.set(
+                            newRefs[i]!!,
+                            hashMapOf(
+                                "userId" to userId,
+                                "content" to content,
+                                "parentNoteId" to parentId,
+                                "rootNoteId" to noteId,
+                                "containedNotes" to childrenOfLine[i].toList(),
+                                "createdAt" to FieldValue.serverTimestamp(),
+                                "updatedAt" to FieldValue.serverTimestamp(),
+                            )
+                        )
+                    }
+                }
+
+                // Soft-delete removed notes
+                for (id in existingDescendantIds - survivingIds) {
+                    transaction.update(
+                        noteRef(id),
+                        mapOf("state" to "deleted", "updatedAt" to FieldValue.serverTimestamp())
+                    )
+                }
+
+                newRefs.mapValues { it.value.id }
+            }.await()
+
+            result
+        }
+    }.onFailure { Log.e(TAG, "Error saving note", it) }
+
+    /**
+     * Fetches IDs of all existing descendants for deletion tracking.
+     * Tries tree query first (new format), falls back to containedNotes (old format).
+     */
+    private suspend fun fetchExistingDescendantIds(noteId: String): Set<String> {
+        val userId = requireUserId()
+        val descendants = notesCollection
+            .whereEqualTo("rootNoteId", noteId)
+            .whereEqualTo("userId", userId)
+            .get().await()
+
+        if (descendants.documents.isNotEmpty()) {
+            return descendants.documents
+                .filter { it.getString("state") != "deleted" }
+                .map { it.id }
+                .toSet()
+        }
+
+        // Old format fallback
+        val rootDoc = noteRef(noteId).get().await()
+        if (!rootDoc.exists()) return emptySet()
+
+        @Suppress("UNCHECKED_CAST")
+        val containedNotes = rootDoc.get("containedNotes") as? List<String> ?: emptyList()
+        return containedNotes.filter { it.isNotEmpty() }.toSet()
+    }
+
+    /**
+     * Saves a note with full multi-line content, properly handling child notes.
+     * Used for inline editing of notes within view directives.
+     */
+    suspend fun saveNoteWithFullContent(noteId: String, newContent: String): Result<Unit> = runCatching {
         withContext(Dispatchers.IO) {
             requireUserId()
-            noteRef(noteId).update(
-                mapOf("state" to null, "updatedAt" to FieldValue.serverTimestamp())
-            ).await()
+
+            // Load existing structure (tree-aware)
+            val existingLines = loadNoteWithChildren(noteId).getOrThrow()
+            // Remove trailing empty line that loadNoteWithChildren appends for the editor
+            val existingLinesNoTrailing = if (existingLines.size > 1 && existingLines.last().content.isEmpty()) {
+                existingLines.dropLast(1)
+            } else {
+                existingLines
+            }
+
+            val newLinesContent = newContent.lines()
+            val trackedLines = matchLinesToIds(noteId, existingLinesNoTrailing, newLinesContent)
+            saveNoteWithChildren(noteId, trackedLines).getOrThrow()
+
+            Log.d(TAG, "Saved note with full content: $noteId (${trackedLines.size} lines)")
             Unit
         }
-    }.onFailure { Log.e(TAG, "Error undeleting note", it) }
+    }.onFailure { Log.e(TAG, "Error saving note with full content", it) }
 
     /**
      * Creates a new empty note.
@@ -374,44 +447,168 @@ class NoteRepository(
     }.onFailure { Log.e(TAG, "Error creating note", it) }
 
     /**
-     * Creates a new multi-line note (parent + children) using a batch operation.
+     * Creates a new multi-line note with tree structure derived from indentation.
      */
     suspend fun createMultiLineNote(content: String): Result<String> = runCatching {
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             val lines = content.lines()
-            val firstLine = lines.firstOrNull() ?: ""
+            val firstLine = lines.firstOrNull()?.trimStart('\t') ?: ""
             val childLines = lines.drop(1)
 
-            val batch = db.batch()
+            if (childLines.isEmpty() || childLines.all { it.trimStart('\t').isEmpty() }) {
+                val ref = notesCollection.add(newNoteData(userId, firstLine)).await()
+                return@withContext ref.id
+            }
+
             val parentRef = newNoteRef()
 
-            val childIds = childLines.map { line ->
-                if (line.isNotEmpty()) {
-                    val childRef = newNoteRef()
-                    batch.set(childRef, newNoteData(userId, line, parentRef.id))
-                    childRef.id
+            // Two-pass: first compute tree structure with allocated refs, then write
+            data class NodeInfo(
+                val ref: DocumentReference,
+                val content: String,
+                val parentId: String,
+                val children: MutableList<String>,
+            )
+
+            val nodes = mutableListOf<NodeInfo>()
+            val rootChildren = mutableListOf<String>()
+
+            data class StackEntry(val depth: Int, val id: String, val children: MutableList<String>)
+            val stack = mutableListOf(StackEntry(0, parentRef.id, rootChildren))
+
+            for (i in 1 until lines.size) {
+                val depth = lines[i].takeWhile { it == '\t' }.length
+                val lineContent = lines[i].trimStart('\t')
+
+                while (stack.size > 1 && stack.last().depth >= depth) {
+                    stack.removeLast()
+                }
+                val parent = stack.last()
+
+                if (lineContent.isEmpty()) {
+                    parent.children.add("")
                 } else {
-                    ""
+                    val ref = newNoteRef()
+                    val nodeChildren = mutableListOf<String>()
+                    nodes.add(NodeInfo(ref, lineContent, parent.id, nodeChildren))
+                    parent.children.add(ref.id)
+                    stack.add(StackEntry(depth, ref.id, nodeChildren))
                 }
             }
 
-            val parentData = newNoteData(userId, firstLine).apply {
-                put("containedNotes", childIds)
-            }
-            batch.set(parentRef, parentData)
-            batch.commit().await()
+            val batch = db.batch()
 
+            batch.set(parentRef, newNoteData(userId, firstLine).apply {
+                put("containedNotes", rootChildren)
+            })
+
+            for (node in nodes) {
+                batch.set(node.ref, hashMapOf(
+                    "userId" to userId,
+                    "content" to node.content,
+                    "parentNoteId" to node.parentId,
+                    "rootNoteId" to parentRef.id,
+                    "containedNotes" to node.children.toList(),
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                ))
+            }
+
+            batch.commit().await()
             Log.d(TAG, "Multi-line note created with ID: ${parentRef.id}")
             parentRef.id
         }
     }.onFailure { Log.e(TAG, "Error creating multi-line note", it) }
 
+    // ── Delete/restore operations ───────────────────────────────────────
+
     /**
-     * Updates the lastAccessedAt timestamp for a note.
-     * Used to track recently accessed notes for the tabs bar.
-     * This is a fire-and-forget operation - failures are logged but don't block UI.
+     * Soft-deletes a note and all its descendants.
      */
+    suspend fun softDeleteNote(noteId: String): Result<Unit> = runCatching {
+        withContext(Dispatchers.IO) {
+            val userId = requireUserId()
+
+            val idsToDelete = mutableSetOf(noteId)
+
+            // New-format descendants
+            val descendants = notesCollection
+                .whereEqualTo("rootNoteId", noteId)
+                .whereEqualTo("userId", userId)
+                .get().await()
+            for (doc in descendants) {
+                idsToDelete.add(doc.id)
+            }
+
+            // Old-format fallback
+            if (descendants.isEmpty()) {
+                val rootDoc = noteRef(noteId).get().await()
+                if (rootDoc.exists()) {
+                    @Suppress("UNCHECKED_CAST")
+                    val containedNotes = rootDoc.get("containedNotes") as? List<String> ?: emptyList()
+                    for (childId in containedNotes) {
+                        if (childId.isNotEmpty()) idsToDelete.add(childId)
+                    }
+                }
+            }
+
+            val batch = db.batch()
+            for (id in idsToDelete) {
+                batch.update(
+                    noteRef(id),
+                    mapOf("state" to "deleted", "updatedAt" to FieldValue.serverTimestamp())
+                )
+            }
+            batch.commit().await()
+            Unit
+        }
+    }.onFailure { Log.e(TAG, "Error soft-deleting note", it) }
+
+    /**
+     * Restores a deleted note and all its descendants.
+     */
+    suspend fun undeleteNote(noteId: String): Result<Unit> = runCatching {
+        withContext(Dispatchers.IO) {
+            val userId = requireUserId()
+
+            val idsToRestore = mutableSetOf(noteId)
+
+            // Deleted descendants still have rootNoteId set
+            val descendants = notesCollection
+                .whereEqualTo("rootNoteId", noteId)
+                .whereEqualTo("userId", userId)
+                .get().await()
+            for (doc in descendants) {
+                idsToRestore.add(doc.id)
+            }
+
+            // Old-format fallback
+            if (descendants.isEmpty()) {
+                val rootDoc = noteRef(noteId).get().await()
+                if (rootDoc.exists()) {
+                    @Suppress("UNCHECKED_CAST")
+                    val containedNotes = rootDoc.get("containedNotes") as? List<String> ?: emptyList()
+                    for (childId in containedNotes) {
+                        if (childId.isNotEmpty()) idsToRestore.add(childId)
+                    }
+                }
+            }
+
+            val batch = db.batch()
+            for (id in idsToRestore) {
+                batch.update(
+                    noteRef(id),
+                    mapOf("state" to null, "updatedAt" to FieldValue.serverTimestamp())
+                )
+            }
+            batch.commit().await()
+            Unit
+        }
+    }.onFailure { Log.e(TAG, "Error undeleting note", it) }
+
+    // ── Utility operations ──────────────────────────────────────────────
+
     suspend fun updateLastAccessed(noteId: String): Result<Unit> = runCatching {
         withContext(Dispatchers.IO) {
             requireUserId()
@@ -422,86 +619,8 @@ class NoteRepository(
     }.onFailure { Log.e(TAG, "Error updating lastAccessedAt", it) }
 
     /**
-     * Saves a note with full multi-line content, properly handling child notes.
-     * Used for inline editing of notes within view directives.
-     *
-     * This function:
-     * 1. Loads the existing note structure (parent + children)
-     * 2. Maps new lines to existing child note IDs using content matching
-     * 3. Creates, updates, or deletes child notes as needed
-     *
-     * @param noteId The ID of the note to update
-     * @param newContent The new full content (may be multi-line)
-     * @return Result indicating success or failure
-     */
-    suspend fun saveNoteWithFullContent(noteId: String, newContent: String): Result<Unit> = runCatching {
-        withContext(Dispatchers.IO) {
-            requireUserId()
-
-            Log.d(TAG, "saveNoteWithFullContent: START noteId=$noteId")
-            Log.d(TAG, "saveNoteWithFullContent: newContent has ${newContent.lines().size} lines, first line='${newContent.lines().firstOrNull()}'")
-
-            // Load existing note to get current structure
-            val existingNote = loadNoteById(noteId).getOrNull()
-                ?: throw IllegalStateException("Note not found: $noteId")
-
-            Log.d(TAG, "saveNoteWithFullContent: existingNote.content='${existingNote.content}', containedNotes=${existingNote.containedNotes.size}")
-
-            // Build tracked lines from existing structure
-            val existingLines = buildExistingLines(noteId, existingNote)
-            Log.d(TAG, "saveNoteWithFullContent: existingLines=${existingLines.size}, first='${existingLines.firstOrNull()?.content}'")
-
-            // Split new content into lines
-            val newLinesContent = newContent.lines()
-            Log.d(TAG, "saveNoteWithFullContent: newLinesContent=${newLinesContent.size}, lines=${newLinesContent.take(3)}")
-
-            // Match new lines to existing IDs (NoteLineTracker algorithm)
-            val trackedLines = matchLinesToIds(noteId, existingLines, newLinesContent)
-            Log.d(TAG, "saveNoteWithFullContent: trackedLines=${trackedLines.size}, first='${trackedLines.firstOrNull()?.content}', firstId=${trackedLines.firstOrNull()?.noteId}")
-
-            // Save using existing saveNoteWithChildren logic
-            saveNoteWithChildren(noteId, trackedLines).getOrThrow()
-
-            Log.d(TAG, "Saved note with full content: $noteId (${trackedLines.size} lines)")
-
-            // Verify what was saved by reloading (debug only)
-            val verifyNote = loadNoteById(noteId).getOrNull()
-            val verifyChildren = if (verifyNote?.containedNotes?.isNotEmpty() == true) {
-                loadChildNotes(verifyNote.containedNotes)
-            } else emptyList()
-            Log.d(TAG, "saveNoteWithFullContent: VERIFY after save - parent content='${verifyNote?.content}', children=${verifyChildren.size}")
-            if (verifyChildren.isNotEmpty()) {
-                verifyChildren.forEachIndexed { idx, child ->
-                    Log.d(TAG, "saveNoteWithFullContent: VERIFY child $idx: '${child.content}'")
-                }
-            }
-
-            Unit
-        }
-    }.onFailure { Log.e(TAG, "Error saving note with full content", it) }
-
-    /**
-     * Builds a list of NoteLines from an existing note's structure.
-     */
-    private suspend fun buildExistingLines(noteId: String, note: Note): List<NoteLine> {
-        val lines = mutableListOf<NoteLine>()
-
-        // First line is the parent
-        lines.add(NoteLine(note.content, noteId))
-
-        // Load child notes if any
-        if (note.containedNotes.isNotEmpty()) {
-            val childLines = loadChildNotes(note.containedNotes)
-            lines.addAll(childLines)
-        }
-
-        return lines
-    }
-
-    /**
-     * Matches new line content to existing note IDs using a two-phase algorithm:
-     * 1. Exact content matches (preserves IDs when lines are reordered)
-     * 2. Positional fallback (for modified lines)
+     * Two-phase line matching: exact content match first, then positional fallback.
+     * Preserves note IDs across edits for alarm/DSL reference stability.
      */
     private fun matchLinesToIds(
         parentNoteId: String,
@@ -514,7 +633,6 @@ class NoteRepository(
             }
         }
 
-        // Map content to list of indices in existing lines
         val contentToOldIndices = mutableMapOf<String, MutableList<Int>>()
         existingLines.forEachIndexed { index, line ->
             contentToOldIndices.getOrPut(line.content) { mutableListOf() }.add(index)
@@ -534,7 +652,7 @@ class NoteRepository(
         }
 
         // Phase 2: Positional matches for modifications
-        newLinesContent.forEachIndexed { index, content ->
+        newLinesContent.forEachIndexed { index, _ ->
             if (newIds[index] == null) {
                 if (index < existingLines.size && !oldConsumed[index]) {
                     newIds[index] = existingLines[index].noteId
@@ -547,7 +665,6 @@ class NoteRepository(
             NoteLine(content, newIds[index])
         }.toMutableList()
 
-        // Ensure first line always has parent ID
         if (trackedLines.isNotEmpty() && trackedLines[0].noteId != parentNoteId) {
             trackedLines[0] = trackedLines[0].copy(noteId = parentNoteId)
         }

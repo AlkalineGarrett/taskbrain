@@ -18,6 +18,7 @@ function note(overrides: Partial<Note> & { id: string }): Note {
     containedNotes: [],
     state: null,
     path: '',
+    rootNoteId: null,
     ...overrides,
   }
 }

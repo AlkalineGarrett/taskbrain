@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { NoteRepository } from '../../data/NoteRepository'
+import { NoteRepository, matchLinesToIds } from '../../data/NoteRepository'
 import type { Firestore, DocumentReference } from 'firebase/firestore'
 import type { Auth } from 'firebase/auth'
+import type { NoteLine } from '../../data/Note'
 
 // Mock firebase/firestore
 vi.mock('firebase/firestore', () => {
@@ -66,6 +67,11 @@ function mockDocumentMultiple(docs: Map<string, Record<string, unknown> | null>)
   })
 }
 
+/** Mock getDocs to return empty results (no tree-format descendants). */
+function mockEmptyTreeQuery() {
+  vi.mocked(mockGetDocs).mockResolvedValue({ docs: [], empty: true } as any)
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
 
@@ -75,6 +81,9 @@ beforeEach(() => {
   } as unknown as Auth
 
   vi.mocked(mockCollection).mockReturnValue('notesCollection' as any)
+
+  // Default: no tree-format descendants
+  mockEmptyTreeQuery()
 
   repository = new NoteRepository(mockDb, mockAuth)
 })
@@ -153,7 +162,7 @@ describe('NoteRepository', () => {
       expect(lines[1]!.noteId).toBeNull()
     })
 
-    it('returns parent and children in order with trailing empty line', async () => {
+    it('returns parent and children in order with trailing empty line (old format)', async () => {
       const docs = new Map<string, Record<string, unknown>>([
         ['parent', { content: 'Parent', containedNotes: ['child_1', 'child_2'] }],
         ['child_1', { content: 'Child 1' }],
@@ -171,7 +180,7 @@ describe('NoteRepository', () => {
       ])
     })
 
-    it('treats empty child IDs as spacers', async () => {
+    it('treats empty child IDs as spacers (old format)', async () => {
       const docs = new Map<string, Record<string, unknown>>([
         ['parent', { content: 'Parent', containedNotes: ['', 'child_1', ''] }],
         ['child_1', { content: 'Child' }],
@@ -208,7 +217,8 @@ describe('NoteRepository', () => {
   })
 
   describe('loadNotesWithFullContent', () => {
-    it('reconstructs content from children', async () => {
+    it('reconstructs content from children (old format)', async () => {
+      // getDocs returns ALL user notes — parent and children
       vi.mocked(mockGetDocs).mockResolvedValue({
         docs: [
           {
@@ -218,14 +228,22 @@ describe('NoteRepository', () => {
               containedNotes: ['child_1', 'child_2'],
             }),
           },
+          {
+            id: 'child_1',
+            data: () => ({
+              content: 'Second line',
+              parentNoteId: 'parent_note',
+            }),
+          },
+          {
+            id: 'child_2',
+            data: () => ({
+              content: 'Third line',
+              parentNoteId: 'parent_note',
+            }),
+          },
         ],
       } as any)
-
-      const docs = new Map<string, Record<string, unknown>>([
-        ['child_1', { content: 'Second line' }],
-        ['child_2', { content: 'Third line' }],
-      ])
-      mockDocumentMultiple(docs)
 
       const notes = await repository.loadNotesWithFullContent()
 
@@ -283,13 +301,10 @@ describe('NoteRepository', () => {
     })
 
     it('creates new child notes and returns their IDs', async () => {
-      let docCallCount = 0
       vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
         if (args.length === 1) {
-          // auto-generated ref for new child
           return { id: 'new_child' } as any
         }
-        docCallCount++
         return { id: args[args.length - 1] } as any
       })
 
@@ -307,7 +322,7 @@ describe('NoteRepository', () => {
 
       const result = await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
-        { content: 'New child', noteId: null },
+        { content: '\tNew child', noteId: null },
       ])
 
       expect(result.get(1)).toBe('new_child')
@@ -333,7 +348,7 @@ describe('NoteRepository', () => {
 
       const result = await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
-        { content: 'Child content', noteId: null },
+        { content: '\tChild content', noteId: null },
         { content: '', noteId: null }, // Trailing empty line should be dropped
       ])
 
@@ -361,7 +376,7 @@ describe('NoteRepository', () => {
 
       const result = await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
-        { content: 'Child', noteId: null },
+        { content: '\tChild', noteId: null },
         { content: '', noteId: null },
         { content: '', noteId: null },
         { content: '', noteId: null },
@@ -391,7 +406,7 @@ describe('NoteRepository', () => {
 
       const result = await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
-        { content: '   ', noteId: null }, // Whitespace-only should create child
+        { content: '\t   ', noteId: null }, // Tab + whitespace — whitespace is content
       ])
 
       expect(result.get(1)).toBe('new_child')
@@ -472,4 +487,319 @@ describe('NoteRepository', () => {
   })
 
   // endregion
+
+  // region Tree-Format Load Tests
+
+  describe('loadNoteWithChildren - tree format', () => {
+    it('loads flat children via tree query', async () => {
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
+        const id = args.length > 1 ? args[args.length - 1] : `auto`
+        return { id } as DocumentReference
+      })
+      vi.mocked(mockGetDoc).mockResolvedValue({
+        exists: () => true,
+        data: () => ({ content: 'Root', containedNotes: ['c1', 'c2'] }),
+        id: 'root',
+      } as any)
+      vi.mocked(mockGetDocs).mockResolvedValue({
+        docs: [
+          { id: 'c1', data: () => ({ content: 'Child 1', containedNotes: [], rootNoteId: 'root' }) },
+          { id: 'c2', data: () => ({ content: 'Child 2', containedNotes: [], rootNoteId: 'root' }) },
+        ],
+        empty: false,
+      } as any)
+
+      const lines = await repository.loadNoteWithChildren('root')
+
+      expect(lines).toEqual([
+        { content: 'Root', noteId: 'root' },
+        { content: 'Child 1', noteId: 'c1' },
+        { content: 'Child 2', noteId: 'c2' },
+        { content: '', noteId: null },
+      ])
+    })
+
+    it('loads nested tree with tabs from depth', async () => {
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
+        const id = args.length > 1 ? args[args.length - 1] : `auto`
+        return { id } as DocumentReference
+      })
+      vi.mocked(mockGetDoc).mockResolvedValue({
+        exists: () => true,
+        data: () => ({ content: 'Root', containedNotes: ['a'] }),
+        id: 'root',
+      } as any)
+      vi.mocked(mockGetDocs).mockResolvedValue({
+        docs: [
+          { id: 'a', data: () => ({ content: 'A', containedNotes: ['b'], rootNoteId: 'root' }) },
+          { id: 'b', data: () => ({ content: 'B', containedNotes: [], rootNoteId: 'root' }) },
+        ],
+        empty: false,
+      } as any)
+
+      const lines = await repository.loadNoteWithChildren('root')
+
+      expect(lines).toEqual([
+        { content: 'Root', noteId: 'root' },
+        { content: 'A', noteId: 'a' },
+        { content: '\tB', noteId: 'b' },
+        { content: '', noteId: null },
+      ])
+    })
+
+    it('filters deleted descendants in tree query', async () => {
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
+        const id = args.length > 1 ? args[args.length - 1] : `auto`
+        return { id } as DocumentReference
+      })
+      vi.mocked(mockGetDoc).mockResolvedValue({
+        exists: () => true,
+        data: () => ({ content: 'Root', containedNotes: ['c1', 'c2'] }),
+        id: 'root',
+      } as any)
+      vi.mocked(mockGetDocs).mockResolvedValue({
+        docs: [
+          { id: 'c1', data: () => ({ content: 'Alive', containedNotes: [], rootNoteId: 'root' }) },
+          { id: 'c2', data: () => ({ content: 'Dead', containedNotes: [], rootNoteId: 'root', state: 'deleted' }) },
+        ],
+        empty: false,
+      } as any)
+
+      const lines = await repository.loadNoteWithChildren('root')
+
+      expect(lines).toHaveLength(3)
+      expect(lines[0]).toEqual({ content: 'Root', noteId: 'root' })
+      expect(lines[1]).toEqual({ content: 'Alive', noteId: 'c1' })
+      expect(lines[2]).toEqual({ content: '', noteId: null })
+    })
+  })
+
+  describe('loadNotesWithFullContent - tree format', () => {
+    it('reconstructs content from tree descendants', async () => {
+      vi.mocked(mockGetDocs).mockResolvedValue({
+        docs: [
+          {
+            id: 'root',
+            data: () => ({ content: 'Root', containedNotes: ['a'] }),
+          },
+          {
+            id: 'a',
+            data: () => ({ content: 'A', containedNotes: ['b'], parentNoteId: 'root', rootNoteId: 'root' }),
+          },
+          {
+            id: 'b',
+            data: () => ({ content: 'B', containedNotes: [], parentNoteId: 'a', rootNoteId: 'root' }),
+          },
+        ],
+      } as any)
+
+      const notes = await repository.loadNotesWithFullContent()
+
+      expect(notes).toHaveLength(1)
+      expect(notes[0]!.id).toBe('root')
+      expect(notes[0]!.content).toBe('Root\nA\n\tB')
+    })
+  })
+
+  // endregion
+
+  // region Nested Save Tests
+
+  describe('saveNoteWithChildren - nested', () => {
+    it('saves nested tree structure', async () => {
+      let refIdx = 0
+      const childIds = ['child_a', 'child_b']
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
+        if (args.length === 1) return { id: childIds[refIdx++] } as any
+        return { id: args[args.length - 1] } as any
+      })
+
+      vi.mocked(mockRunTransaction).mockImplementation(async (_db, fn) => {
+        const transaction = {
+          get: vi.fn().mockResolvedValue({ exists: () => false, data: () => ({}) }),
+          set: vi.fn(),
+          update: vi.fn(),
+        }
+        return fn(transaction as any)
+      })
+
+      const result = await repository.saveNoteWithChildren('root', [
+        { content: 'Root', noteId: 'root' },
+        { content: '\tA', noteId: null },
+        { content: '\t\tB', noteId: null },
+      ])
+
+      expect(result.get(1)).toBe('child_a')
+      expect(result.get(2)).toBe('child_b')
+    })
+
+    it('returns empty map for empty lines', async () => {
+      const result = await repository.saveNoteWithChildren('note_1', [])
+
+      expect(result.size).toBe(0)
+    })
+  })
+
+  // endregion
+
+  // region Delete/Restore Tests
+
+  describe('softDeleteNote', () => {
+    it('deletes root and new-format descendants', async () => {
+      vi.mocked(mockGetDocs).mockResolvedValue({
+        docs: [
+          { id: 'child_1', data: () => ({}) },
+          { id: 'child_2', data: () => ({}) },
+        ],
+        empty: false,
+      } as any)
+      const batch = { update: vi.fn(), commit: vi.fn().mockResolvedValue(undefined) }
+      vi.mocked(mockWriteBatch).mockReturnValue(batch as any)
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
+        return { id: args[args.length - 1] } as any
+      })
+
+      await repository.softDeleteNote('note_1')
+
+      // root + 2 children
+      expect(batch.update).toHaveBeenCalledTimes(3)
+    })
+
+    it('deletes root and old-format children', async () => {
+      vi.mocked(mockGetDocs).mockResolvedValue({ docs: [], empty: true } as any)
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
+        return { id: args[args.length - 1] } as any
+      })
+      vi.mocked(mockGetDoc).mockResolvedValue({
+        exists: () => true,
+        data: () => ({ containedNotes: ['old_1', '', 'old_2'] }),
+      } as any)
+      const batch = { update: vi.fn(), commit: vi.fn().mockResolvedValue(undefined) }
+      vi.mocked(mockWriteBatch).mockReturnValue(batch as any)
+
+      await repository.softDeleteNote('note_1')
+
+      // root + 2 non-empty children (empty string is spacer)
+      expect(batch.update).toHaveBeenCalledTimes(3)
+    })
+
+    it('deletes only root when no descendants', async () => {
+      vi.mocked(mockGetDocs).mockResolvedValue({ docs: [], empty: true } as any)
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
+        return { id: args[args.length - 1] } as any
+      })
+      vi.mocked(mockGetDoc).mockResolvedValue({
+        exists: () => true,
+        data: () => ({ containedNotes: [] }),
+      } as any)
+      const batch = { update: vi.fn(), commit: vi.fn().mockResolvedValue(undefined) }
+      vi.mocked(mockWriteBatch).mockReturnValue(batch as any)
+
+      await repository.softDeleteNote('note_1')
+
+      expect(batch.update).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('undeleteNote', () => {
+    it('restores root and new-format descendants', async () => {
+      vi.mocked(mockGetDocs).mockResolvedValue({
+        docs: [
+          { id: 'child_1', data: () => ({}) },
+          { id: 'child_2', data: () => ({}) },
+        ],
+        empty: false,
+      } as any)
+      const batch = { update: vi.fn(), commit: vi.fn().mockResolvedValue(undefined) }
+      vi.mocked(mockWriteBatch).mockReturnValue(batch as any)
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
+        return { id: args[args.length - 1] } as any
+      })
+
+      await repository.undeleteNote('note_1')
+
+      expect(batch.update).toHaveBeenCalledTimes(3)
+    })
+
+    it('restores root and old-format children', async () => {
+      vi.mocked(mockGetDocs).mockResolvedValue({ docs: [], empty: true } as any)
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
+        return { id: args[args.length - 1] } as any
+      })
+      vi.mocked(mockGetDoc).mockResolvedValue({
+        exists: () => true,
+        data: () => ({ containedNotes: ['old_1', 'old_2'] }),
+      } as any)
+      const batch = { update: vi.fn(), commit: vi.fn().mockResolvedValue(undefined) }
+      vi.mocked(mockWriteBatch).mockReturnValue(batch as any)
+
+      await repository.undeleteNote('note_1')
+
+      expect(batch.update).toHaveBeenCalledTimes(3)
+    })
+  })
+
+  // endregion
 })
+
+// region matchLinesToIds Tests
+
+describe('matchLinesToIds', () => {
+  it('assigns parentNoteId to first line when no existing lines', () => {
+    const result = matchLinesToIds('parent', [], ['Line 1', '\tLine 2'])
+
+    expect(result).toEqual([
+      { content: 'Line 1', noteId: 'parent' },
+      { content: '\tLine 2', noteId: null },
+    ])
+  })
+
+  it('matches lines by exact content first', () => {
+    const existing: NoteLine[] = [
+      { content: 'Root', noteId: 'root' },
+      { content: '\tChild A', noteId: 'a' },
+      { content: '\tChild B', noteId: 'b' },
+    ]
+
+    const result = matchLinesToIds('root', existing, ['Root', '\tChild B', '\tChild A'])
+
+    expect(result[0]!.noteId).toBe('root')
+    expect(result[1]!.noteId).toBe('b')
+    expect(result[2]!.noteId).toBe('a')
+  })
+
+  it('falls back to positional matching for modified lines', () => {
+    const existing: NoteLine[] = [
+      { content: 'Root', noteId: 'root' },
+      { content: '\tOld content', noteId: 'child' },
+    ]
+
+    const result = matchLinesToIds('root', existing, ['Root', '\tNew content'])
+
+    expect(result[0]!.noteId).toBe('root')
+    expect(result[1]!.noteId).toBe('child')
+  })
+
+  it('ensures first line always has parentNoteId', () => {
+    const existing: NoteLine[] = [
+      { content: 'Root', noteId: 'other_id' },
+    ]
+
+    const result = matchLinesToIds('parent', existing, ['Root'])
+
+    expect(result[0]!.noteId).toBe('parent')
+  })
+
+  it('assigns null to new lines without matches', () => {
+    const existing: NoteLine[] = [
+      { content: 'Root', noteId: 'root' },
+    ]
+
+    const result = matchLinesToIds('root', existing, ['Root', '\tBrand new line'])
+
+    expect(result[0]!.noteId).toBe('root')
+    expect(result[1]!.noteId).toBeNull()
+  })
+})
+
+// endregion

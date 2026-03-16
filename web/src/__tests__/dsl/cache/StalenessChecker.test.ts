@@ -22,6 +22,7 @@ function makeNote(id: string, content = 'Note content', path = `path/${id}`): No
     containedNotes: [],
     state: null,
     path,
+    rootNoteId: null,
   }
 }
 

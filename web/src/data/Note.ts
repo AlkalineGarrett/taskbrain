@@ -14,6 +14,8 @@ export interface Note {
   state: string | null
   /** Unique path identifier for this note (URL-safe: alphanumeric, -, _, /). */
   path: string
+  /** Root note ID for tree queries. Null for root notes, set on all descendants. */
+  rootNoteId: string | null
 }
 
 export interface NoteLine {
@@ -34,5 +36,6 @@ export function noteFromFirestore(id: string, data: Record<string, unknown>): No
     containedNotes: (data.containedNotes as string[]) ?? [],
     state: (data.state as string) ?? null,
     path: (data.path as string) ?? '',
+    rootNoteId: (data.rootNoteId as string) ?? null,
   }
 }

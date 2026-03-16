@@ -26,6 +26,7 @@ function makeNote(id: string, overrides: Partial<Note> = {}): Note {
     containedNotes: [],
     state: null,
     path: `path/${id}`,
+    rootNoteId: null,
     ...overrides,
   }
 }

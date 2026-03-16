@@ -16,4 +16,6 @@ data class Note(
     val state: String? = null,
     /** Unique path identifier for this note (URL-safe: alphanumeric, -, _, /). */
     val path: String = "",
+    /** Root note ID for tree queries. Null for root notes, set on all descendants. */
+    val rootNoteId: String? = null,
 )

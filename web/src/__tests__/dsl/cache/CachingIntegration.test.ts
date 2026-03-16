@@ -22,6 +22,7 @@ function makeNote(id: string, content = 'Content', path = `path/${id}`): Note {
     containedNotes: [],
     state: null,
     path,
+    rootNoteId: null,
   }
 }
 
