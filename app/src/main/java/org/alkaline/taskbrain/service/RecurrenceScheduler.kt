@@ -118,7 +118,9 @@ class RecurrenceScheduler(
 
         val baseTime = alarm.dueTime?.toDate() ?: return
 
-        createNextInstance(recurring, baseTime)
+        // Pass triggering alarm ID so cleanup doesn't cancel it — it's still active
+        // (a pre-due stage like notification may have triggered this)
+        createNextInstance(recurring, baseTime, triggeringAlarmId = alarm.id)
     }
 
     /**
@@ -126,8 +128,14 @@ class RecurrenceScheduler(
      *
      * @param recurring The recurring alarm template
      * @param afterDate The reference date to compute the next occurrence from
+     * @param triggeringAlarmId Optional ID of the alarm that triggered this creation
+     *   (e.g., when a pre-due stage fires). This alarm won't be cleaned up as orphaned.
      */
-    private suspend fun createNextInstance(recurring: RecurringAlarm, afterDate: Date) {
+    private suspend fun createNextInstance(
+        recurring: RecurringAlarm,
+        afterDate: Date,
+        triggeringAlarmId: String? = null
+    ) {
         val nextBaseTime = computeNextBaseTime(recurring, afterDate) ?: return
 
         val alarm = buildAlarmFromTemplate(recurring, nextBaseTime)
@@ -151,7 +159,11 @@ class RecurrenceScheduler(
 
         // Clean up orphaned instances: cancel PendingIntents and mark as cancelled
         // for any other PENDING instances of this recurring alarm.
-        cleanUpOrphanedInstances(recurring.id, alarmId)
+        val protectedIds = buildSet {
+            add(alarmId)
+            triggeringAlarmId?.let { add(it) }
+        }
+        cleanUpOrphanedInstances(recurring.id, protectedIds)
 
         AlarmUpdateEvent.notifyAlarmUpdated()
         Log.d(TAG, "Created next instance $alarmId for recurring alarm ${recurring.id}")
@@ -161,14 +173,17 @@ class RecurrenceScheduler(
      * Finds and deactivates orphaned PENDING instances for a recurring alarm.
      * Orphans can occur if multiple stages fire for the same alarm, each triggering
      * [onFixedInstanceTriggered] before the deduplication guard was added.
+     *
+     * @param protectedAlarmIds IDs to skip — includes the newly created instance and
+     *   optionally the triggering alarm (which may still be active if a pre-due stage fired).
      */
-    private suspend fun cleanUpOrphanedInstances(recurringAlarmId: String, currentAlarmId: String) {
+    private suspend fun cleanUpOrphanedInstances(recurringAlarmId: String, protectedAlarmIds: Set<String>) {
         val pendingInstances = alarmRepo.getPendingInstancesForRecurring(recurringAlarmId)
             .onFailure { showError("Failed to query orphaned instances for recurring alarm $recurringAlarmId: ${it.message}") }
             .getOrNull() ?: return
 
         for (instance in pendingInstances) {
-            if (instance.id == currentAlarmId) continue
+            if (instance.id in protectedAlarmIds) continue
             Log.w(TAG, "Cleaning up orphaned instance ${instance.id} for recurring alarm $recurringAlarmId")
             alarmScheduler.cancelAlarm(instance.id)
             urgentStateManager.exitUrgentState(instance.id)

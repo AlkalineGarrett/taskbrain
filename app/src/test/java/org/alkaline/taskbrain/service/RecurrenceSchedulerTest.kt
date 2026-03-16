@@ -230,9 +230,10 @@ class RecurrenceSchedulerTest {
         coEvery { mockAlarmRepo.createAlarm(any()) } returns Result.success("alarm2")
         coEvery { mockAlarmRepo.getAlarm("alarm2") } returns
                 Result.success(createAlarmInstance("alarm2", dueTime = Timestamp(dayAfterDate)))
-        // Return both the new instance and an orphan
+        // Return the triggering alarm, the new instance, and an orphan
         coEvery { mockAlarmRepo.getPendingInstancesForRecurring("recurring1") } returns
                 Result.success(listOf(
+                    triggeredAlarm,
                     createAlarmInstance("alarm2", dueTime = Timestamp(dayAfterDate)),
                     orphan
                 ))
@@ -246,6 +247,36 @@ class RecurrenceSchedulerTest {
         coVerify(exactly = 1) { mockAlarmRepo.markCancelled("orphan1") }
 
         // Current instance should NOT be cleaned up
+        verify(exactly = 0) { mockAlarmScheduler.cancelAlarm("alarm2") }
+        coVerify(exactly = 0) { mockAlarmRepo.markCancelled("alarm2") }
+
+        // Triggering alarm should NOT be cleaned up (it's still active, pre-due stage fired)
+        verify(exactly = 0) { mockAlarmScheduler.cancelAlarm("alarm1") }
+        coVerify(exactly = 0) { mockAlarmRepo.markCancelled("alarm1") }
+    }
+
+    @Test
+    fun `pre-due stage trigger does not cancel the triggering alarm`() = runTest {
+        val recurring = createDailyRecurring(currentAlarmId = "alarm1")
+        val triggeredAlarm = createAlarmInstance("alarm1")
+
+        coEvery { mockRecurringRepo.get("recurring1") } returns Result.success(recurring)
+        coEvery { mockAlarmRepo.createAlarm(any()) } returns Result.success("alarm2")
+        coEvery { mockAlarmRepo.getAlarm("alarm2") } returns
+                Result.success(createAlarmInstance("alarm2", dueTime = Timestamp(dayAfterDate)))
+        // The triggering alarm is still pending (notification stage fired before due time)
+        coEvery { mockAlarmRepo.getPendingInstancesForRecurring("recurring1") } returns
+                Result.success(listOf(
+                    triggeredAlarm,
+                    createAlarmInstance("alarm2", dueTime = Timestamp(dayAfterDate))
+                ))
+
+        scheduler.onFixedInstanceTriggered(triggeredAlarm)
+
+        // Triggering alarm must NOT be cancelled — it's still active
+        verify(exactly = 0) { mockAlarmScheduler.cancelAlarm("alarm1") }
+        coVerify(exactly = 0) { mockAlarmRepo.markCancelled("alarm1") }
+        // Next instance should not be cancelled either
         verify(exactly = 0) { mockAlarmScheduler.cancelAlarm("alarm2") }
         coVerify(exactly = 0) { mockAlarmRepo.markCancelled("alarm2") }
     }
@@ -285,6 +316,113 @@ class RecurrenceSchedulerTest {
 
         // Total: exactly 2 alarm records created (first instance + one next instance)
         coVerify(exactly = 2) { mockAlarmRepo.createAlarm(any()) }
+    }
+
+    // endregion
+
+    // region multi-stage timeline scenarios
+    //
+    // These tests model realistic alarm timelines where multiple stages fire at
+    // different times before due. The key invariant: mock query results must reflect
+    // what Firestore would actually return given the current state of the data,
+    // not just the "expected" result.
+
+    @Test
+    fun `notification then lock screen then due - alarm stays pending throughout`() = runTest {
+        // Alarm due at 9 AM, notification at 7 AM (-2h), lock screen at 8:30 AM (-30min)
+        val recurring = createDailyRecurring(currentAlarmId = "alarm1")
+        val todayAlarm = createAlarmInstance("alarm1")
+
+        // --- Stage 1: Notification fires at 7 AM (2h before due) ---
+        coEvery { mockRecurringRepo.get("recurring1") } returns Result.success(recurring)
+        coEvery { mockAlarmRepo.createAlarm(any()) } returns Result.success("alarm2")
+        coEvery { mockAlarmRepo.getAlarm("alarm2") } returns
+                Result.success(createAlarmInstance("alarm2", dueTime = Timestamp(dayAfterDate)))
+        // Firestore state: alarm1 (PENDING) + alarm2 (PENDING, just created)
+        coEvery { mockAlarmRepo.getPendingInstancesForRecurring("recurring1") } returns
+                Result.success(listOf(todayAlarm, createAlarmInstance("alarm2", dueTime = Timestamp(dayAfterDate))))
+
+        scheduler.onFixedInstanceTriggered(todayAlarm)
+
+        // alarm1 must NOT be cancelled
+        coVerify(exactly = 0) { mockAlarmRepo.markCancelled("alarm1") }
+        // alarm2 must NOT be cancelled
+        coVerify(exactly = 0) { mockAlarmRepo.markCancelled("alarm2") }
+
+        // --- Stage 2: Lock screen fires at 8:30 AM (30min before due) ---
+        // recurring template now points to alarm2 as currentAlarmId
+        val updatedRecurring = recurring.copy(currentAlarmId = "alarm2")
+        coEvery { mockRecurringRepo.get("recurring1") } returns Result.success(updatedRecurring)
+
+        // Dedup guard: currentAlarmId (alarm2) != triggered alarm (alarm1) → skip
+        scheduler.onFixedInstanceTriggered(todayAlarm)
+
+        // No additional alarm created
+        coVerify(exactly = 1) { mockAlarmRepo.createAlarm(any()) }
+        // alarm1 still not cancelled
+        coVerify(exactly = 0) { mockAlarmRepo.markCancelled("alarm1") }
+
+        // --- Stage 3: Due time fires at 9 AM ---
+        scheduler.onFixedInstanceTriggered(todayAlarm)
+
+        // Still no additional alarm created, alarm1 still not cancelled
+        coVerify(exactly = 1) { mockAlarmRepo.createAlarm(any()) }
+        coVerify(exactly = 0) { mockAlarmRepo.markCancelled("alarm1") }
+    }
+
+    @Test
+    fun `user completes alarm after pre-due stages fired`() = runTest {
+        // Notification already triggered → next instance created → user marks done
+        val recurring = createDailyRecurring(currentAlarmId = "alarm1")
+        val todayAlarm = createAlarmInstance("alarm1")
+
+        // Pre-due stage fires, creates alarm2
+        coEvery { mockRecurringRepo.get("recurring1") } returns Result.success(recurring)
+        coEvery { mockAlarmRepo.createAlarm(any()) } returns Result.success("alarm2")
+        coEvery { mockAlarmRepo.getAlarm("alarm2") } returns
+                Result.success(createAlarmInstance("alarm2", dueTime = Timestamp(dayAfterDate)))
+        coEvery { mockAlarmRepo.getPendingInstancesForRecurring("recurring1") } returns
+                Result.success(listOf(todayAlarm, createAlarmInstance("alarm2", dueTime = Timestamp(dayAfterDate))))
+
+        scheduler.onFixedInstanceTriggered(todayAlarm)
+
+        // Now user marks alarm1 as done — onInstanceCompleted should NOT create another instance
+        // since alarm2 already exists (currentAlarmId = "alarm2")
+        val updatedRecurring = recurring.copy(currentAlarmId = "alarm2")
+        coEvery { mockRecurringRepo.get("recurring1") } returns Result.success(updatedRecurring)
+
+        scheduler.onInstanceCompleted(todayAlarm)
+
+        // Completion recorded
+        coVerify(exactly = 1) { mockRecurringRepo.recordCompletion(eq("recurring1"), any()) }
+        // Only one alarm created total (alarm2 from the trigger, not a second from completion)
+        coVerify(exactly = 1) { mockAlarmRepo.createAlarm(any()) }
+    }
+
+    @Test
+    fun `user cancels alarm after pre-due stages fired`() = runTest {
+        // Same scenario but user cancels instead of completing
+        val recurring = createDailyRecurring(currentAlarmId = "alarm1")
+        val todayAlarm = createAlarmInstance("alarm1")
+
+        // Pre-due stage fires, creates alarm2
+        coEvery { mockRecurringRepo.get("recurring1") } returns Result.success(recurring)
+        coEvery { mockAlarmRepo.createAlarm(any()) } returns Result.success("alarm2")
+        coEvery { mockAlarmRepo.getAlarm("alarm2") } returns
+                Result.success(createAlarmInstance("alarm2", dueTime = Timestamp(dayAfterDate)))
+        coEvery { mockAlarmRepo.getPendingInstancesForRecurring("recurring1") } returns
+                Result.success(listOf(todayAlarm, createAlarmInstance("alarm2", dueTime = Timestamp(dayAfterDate))))
+
+        scheduler.onFixedInstanceTriggered(todayAlarm)
+
+        // User cancels alarm1 — should NOT create another instance
+        val updatedRecurring = recurring.copy(currentAlarmId = "alarm2")
+        coEvery { mockRecurringRepo.get("recurring1") } returns Result.success(updatedRecurring)
+
+        scheduler.onInstanceCancelled(todayAlarm)
+
+        // Only one alarm created total
+        coVerify(exactly = 1) { mockAlarmRepo.createAlarm(any()) }
     }
 
     // endregion
