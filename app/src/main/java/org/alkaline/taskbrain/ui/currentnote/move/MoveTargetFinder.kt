@@ -15,18 +15,39 @@ object MoveTargetFinder {
      * Finds the target position for moving a range up.
      * Returns null if at document boundary.
      */
-    fun findMoveUpTarget(lines: List<LineState>, lineRange: IntRange): Int? {
+    fun findMoveUpTarget(
+        lines: List<LineState>,
+        lineRange: IntRange,
+        hiddenIndices: Set<Int> = emptySet()
+    ): Int? {
         if (lineRange.first <= 0) return null
         val firstIndent = IndentationUtils.getIndentLevel(lines, lineRange.first)
         var target = lineRange.first - 1
 
-        // Find the head of the previous group at same-or-less indent.
-        // Skip over any deeper lines (children of a previous group).
-        while (target > 0 && IndentationUtils.getIndentLevel(lines, target) > firstIndent) {
+        // Skip hidden lines and deeper lines (children of a previous group)
+        while (target > 0 && (hiddenIndices.contains(target) || IndentationUtils.getIndentLevel(lines, target) > firstIndent)) {
             target--
         }
+        // If target itself is hidden, no valid move
+        if (hiddenIndices.contains(target)) return null
 
-        // target is now at the head of the previous group (same-or-less indent)
+        // Also skip past any contiguous hidden block immediately above the target.
+        // Completed items are sorted to the bottom of their section, so they sit
+        // between the visible lines and the section separator. The hidden block
+        // and the separator should be treated as one unit for move purposes.
+        // Only skip if the block's shallowest indent <= the target's indent
+        // (don't jump across indent boundaries).
+        val targetIndent = IndentationUtils.getIndentLevel(lines, target)
+        var probe = target
+        var shallowest = Int.MAX_VALUE
+        while (probe > 0 && hiddenIndices.contains(probe - 1)) {
+            probe--
+            shallowest = minOf(shallowest, IndentationUtils.getIndentLevel(lines, probe))
+        }
+        if (shallowest <= targetIndent) {
+            target = probe
+        }
+
         return target
     }
 
@@ -34,17 +55,30 @@ object MoveTargetFinder {
      * Finds the target position for moving a range down.
      * Returns null if at document boundary.
      */
-    fun findMoveDownTarget(lines: List<LineState>, lineRange: IntRange): Int? {
-        if (lineRange.last >= lines.lastIndex) return null
-        val firstIndent = IndentationUtils.getIndentLevel(lines, lineRange.first)
+    fun findMoveDownTarget(
+        lines: List<LineState>,
+        lineRange: IntRange,
+        hiddenIndices: Set<Int> = emptySet()
+    ): Int? {
+        // Find first non-hidden line after the range
         var target = lineRange.last + 1
+        while (target <= lines.lastIndex && hiddenIndices.contains(target)) {
+            target++
+        }
+        if (target > lines.lastIndex) return null
+
+        val firstIndent = IndentationUtils.getIndentLevel(lines, lineRange.first)
         val targetIndent = IndentationUtils.getIndentLevel(lines, target)
 
-        // Find end of target's logical block (at same-or-less indent)
+        // Find end of target's logical block (children only — deeper indent)
         if (targetIndent <= firstIndent) {
-            // Target is at same/less indent - find end of its block
-            while (target < lines.lastIndex && IndentationUtils.getIndentLevel(lines, target + 1) > targetIndent) {
-                target++
+            while (target < lines.lastIndex) {
+                val next = target + 1
+                if (IndentationUtils.getIndentLevel(lines, next) > targetIndent) {
+                    target++
+                } else {
+                    break
+                }
             }
         }
         // Target position is after the block
@@ -61,7 +95,8 @@ object MoveTargetFinder {
         hasSelection: Boolean,
         selection: EditorSelection,
         focusedLineIndex: Int,
-        moveUp: Boolean
+        moveUp: Boolean,
+        hiddenIndices: Set<Int> = emptySet()
     ): Int? {
         val range = if (hasSelection) {
             SelectionCoordinates.getSelectedLineRange(lines, selection, focusedLineIndex)
@@ -82,7 +117,7 @@ object MoveTargetFinder {
                 }
             }
         }
-        return if (moveUp) findMoveUpTarget(lines, range) else findMoveDownTarget(lines, range)
+        return if (moveUp) findMoveUpTarget(lines, range, hiddenIndices) else findMoveDownTarget(lines, range, hiddenIndices)
     }
 
     /**

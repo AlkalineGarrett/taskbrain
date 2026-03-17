@@ -18,4 +18,6 @@ data class Note(
     val path: String = "",
     /** Root note ID for tree queries. Null for root notes, set on all descendants. */
     val rootNoteId: String? = null,
+    /** Whether completed (checked) lines are shown. Per-note toggle, defaults to true. */
+    val showCompleted: Boolean = true,
 )

@@ -16,6 +16,8 @@ export interface Note {
   path: string
   /** Root note ID for tree queries. Null for root notes, set on all descendants. */
   rootNoteId: string | null
+  /** Whether completed (checked) lines are shown. Per-note toggle, defaults to true. */
+  showCompleted: boolean
 }
 
 export interface NoteLine {
@@ -37,5 +39,6 @@ export function noteFromFirestore(id: string, data: Record<string, unknown>): No
     state: (data.state as string) ?? null,
     path: (data.path as string) ?? '',
     rootNoteId: (data.rootNoteId as string) ?? null,
+    showCompleted: (data.showCompleted as boolean) ?? true,
   }
 }

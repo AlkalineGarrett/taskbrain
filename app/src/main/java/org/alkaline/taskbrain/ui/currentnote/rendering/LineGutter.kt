@@ -78,13 +78,14 @@ private class GutterLayoutData(
     val lineCount: Int,
     val lineLayouts: List<LineLayoutInfo>,
     val state: EditorState,
+    val hiddenIndices: Set<Int>,
     val directiveResults: Map<String, DirectiveResult>,
     val directiveEditHeights: Map<String, Int>,
     val defaultLineHeight: Float,
     val fallbackGapHeight: Float
 ) {
     fun computeLayouts(): List<GutterLineLayout> =
-        computeGutterLineLayouts(lineCount, lineLayouts, state, directiveResults, directiveEditHeights, defaultLineHeight, fallbackGapHeight)
+        computeGutterLineLayouts(lineCount, lineLayouts, state, hiddenIndices, directiveResults, directiveEditHeights, defaultLineHeight, fallbackGapHeight)
 }
 
 /**
@@ -246,6 +247,7 @@ private fun computeGutterLineLayouts(
     lineCount: Int,
     lineLayouts: List<LineLayoutInfo>,
     state: EditorState,
+    hiddenIndices: Set<Int>,
     directiveResults: Map<String, DirectiveResult>,
     directiveEditHeights: Map<String, Int>,
     defaultLineHeight: Float,
@@ -253,8 +255,21 @@ private fun computeGutterLineLayouts(
 ): List<GutterLineLayout> {
     val result = mutableListOf<GutterLineLayout>()
     var currentY = 0f
+    var index = 0
 
-    for (index in 0 until lineCount) {
+    while (index < lineCount) {
+        if (index in hiddenIndices) {
+            // Skip contiguous hidden block — add one placeholder-height entry
+            val blockStart = index
+            while (index < lineCount && index in hiddenIndices) {
+                index++
+            }
+            // Map the placeholder to the first hidden line index for gesture purposes
+            result.add(GutterLineLayout(blockStart, currentY, defaultLineHeight))
+            currentY += defaultLineHeight
+            continue
+        }
+
         val layoutInfo = lineLayouts.getOrNull(index)
         val lineHeight = layoutInfo?.height?.takeIf { it > 0f } ?: defaultLineHeight
 
@@ -268,11 +283,11 @@ private fun computeGutterLineLayouts(
             val key = DirectiveFinder.directiveKey(index, found.startOffset)
             val directiveResult = directiveResults[key]
             if (directiveResult != null && !directiveResult.collapsed) {
-                // Use measured height if available, otherwise fallback
                 val measuredHeight = directiveEditHeights[key]
                 currentY += measuredHeight?.toFloat() ?: fallbackGapHeight
             }
         }
+        index++
     }
 
     return result
@@ -287,6 +302,7 @@ private fun computeGutterLineLayouts(
 internal fun LineGutter(
     lineLayouts: List<LineLayoutInfo>,
     state: EditorState,
+    hiddenIndices: Set<Int> = emptySet(),
     directiveResults: Map<String, DirectiveResult> = emptyMap(),
     directiveEditHeights: Map<String, Int> = emptyMap(),
     onLineSelected: (Int) -> Unit,
@@ -305,6 +321,7 @@ internal fun LineGutter(
         lineCount = state.lines.size,
         lineLayouts = lineLayouts,
         state = state,
+        hiddenIndices = hiddenIndices,
         directiveResults = directiveResults,
         directiveEditHeights = directiveEditHeights,
         defaultLineHeight = defaultLineHeight,
@@ -327,6 +344,7 @@ internal fun LineGutter(
             lineCount = state.lines.size,
             lineLayouts = lineLayouts,
             state = state,
+            hiddenIndices = hiddenIndices,
             directiveResults = directiveResults,
             directiveEditHeights = directiveEditHeights,
             defaultLineHeight = defaultLineHeight,
@@ -342,6 +360,7 @@ private fun GutterContent(
     lineCount: Int,
     lineLayouts: List<LineLayoutInfo>,
     state: EditorState,
+    hiddenIndices: Set<Int>,
     directiveResults: Map<String, DirectiveResult>,
     directiveEditHeights: Map<String, Int>,
     defaultLineHeight: Float,
@@ -349,7 +368,26 @@ private fun GutterContent(
     gutterWidthPx: Float,
     density: androidx.compose.ui.unit.Density
 ) {
-    repeat(lineCount) { index ->
+    var index = 0
+    while (index < lineCount) {
+        if (index in hiddenIndices) {
+            // Skip contiguous hidden block — render one placeholder-height gutter box
+            val placeholderHeight = with(density) { DefaultLineHeight.toPx() }
+            val blockStart = index
+            while (index < lineCount && index in hiddenIndices) {
+                index++
+            }
+            // Block is selected if any hidden line in it overlaps the selection
+            val blockSelected = (blockStart until index).any { isLineInSelection(it, state) }
+            GutterBox(
+                height = with(density) { placeholderHeight.toDp() },
+                width = EditorConfig.GutterWidth,
+                isSelected = blockSelected,
+                gutterWidthPx = gutterWidthPx
+            )
+            continue
+        }
+
         val layoutInfo = lineLayouts.getOrNull(index)
         val lineHeight = layoutInfo?.height?.takeIf { it > 0f } ?: defaultLineHeight
         val isSelected = isLineInSelection(index, state)
@@ -368,7 +406,6 @@ private fun GutterContent(
             val key = DirectiveFinder.directiveKey(index, found.startOffset)
             val result = directiveResults[key]
             if (result != null && !result.collapsed) {
-                // Use measured height if available, otherwise fallback
                 val measuredHeight = directiveEditHeights[key]
                 val gapHeight = with(density) {
                     (measuredHeight?.toFloat() ?: fallbackGapHeight).toDp()
@@ -376,6 +413,7 @@ private fun GutterContent(
                 GutterGap(height = gapHeight, width = EditorConfig.GutterWidth)
             }
         }
+        index++
     }
 }
 

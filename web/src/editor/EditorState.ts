@@ -95,7 +95,6 @@ export class EditorState {
     const newCursorPos = selStart
 
     this.updateFromText(newText)
-    this.removeEmptyLineAtCursor(newCursorPos)
     this.clearSelection()
 
     const [lineIndex, localOffset] = this.getLineAndLocalOffset(newCursorPos)
@@ -276,9 +275,9 @@ export class EditorState {
     return SC.getSelectedLineRange(this.lines, this.selection, this.focusedLineIndex)
   }
 
-  getMoveTarget(moveUp: boolean): number | null {
+  getMoveTarget(moveUp: boolean, hiddenIndices: Set<number> = new Set()): number | null {
     return MTF.getMoveTarget(
-      this.lines, this.hasSelection, this.selection, this.focusedLineIndex, moveUp,
+      this.lines, this.hasSelection, this.selection, this.focusedLineIndex, moveUp, hiddenIndices,
     )
   }
 

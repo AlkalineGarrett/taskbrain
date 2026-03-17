@@ -18,6 +18,7 @@ function makeNote(overrides: Partial<Note> = {}): Note {
     state: null,
     path: 'a/b/c',
     rootNoteId: null,
+    showCompleted: true,
     ...overrides,
   }
 }

@@ -1,4 +1,4 @@
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { useEffect, useCallback, useState, useRef, useMemo } from 'react'
 import type { Note } from '@/data/Note'
 import { NoteRepository } from '@/data/NoteRepository'
@@ -7,13 +7,16 @@ import { NoteRepositoryOperations } from '@/dsl/runtime/NoteRepositoryOperations
 import { useEditor } from '@/hooks/useEditor'
 import { useDirectives } from '@/hooks/useDirectives'
 import { CommandBar } from '@/components/CommandBar'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { EditorLine } from '@/components/EditorLine'
 import { InlineEditor } from '@/components/InlineEditor'
-import { RecentTabsBar, addOrUpdateTab, updateTabDisplayText } from '@/components/RecentTabsBar'
+import { CompletedPlaceholderRow } from '@/components/CompletedPlaceholderRow'
+import { RecentTabsBar, addOrUpdateTab, updateTabDisplayText, removeTab } from '@/components/RecentTabsBar'
 import { extractDisplayText } from '@/data/TabState'
-import { LOADING_NOTE } from '@/strings'
+import { LOADING_NOTE, DELETE_NOTE, DELETE_NOTE_CONFIRM_TITLE, DELETE_NOTE_CONFIRM_MESSAGE } from '@/strings'
 import { db, auth } from '@/firebase/config'
 import { LineState } from '@/editor/LineState'
+import { computeHiddenIndices, computeDisplayItemsFromHidden, computeEffectiveHidden, computeFadedIndices, nearestVisibleLine } from '@/editor/CompletedLineUtils'
 import { findDirectives } from '@/dsl/directives/DirectiveFinder'
 import { getCharOffsetHidingTextarea, getCharRectInElement } from '@/editor/TextMeasure'
 import styles from './NoteEditorScreen.module.css'
@@ -30,11 +33,13 @@ interface HitResult {
 
 export function NoteEditorScreen() {
   const { noteId } = useParams<{ noteId: string }>()
-  const { controller, editorState, loading, showLoading, saving, error, dirty, save } = useEditor(noteId)
+  const navigate = useNavigate()
+  const { controller, editorState, loading, showLoading, saving, error, dirty, save, showCompleted, toggleShowCompleted } = useEditor(noteId)
 
   // Load all notes for DSL context
   const [allNotes, setAllNotes] = useState<Note[]>([])
   const [currentNote, setCurrentNote] = useState<Note | null>(null)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   useEffect(() => {
     if (!noteId) return
@@ -201,44 +206,114 @@ export function NoteEditorScreen() {
     void executeAndSave(content)
   }, [controller, editorState, executeAndSave])
 
-  // Ctrl+S to save
+  const handleDeleteNote = useCallback(async () => {
+    if (!noteId) return
+    try {
+      await noteRepo.softDeleteNote(noteId)
+      const nextNoteId = await removeTab(noteId, noteId)
+      navigate(nextNoteId ? `/note/${nextNoteId}` : '/')
+    } catch (e) {
+      console.error('Failed to delete note:', e)
+    }
+  }, [noteId, navigate])
+
+  const handleRestoreNote = useCallback(async () => {
+    if (!noteId) return
+    try {
+      await noteRepo.undeleteNote(noteId)
+      setCurrentNote((prev) => prev ? { ...prev, state: null } : null)
+    } catch (e) {
+      console.error('Failed to restore note:', e)
+    }
+  }, [noteId])
+
+  // Global keyboard shortcuts — Ctrl+S always, others when no textarea has focus
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault()
         void saveWithDirectives()
+        return
+      }
+
+      // Remaining shortcuts only apply when no textarea has focus
+      // (e.g. after gutter-selecting a placeholder)
+      const active = document.activeElement
+      if (active && active.tagName === 'TEXTAREA') return
+
+      if (e.metaKey || e.ctrlKey) {
+        if (e.key === 'z') {
+          e.preventDefault()
+          if (e.shiftKey) handleRedo()
+          else handleUndo()
+          return
+        }
+        if (e.key === 'y') {
+          e.preventDefault()
+          handleRedo()
+          return
+        }
+        if (e.key === 'a') {
+          e.preventDefault()
+          editorState.selectAll()
+          return
+        }
+        if (e.key === 'x' && editorState.hasSelection) {
+          e.preventDefault()
+          controller.cutSelection()
+          return
+        }
+        if (e.key === 'c' && editorState.hasSelection) {
+          e.preventDefault()
+          controller.copySelection()
+          return
+        }
+        return
+      }
+
+      // Non-modifier keys with selection
+      if (editorState.hasSelection && (e.key === 'Backspace' || e.key === 'Delete')) {
+        e.preventDefault()
+        controller.deleteSelectionWithUndo()
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [saveWithDirectives])
+  }, [saveWithDirectives, editorState, controller, handleUndo, handleRedo])
 
 
   // --- Gutter selection (select whole lines by click/drag) ---
-  const gutterAnchorRef = useRef(-1)
+  // Anchor is a range [start, end] so placeholder blocks lock in their full extent
+  const gutterAnchorRef = useRef<[number, number]>([-1, -1])
 
   const selectLineRange = useCallback((fromLine: number, toLine: number) => {
     const first = Math.max(0, Math.min(fromLine, toLine))
     const last = Math.min(editorState.lines.length - 1, Math.max(fromLine, toLine))
     const start = editorState.getLineStartOffset(first)
     const lastLine = editorState.lines[last]
-    const end = editorState.getLineStartOffset(last) + (lastLine?.text.length ?? 0)
+    let end = editorState.getLineStartOffset(last) + (lastLine?.text.length ?? 0)
+    // Extend past empty trailing lines so the selection crosses through them
+    // (otherwise start === end and getLineSelection returns null)
+    if ((lastLine?.text.length ?? 0) === 0 && last < editorState.lines.length - 1) {
+      end += 1
+    }
     controller.setSelection(start, end)
   }, [editorState, controller])
 
   const handleGutterDragStart = useCallback((lineIndex: number) => {
-    gutterAnchorRef.current = lineIndex
+    gutterAnchorRef.current = [lineIndex, lineIndex]
     selectLineRange(lineIndex, lineIndex)
   }, [selectLineRange])
 
   const handleGutterDragUpdate = useCallback((lineIndex: number) => {
-    if (gutterAnchorRef.current < 0) return
-    selectLineRange(gutterAnchorRef.current, lineIndex)
+    const [anchorStart, anchorEnd] = gutterAnchorRef.current
+    if (anchorStart < 0) return
+    selectLineRange(Math.min(anchorStart, lineIndex), Math.max(anchorEnd, lineIndex))
   }, [selectLineRange])
 
   // Reset gutter drag anchor on mouseup anywhere
   useEffect(() => {
-    const handleMouseUp = () => { gutterAnchorRef.current = -1 }
+    const handleMouseUp = () => { gutterAnchorRef.current = [-1, -1] }
     document.addEventListener('mouseup', handleMouseUp)
     return () => document.removeEventListener('mouseup', handleMouseUp)
   }, [])
@@ -366,6 +441,47 @@ export function NoteEditorScreen() {
     }
   }, [editorState, controller, getGlobalOffsetFromPoint, positionDropCursor])
 
+  // Compute display items and hidden indices for show/hide completed lines
+  const lineTexts = editorState.lines.map((l) => l.text)
+  const lineTextsKey = lineTexts.join('\n')
+  const hiddenIndices = useMemo(
+    () => computeHiddenIndices(lineTexts, showCompleted),
+    [lineTextsKey, showCompleted],
+  )
+  // Exclude recently-checked lines from hidden so they stay visible at reduced opacity.
+  // Snapshot the set contents into a stable key — the Set is mutated in place so
+  // reference/size comparison alone won't trigger useMemo recalculation.
+  const recentlyChecked = controller.recentlyCheckedIndices
+  const recentlyCheckedKey = [...recentlyChecked].join(',')
+  const effectiveHidden = useMemo(
+    () => computeEffectiveHidden(hiddenIndices, recentlyChecked, lineTexts),
+    [hiddenIndices, recentlyCheckedKey],
+  )
+  const fadedIndices = useMemo(
+    () => computeFadedIndices(hiddenIndices, recentlyChecked, lineTexts),
+    [hiddenIndices, recentlyCheckedKey],
+  )
+  const displayItems = useMemo(
+    () => computeDisplayItemsFromHidden(lineTexts, effectiveHidden),
+    [lineTextsKey, effectiveHidden],
+  )
+  controller.hiddenIndices = effectiveHidden
+
+  // Snap focus to nearest visible line when toggling showCompleted OFF
+  const prevShowCompletedRef = useRef(showCompleted)
+  useEffect(() => {
+    if (prevShowCompletedRef.current && !showCompleted) {
+      if (hiddenIndices.has(editorState.focusedLineIndex)) {
+        const newFocus = nearestVisibleLine(lineTexts, editorState.focusedLineIndex, hiddenIndices)
+        controller.setCursor(newFocus, editorState.lines[newFocus]?.cursorPosition ?? 0)
+      }
+      if (editorState.hasSelection) {
+        editorState.clearSelection()
+      }
+    }
+    prevShowCompletedRef.current = showCompleted
+  }, [showCompleted])
+
   if (showLoading) {
     return <div className="loading">{LOADING_NOTE}</div>
   }
@@ -387,8 +503,23 @@ export function NoteEditorScreen() {
         onSave={saveWithDirectives}
         onUndo={handleUndo}
         onRedo={handleRedo}
+        onDelete={() => setShowDeleteConfirm(true)}
+        onRestore={() => void handleRestoreNote()}
+        isDeleted={currentNote?.state === 'deleted'}
         dirty={dirty}
         saving={saving}
+        showCompleted={showCompleted}
+        onToggleShowCompleted={toggleShowCompleted}
+      />
+
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        title={DELETE_NOTE_CONFIRM_TITLE}
+        message={DELETE_NOTE_CONFIRM_MESSAGE}
+        confirmLabel={DELETE_NOTE}
+        danger
+        onConfirm={() => { setShowDeleteConfirm(false); void handleDeleteNote() }}
+        onCancel={() => setShowDeleteConfirm(false)}
       />
 
       <div
@@ -396,23 +527,44 @@ export function NoteEditorScreen() {
         className={`${styles.editor} ${currentNote?.state === 'deleted' ? styles.deletedEditor : ''}`}
       >
         <div ref={dropCursorRef} className={styles.dropCursor} style={{ display: 'none' }} />
-        {editorState.lines.map((_, index) => (
-          <div key={index} data-line-index={index}>
-            <EditorLine
-              lineIndex={index}
-              controller={controller}
-              editorState={editorState}
-              directiveResults={directiveResults}
-              onDirectiveEdit={handleDirectiveEdit}
-              onDirectiveRefresh={refreshDirective}
-              onViewNoteClick={handleViewNoteClick}
-              onDragStart={handleDragStart}
-              onGutterDragStart={handleGutterDragStart}
-              onGutterDragUpdate={handleGutterDragUpdate}
-              onMoveStart={handleMoveStart}
+        {displayItems.map((item, i) =>
+          item.type === 'placeholder' ? (
+            <CompletedPlaceholderRow
+              key={`ph-${i}`}
+              count={item.count}
+              indentLevel={item.indentLevel}
+              isSelected={editorState.hasSelection && (() => {
+                const [selFirst, selLast] = editorState.getSelectedLineRange()
+                return item.startIndex <= selLast && item.endIndex >= selFirst
+              })()}
+              onGutterDragStart={() => {
+                gutterAnchorRef.current = [item.startIndex, item.endIndex]
+                selectLineRange(item.startIndex, item.endIndex)
+              }}
+              onGutterDragUpdate={() => {
+                const [anchorStart, anchorEnd] = gutterAnchorRef.current
+                if (anchorStart < 0) return
+                selectLineRange(Math.min(anchorStart, item.startIndex), Math.max(anchorEnd, item.endIndex))
+              }}
             />
-          </div>
-        ))}
+          ) : (
+            <div key={item.realIndex} data-line-index={item.realIndex} style={fadedIndices.has(item.realIndex) ? { opacity: 0.4 } : undefined}>
+              <EditorLine
+                lineIndex={item.realIndex}
+                controller={controller}
+                editorState={editorState}
+                directiveResults={directiveResults}
+                onDirectiveEdit={handleDirectiveEdit}
+                onDirectiveRefresh={refreshDirective}
+                onViewNoteClick={handleViewNoteClick}
+                onDragStart={handleDragStart}
+                onGutterDragStart={handleGutterDragStart}
+                onGutterDragUpdate={handleGutterDragUpdate}
+                onMoveStart={handleMoveStart}
+              />
+            </div>
+          ),
+        )}
       </div>
 
       {inlineEditNoteId && (

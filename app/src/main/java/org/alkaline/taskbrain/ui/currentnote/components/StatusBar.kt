@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -17,6 +18,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -24,7 +26,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -46,9 +47,36 @@ fun StatusBar(
     onRedoClick: () -> Unit = {},
     isDeleted: Boolean = false,
     onDeleteClick: () -> Unit = {},
-    onUndeleteClick: () -> Unit = {}
+    onUndeleteClick: () -> Unit = {},
+    showCompleted: Boolean = true,
+    onShowCompletedToggle: () -> Unit = {}
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text(stringResource(R.string.action_delete_note_confirm_title)) },
+            text = { Text(stringResource(R.string.action_delete_note_confirm_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDeleteConfirm = false
+                    onDeleteClick()
+                }) {
+                    Text(
+                        stringResource(R.string.action_delete_note),
+                        color = colorResource(R.color.menu_danger_text)
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
     ActionButtonBar {
         Button(
             onClick = onSaveClick,
@@ -77,7 +105,7 @@ fun StatusBar(
 
         Text(
             text = if (isSaved) stringResource(id = R.string.status_saved) else stringResource(id = R.string.status_unsaved),
-            color = Color.Black,
+            color = colorResource(R.color.icon_default),
             fontSize = Dimens.StatusTextSize
         )
 
@@ -86,7 +114,7 @@ fun StatusBar(
         Icon(
             painter = if (isSaved) painterResource(id = R.drawable.ic_check_circle) else painterResource(id = R.drawable.ic_warning),
             contentDescription = null,
-            tint = if (isSaved) Color(0xFF4CAF50) else Color(0xFFFFC107),
+            tint = if (isSaved) colorResource(R.color.status_saved_icon) else colorResource(R.color.status_unsaved_icon),
             modifier = Modifier.size(Dimens.StatusIconSize)
         )
 
@@ -103,7 +131,7 @@ fun StatusBar(
                 painter = painterResource(id = R.drawable.ic_undo),
                 contentDescription = stringResource(id = R.string.action_undo),
                 modifier = Modifier.size(Dimens.StatusBarButtonIconSize),
-                tint = if (canUndo) Color.Black else Color.Gray
+                tint = if (canUndo) colorResource(R.color.icon_default) else colorResource(R.color.icon_disabled)
             )
         }
 
@@ -117,7 +145,7 @@ fun StatusBar(
                 painter = painterResource(id = R.drawable.ic_redo),
                 contentDescription = stringResource(id = R.string.action_redo),
                 modifier = Modifier.size(Dimens.StatusBarButtonIconSize),
-                tint = if (canRedo) Color.Black else Color.Gray
+                tint = if (canRedo) colorResource(R.color.icon_default) else colorResource(R.color.icon_disabled)
             )
         }
 
@@ -131,13 +159,29 @@ fun StatusBar(
                     imageVector = Icons.Default.MoreVert,
                     contentDescription = stringResource(id = R.string.action_more_options),
                     modifier = Modifier.size(Dimens.StatusBarButtonIconSize),
-                    tint = Color.Black
+                    tint = colorResource(R.color.icon_default)
                 )
             }
             DropdownMenu(
                 expanded = showMenu,
                 onDismissRequest = { showMenu = false }
             ) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(id = R.string.action_show_completed)) },
+                    leadingIcon = {
+                        Icon(
+                            painter = painterResource(
+                                id = if (showCompleted) R.drawable.ic_check_circle else R.drawable.ic_check_box_outline
+                            ),
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    },
+                    onClick = {
+                        showMenu = false
+                        onShowCompletedToggle()
+                    }
+                )
                 if (isDeleted) {
                     DropdownMenuItem(
                         text = { Text(stringResource(id = R.string.action_restore_note)) },
@@ -155,17 +199,23 @@ fun StatusBar(
                     )
                 } else {
                     DropdownMenuItem(
-                        text = { Text(stringResource(id = R.string.action_delete_note)) },
+                        text = {
+                            Text(
+                                stringResource(id = R.string.action_delete_note),
+                                color = colorResource(R.color.menu_danger_text)
+                            )
+                        },
                         leadingIcon = {
                             Icon(
                                 painter = painterResource(id = R.drawable.ic_delete),
                                 contentDescription = null,
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(20.dp),
+                                tint = colorResource(R.color.menu_danger_text)
                             )
                         },
                         onClick = {
                             showMenu = false
-                            onDeleteClick()
+                            showDeleteConfirm = true
                         }
                     )
                 }

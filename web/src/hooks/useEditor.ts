@@ -29,6 +29,7 @@ export function useEditor(noteId: string | undefined) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
+  const [showCompleted, setShowCompleted] = useState(true)
 
   // Track line IDs for Firestore mapping
   const trackedLinesRef = useRef<NoteLine[]>([])
@@ -139,8 +140,12 @@ export function useEditor(noteId: string | undefined) {
     const loadNote = async () => {
       try {
         setError(null)
-        const lines = await repo.loadNoteWithChildren(noteId)
+        const [lines, note] = await Promise.all([
+          repo.loadNoteWithChildren(noteId),
+          repo.loadNoteById(noteId),
+        ])
 
+        setShowCompleted(note?.showCompleted ?? true)
         populateEditor(lines, false, false)
         setShowLoading(false)
 
@@ -169,12 +174,13 @@ export function useEditor(noteId: string | undefined) {
     const noteDocRef = doc(db, 'notes', noteId)
     const unsubscribe = onSnapshot(noteDocRef, (snapshot) => {
       if (!snapshot.exists()) return
+      // Skip local pending writes (our own saves) — check before suppress
+      // so the suppress flag isn't consumed by the pending-write event
+      if (snapshot.metadata.hasPendingWrites) return
       if (suppressSnapshotRef.current) {
         suppressSnapshotRef.current = false
         return
       }
-      // Skip local pending writes (our own saves)
-      if (snapshot.metadata.hasPendingWrites) return
 
       // Reload the full note (parent + children) to pick up external changes
       void (async () => {
@@ -206,6 +212,7 @@ export function useEditor(noteId: string | undefined) {
     try {
       setSaving(true)
       suppressSnapshotRef.current = true
+      controller.sortCompletedToBottom()
       controller.commitUndoState(true)
 
       // Build tracked lines from current editor state + tracked IDs
@@ -241,6 +248,18 @@ export function useEditor(noteId: string | undefined) {
     if (!noteId || !dirty) return
     await saveNoteById(noteId)
   }, [noteId, dirty, saveNoteById])
+
+  const toggleShowCompleted = useCallback(async () => {
+    if (!noteId) return
+    const newValue = !showCompleted
+    setShowCompleted(newValue)
+    suppressSnapshotRef.current = true
+    try {
+      await repo.updateShowCompleted(noteId, newValue)
+    } catch (e) {
+      console.error('Failed to persist showCompleted:', e)
+    }
+  }, [noteId, showCompleted])
 
   // Ref for beforeunload — must always point to the latest noteId
   const noteIdRef = useRef(noteId)
@@ -280,5 +299,7 @@ export function useEditor(noteId: string | undefined) {
     error,
     dirty,
     save,
+    showCompleted,
+    toggleShowCompleted,
   }
 }

@@ -158,6 +158,10 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     private val _isNoteDeleted = MutableLiveData<Boolean>(false)
     val isNoteDeleted: LiveData<Boolean> = _isNoteDeleted
 
+    // Per-note toggle: whether completed (checked) lines are visible
+    private val _showCompleted = MutableLiveData<Boolean>(true)
+    val showCompleted: LiveData<Boolean> = _showCompleted
+
     // Directive execution results - maps directive UUID to result
     private val _directiveResults = MutableLiveData<Map<String, DirectiveResult>>(emptyMap())
     val directiveResults: LiveData<Map<String, DirectiveResult>> = _directiveResults
@@ -264,14 +268,15 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 if (snapshot == null || !snapshot.exists()) return@addSnapshotListener
                 if (noteId != currentNoteId) return@addSnapshotListener
 
+                // Skip local pending writes (optimistic updates from our own writes)
+                // Check before suppress so the flag isn't consumed by the pending-write event
+                if (snapshot.metadata.hasPendingWrites()) return@addSnapshotListener
+
                 // Skip the initial snapshot and our own saves
                 if (suppressSnapshotUpdate) {
                     suppressSnapshotUpdate = false
                     return@addSnapshotListener
                 }
-
-                // Skip local pending writes (optimistic updates from our own writes)
-                if (snapshot.metadata.hasPendingWrites()) return@addSnapshotListener
 
                 Log.d(TAG, "Snapshot listener detected external change for $noteId")
                 // Reload the full note (parent + children) from Firestore
@@ -325,9 +330,12 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             lineTracker.setTrackedLines(cached.noteLines)
             val fullContent = cached.noteLines.joinToString("\n") { it.content }
             _loadStatus.value = LoadStatus.Success(fullContent)
-            // Still update lastAccessedAt and load directive results in background
+            // Still update lastAccessedAt, load showCompleted, and directive results in background
             viewModelScope.launch {
                 repository.updateLastAccessed(currentNoteId)
+                repository.loadNoteById(currentNoteId).onSuccess { note ->
+                    _showCompleted.value = note?.showCompleted ?: true
+                }
                 loadDirectiveResults(fullContent)
             }
             loadAlarmStates()
@@ -365,10 +373,16 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         _loadStatus.value = LoadStatus.Loading
 
         viewModelScope.launch {
-            // Check if note is deleted
-            repository.isNoteDeleted(currentNoteId).fold(
-                onSuccess = { isDeleted -> _isNoteDeleted.value = isDeleted },
-                onFailure = { _isNoteDeleted.value = false }
+            // Load note metadata (deleted state + showCompleted)
+            repository.loadNoteById(currentNoteId).fold(
+                onSuccess = { note ->
+                    _isNoteDeleted.value = note?.state == "deleted"
+                    _showCompleted.value = note?.showCompleted ?: true
+                },
+                onFailure = {
+                    _isNoteDeleted.value = false
+                    _showCompleted.value = true
+                }
             )
 
             // Update lastAccessedAt (fire-and-forget, doesn't block loading)
@@ -407,6 +421,17 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      */
     fun updateTrackedLines(newContent: String) {
         lineTracker.updateTrackedLines(newContent)
+    }
+
+    fun toggleShowCompleted() {
+        val newValue = !(_showCompleted.value ?: true)
+        _showCompleted.value = newValue
+        suppressSnapshotUpdate = true
+        viewModelScope.launch {
+            repository.updateShowCompleted(currentNoteId, newValue).onFailure { e ->
+                Log.e(TAG, "Failed to persist showCompleted", e)
+            }
+        }
     }
 
     fun saveContent(content: String) {

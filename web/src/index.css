@@ -33,6 +33,10 @@
   /* Destructive actions (Android: destructive_text) */
   --color-destructive-text: #B71C1C;
 
+  /* Menu danger actions (Android: menu_danger_text) */
+  --color-menu-danger-text: #F44336;
+  --color-menu-danger-bg-hover: #FFEBEE;
+
   /* Status: warning */
   --color-warning: #FF9800;
   --color-warning-bg: #FFF3E0;
@@ -71,6 +75,14 @@
   /* Disabled surface */
   --color-disabled-bg: #E0E0E0;
   --color-disabled-text: #9E9E9E;
+
+  /* Status indicator icons (Android: status_saved_icon, status_unsaved_icon) */
+  --color-status-saved: #4CAF50;
+  --color-status-unsaved: #FFC107;
+
+  /* Icon tints (Android: icon_default, icon_disabled) */
+  --color-icon-default: #000000;
+  --color-icon-disabled: #808080;
 
   /* Deleted note — Android: deleted_note_background, deleted_note_text */
   --color-deleted-bg: #f0f0f0;

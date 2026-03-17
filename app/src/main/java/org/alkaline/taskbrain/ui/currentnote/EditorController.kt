@@ -7,6 +7,7 @@ import org.alkaline.taskbrain.ui.currentnote.undo.AlarmSnapshot
 import org.alkaline.taskbrain.ui.currentnote.undo.UndoSnapshot
 import org.alkaline.taskbrain.ui.currentnote.selection.SelectionCoordinates
 import org.alkaline.taskbrain.ui.currentnote.util.ClipboardParser
+import org.alkaline.taskbrain.ui.currentnote.util.CompletedLineUtils
 import org.alkaline.taskbrain.ui.currentnote.util.LinePrefixes
 import org.alkaline.taskbrain.ui.currentnote.util.PasteHandler
 import androidx.compose.runtime.remember
@@ -33,6 +34,7 @@ enum class OperationType {
     ALARM_SYMBOL,     // Alarm symbol insertion - commits pending, captures state
     MOVE_LINES,       // Consecutive moves of same lines are grouped
     DIRECTIVE_EDIT,   // Confirming directive edit row - always separate undo step
+    SORT_COMPLETED,   // Save-time sort of checked lines to bottom - always separate undo step
 }
 
 /**
@@ -62,6 +64,15 @@ class EditorController(
     internal val state: EditorState,
     val undoManager: UndoManager = UndoManager()
 ) {
+    /** Hidden line indices (completed lines when showCompleted=false). Set by the UI layer. */
+    var hiddenIndices: Set<Int> = emptySet()
+
+    /**
+     * Line indices that were recently toggled from unchecked to checked.
+     * These stay visible (at reduced opacity) until the next save.
+     */
+    val recentlyCheckedIndices: MutableSet<Int> = mutableSetOf()
+
     // =========================================================================
     // Undo/Redo Operations
     // =========================================================================
@@ -202,7 +213,7 @@ class EditorController(
             OperationType.MOVE_LINES -> {
                 // Move lines has its own undo handling via recordMoveCommand
             }
-            OperationType.DIRECTIVE_EDIT -> {
+            OperationType.DIRECTIVE_EDIT, OperationType.SORT_COMPLETED -> {
                 undoManager.commitPendingUndoState(state)
                 undoManager.captureStateBeforeChange(state)
             }
@@ -224,7 +235,7 @@ class EditorController(
             OperationType.MOVE_LINES -> {
                 // Move lines has its own undo handling via recordMoveCommand/updateMoveRange
             }
-            OperationType.DIRECTIVE_EDIT -> {
+            OperationType.DIRECTIVE_EDIT, OperationType.SORT_COMPLETED -> {
                 undoManager.beginEditingLine(state, state.focusedLineIndex)
             }
         }
@@ -254,8 +265,14 @@ class EditorController(
      * Cycles: nothing → unchecked → checked → removed
      * Each press is a separate undo step.
      */
-    fun toggleCheckbox() = executeOperation(OperationType.COMMAND_CHECKBOX) {
-        state.toggleCheckboxInternal()
+    fun toggleCheckbox() {
+        val lineIndex = state.focusedLineIndex
+        val wasUnchecked = state.lines.getOrNull(lineIndex)?.prefix
+            ?.contains(LinePrefixes.CHECKBOX_UNCHECKED) == true
+        executeOperation(OperationType.COMMAND_CHECKBOX) {
+            state.toggleCheckboxInternal()
+        }
+        trackRecentlyChecked(lineIndex, wasUnchecked)
     }
 
     /**
@@ -371,7 +388,7 @@ class EditorController(
      * Gets the current state of the move up button.
      */
     fun getMoveUpState(): MoveButtonState {
-        val target = state.getMoveTarget(moveUp = true)
+        val target = state.getMoveTarget(moveUp = true, hiddenIndices = hiddenIndices)
         return MoveButtonState(
             isEnabled = target != null,
             isWarning = state.wouldOrphanChildren()
@@ -382,7 +399,7 @@ class EditorController(
      * Gets the current state of the move down button.
      */
     fun getMoveDownState(): MoveButtonState {
-        val target = state.getMoveTarget(moveUp = false)
+        val target = state.getMoveTarget(moveUp = false, hiddenIndices = hiddenIndices)
         return MoveButtonState(
             isEnabled = target != null,
             isWarning = state.wouldOrphanChildren()
@@ -396,7 +413,7 @@ class EditorController(
      */
     fun moveUp(): Boolean {
         val range = if (state.hasSelection) state.getSelectedLineRange() else state.getLogicalBlock(state.focusedLineIndex)
-        val target = state.getMoveTarget(moveUp = true) ?: return false
+        val target = state.getMoveTarget(moveUp = true, hiddenIndices = hiddenIndices) ?: return false
 
         // Record for undo grouping (uses range BEFORE move for grouping check)
         undoManager.recordMoveCommand(state, range)
@@ -420,7 +437,7 @@ class EditorController(
      */
     fun moveDown(): Boolean {
         val range = if (state.hasSelection) state.getSelectedLineRange() else state.getLogicalBlock(state.focusedLineIndex)
-        val target = state.getMoveTarget(moveUp = false) ?: return false
+        val target = state.getMoveTarget(moveUp = false, hiddenIndices = hiddenIndices) ?: return false
 
         // Record for undo grouping (uses range BEFORE move for grouping check)
         undoManager.recordMoveCommand(state, range)
@@ -435,6 +452,25 @@ class EditorController(
         }
 
         return newRange != null
+    }
+
+    /**
+     * Sorts completed (checked) lines to the bottom of each sibling group.
+     * Called at save time so undo restores the pre-sort order.
+     * @return true if any reordering occurred
+     */
+    fun sortCompletedToBottom(): Boolean {
+        recentlyCheckedIndices.clear()
+        val currentTexts = state.lines.map { it.text }
+        val sorted = CompletedLineUtils.sortCompletedToBottom(currentTexts)
+        if (sorted == currentTexts) return false
+        executeOperation(OperationType.SORT_COMPLETED) {
+            state.lines.forEachIndexed { i, line ->
+                line.updateFull(sorted[i], line.cursorPosition.coerceIn(0, sorted[i].length))
+            }
+            state.notifyChange()
+        }
+        return true
     }
 
     /**
@@ -930,14 +966,30 @@ class EditorController(
      * Creates an undo point so the toggle can be undone.
      * Uses same undo pattern as command bar checkbox for consistency.
      */
+    /**
+     * Updates recentlyCheckedIndices after a checkbox toggle.
+     * If the line was unchecked and is now checked, adds it; otherwise removes it.
+     */
+    private fun trackRecentlyChecked(lineIndex: Int, wasUnchecked: Boolean) {
+        val isNowChecked = state.lines.getOrNull(lineIndex)?.prefix
+            ?.contains(LinePrefixes.CHECKBOX_CHECKED) == true
+        if (wasUnchecked && isNowChecked) {
+            recentlyCheckedIndices.add(lineIndex)
+        } else {
+            recentlyCheckedIndices.remove(lineIndex)
+        }
+    }
+
     fun toggleCheckboxOnLine(lineIndex: Int) {
         val line = state.lines.getOrNull(lineIndex) ?: return
+        val wasUnchecked = line.prefix.contains(LinePrefixes.CHECKBOX_UNCHECKED)
         // Use same undo pattern as command bar checkbox toggle
         undoManager.recordCommand(state, CommandType.CHECKBOX)
         line.toggleCheckboxState()
         undoManager.commitAfterCommand(state, CommandType.CHECKBOX)
         state.requestFocusUpdate()
         state.notifyChange()
+        trackRecentlyChecked(lineIndex, wasUnchecked)
     }
 
     // =========================================================================

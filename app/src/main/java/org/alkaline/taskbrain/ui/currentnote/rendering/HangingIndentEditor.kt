@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.ui.draw.alpha
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -56,6 +57,7 @@ import org.alkaline.taskbrain.ui.currentnote.rememberEditorState
 import org.alkaline.taskbrain.dsl.directives.DirectiveFinder
 import org.alkaline.taskbrain.dsl.directives.DirectiveResult
 import org.alkaline.taskbrain.dsl.ui.DirectiveEditRow
+import org.alkaline.taskbrain.ui.currentnote.util.CompletedLineUtils
 import org.alkaline.taskbrain.ui.currentnote.util.SymbolOverlay
 
 // =============================================================================
@@ -124,6 +126,7 @@ fun HangingIndentEditor(
     directiveResults: Map<String, DirectiveResult> = emptyMap(),
     directiveCallbacks: DirectiveCallbacks = DirectiveCallbacks(),
     buttonCallbacks: ButtonCallbacks = ButtonCallbacks(),
+    showCompleted: Boolean = true,
     onSymbolTap: ((lineIndex: Int, charOffsetInLine: Int) -> Unit)? = null,
     symbolOverlaysProvider: ((lineIndex: Int) -> List<SymbolOverlay>)? = null,
     modifier: Modifier = Modifier
@@ -162,12 +165,29 @@ fun HangingIndentEditor(
         }
     }
 
-    // Focus management - triggers when focusedLineIndex or stateVersion changes
+    // Focus management - triggers when focusedLineIndex or stateVersion changes.
     // Only request focus when stateVersion > 0 to avoid focusing before content loads.
-    // stateVersion starts at 0 and is incremented by requestFocusUpdate() after content loads.
+    //
+    // IMPORTANT: Hidden lines have no composable, so their FocusRequesters are unattached.
+    // Calling requestFocus() on an unattached FocusRequester crashes. We guard here
+    // (the single focus entry point) rather than at each caller, because
+    // EditorState.setSelection() internally sets focusedLineIndex to the selection start
+    // which may be a hidden line.
     LaunchedEffect(externalFocusRequester, state.focusedLineIndex, state.stateVersion) {
         if (state.stateVersion > 0 && state.focusedLineIndex in focusRequesters.indices) {
-            focusRequesters[state.focusedLineIndex].requestFocus()
+            val lineTexts = state.lines.map { it.text }
+            val hidden = CompletedLineUtils.computeHiddenIndices(lineTexts, showCompleted)
+            val effectiveHidden = CompletedLineUtils.computeEffectiveHidden(
+                hidden, controller.recentlyCheckedIndices.toSet(), lineTexts
+            )
+            val targetLine = if (state.focusedLineIndex in effectiveHidden) {
+                CompletedLineUtils.nearestVisibleLine(lineTexts, state.focusedLineIndex, effectiveHidden)
+            } else {
+                state.focusedLineIndex
+            }
+            if (targetLine in focusRequesters.indices && targetLine !in effectiveHidden) {
+                focusRequesters[targetLine].requestFocus()
+            }
         }
     }
 
@@ -185,6 +205,7 @@ fun HangingIndentEditor(
         viewConfiguration = viewConfiguration,
         scrollState = scrollState,
         showGutter = showGutter,
+        showCompleted = showCompleted,
         gutterSelectionState = gutterSelectionState,
         handleDragState = handleDragState,
         startHandlePosition = startHandlePosition,
@@ -216,6 +237,7 @@ private fun EditorLayout(
     viewConfiguration: ViewConfiguration,
     scrollState: ScrollState?,
     showGutter: Boolean,
+    showCompleted: Boolean,
     gutterSelectionState: GutterSelectionState,
     handleDragState: HandleDragState,
     startHandlePosition: HandlePosition?,
@@ -242,6 +264,7 @@ private fun EditorLayout(
             viewConfiguration = viewConfiguration,
             scrollState = scrollState,
             showGutter = showGutter,
+            showCompleted = showCompleted,
             gutterSelectionState = gutterSelectionState,
             contextMenuState = contextMenuState,
             onEditorFocusChanged = onEditorFocusChanged,
@@ -278,6 +301,7 @@ private fun EditorRow(
     viewConfiguration: ViewConfiguration,
     scrollState: ScrollState?,
     showGutter: Boolean,
+    showCompleted: Boolean,
     gutterSelectionState: GutterSelectionState,
     contextMenuState: ContextMenuState,
     onEditorFocusChanged: ((Boolean) -> Unit)?,
@@ -291,19 +315,50 @@ private fun EditorRow(
     // Track measured heights of directive edit rows (keyed by directive position key)
     val directiveEditHeights = remember { mutableStateMapOf<String, Int>() }
 
+    // Compute hidden/effective-hidden once and pass to both gutter and content
+    val lineTexts = state.lines.map { it.text }
+    val recentlyCheckedSnapshot = remember(controller.recentlyCheckedIndices.toSet()) {
+        controller.recentlyCheckedIndices.toSet()
+    }
+    val hiddenIndices = remember(lineTexts, showCompleted) {
+        CompletedLineUtils.computeHiddenIndices(lineTexts, showCompleted)
+    }
+    val effectiveHidden = remember(hiddenIndices, recentlyCheckedSnapshot) {
+        CompletedLineUtils.computeEffectiveHidden(hiddenIndices, recentlyCheckedSnapshot, lineTexts)
+    }
+
     Row(modifier = Modifier.fillMaxWidth()) {
         if (showGutter) {
             LineGutter(
                 lineLayouts = lineLayouts,
                 state = state,
+                hiddenIndices = effectiveHidden,
                 directiveResults = directiveResults,
                 directiveEditHeights = directiveEditHeights,
                 onLineSelected = { lineIndex ->
-                    gutterSelectionState.selectLine(lineIndex, state)
+                    if (lineIndex in effectiveHidden) {
+                        selectHiddenBlock(lineIndex, effectiveHidden, gutterSelectionState, state)
+                    } else {
+                        gutterSelectionState.selectLine(lineIndex, state)
+                    }
                     onSelectionCompleted()
                 },
-                onLineDragStart = { gutterSelectionState.startDrag(it, state) },
-                onLineDragUpdate = { gutterSelectionState.extendSelectionToLine(it, state) },
+                onLineDragStart = { lineIndex ->
+                    if (lineIndex in effectiveHidden) {
+                        selectHiddenBlock(lineIndex, effectiveHidden, gutterSelectionState, state)
+                    } else {
+                        gutterSelectionState.startDrag(lineIndex, state)
+                    }
+                },
+                onLineDragUpdate = { lineIndex ->
+                    if (lineIndex in effectiveHidden) {
+                        // Extend selection to cover the entire hidden block
+                        val blockEnd = findHiddenBlockEnd(lineIndex, effectiveHidden, state.lines.size)
+                        gutterSelectionState.extendSelectionToLine(blockEnd, state)
+                    } else {
+                        gutterSelectionState.extendSelectionToLine(lineIndex, state)
+                    }
+                },
                 onLineDragEnd = {
                     gutterSelectionState.endDrag()
                     onSelectionCompleted()
@@ -319,6 +374,9 @@ private fun EditorRow(
             lineLayouts = lineLayouts,
             viewConfiguration = viewConfiguration,
             scrollState = scrollState,
+            lineTexts = lineTexts,
+            hiddenIndices = hiddenIndices,
+            effectiveHidden = effectiveHidden,
             onCursorPositioned = controller::setCursorFromGlobalOffset,
             onTapOnSelection = contextMenuState::handleTapOnSelection,
             onSelectionCompleted = { onSelectionCompleted() },
@@ -332,6 +390,58 @@ private fun EditorRow(
             modifier = Modifier.weight(1f)
         )
     }
+}
+
+// =============================================================================
+// Hidden Block Selection Helpers
+// =============================================================================
+
+/**
+ * Finds the end of a contiguous hidden block starting at (or containing) lineIndex.
+ */
+private fun findHiddenBlockEnd(lineIndex: Int, hiddenIndices: Set<Int>, lineCount: Int): Int {
+    var end = lineIndex
+    while (end + 1 < lineCount && (end + 1) in hiddenIndices) {
+        end++
+    }
+    return end
+}
+
+/**
+ * Selects an entire hidden block via gutter gesture.
+ * Sets the drag anchor to the block start so dragging extends correctly,
+ * and moves focus to the nearest visible line to avoid crashing on
+ * unattached FocusRequesters.
+ */
+private fun selectHiddenBlock(
+    lineIndex: Int,
+    hiddenIndices: Set<Int>,
+    gutterSelectionState: GutterSelectionState,
+    state: EditorState
+) {
+    // Find full contiguous hidden block
+    var blockStart = lineIndex
+    while (blockStart - 1 >= 0 && (blockStart - 1) in hiddenIndices) {
+        blockStart--
+    }
+    val blockEnd = findHiddenBlockEnd(lineIndex, hiddenIndices, state.lines.size)
+
+    // Select the entire block
+    val selStart = state.getLineStartOffset(blockStart)
+    var selEnd = state.getLineStartOffset(blockEnd) + state.lines[blockEnd].text.length
+    if (blockEnd < state.lines.lastIndex) {
+        selEnd = state.getLineStartOffset(blockEnd + 1)
+    }
+    if (selEnd > selStart) {
+        state.setSelection(selStart, selEnd)
+    }
+    // Set drag anchor so extending works correctly
+    gutterSelectionState.dragStartLine = blockStart
+
+    // Move focus to nearest visible line to avoid crash on unattached FocusRequester
+    val lineTexts = state.lines.map { it.text }
+    val visibleFocus = CompletedLineUtils.nearestVisibleLine(lineTexts, blockStart, hiddenIndices)
+    state.focusedLineIndex = visibleFocus
 }
 
 // =============================================================================
@@ -370,6 +480,9 @@ private fun SelectionOverlay(
             startLineHeight = startHandlePosition.lineHeight,
             endLineHeight = endHandlePosition.lineHeight
         )
+    } else if (state.hasSelection) {
+        // Fallback for selections on hidden lines: find nearest line with a valid layout
+        computeFallbackSelectionBounds(state, lineLayouts)
     } else null
 
     SelectionContextMenu(
@@ -383,6 +496,30 @@ private fun SelectionOverlay(
             onDismiss = { contextMenuState.isVisible = false }
         ),
         selectionBounds = selectionBounds
+    )
+}
+
+/**
+ * Computes fallback SelectionBounds when handle positions are null
+ * (e.g. selection is entirely on hidden lines). Uses the nearest line
+ * with a valid layout as the anchor position.
+ */
+private fun computeFallbackSelectionBounds(
+    state: EditorState,
+    lineLayouts: List<LineLayoutInfo>
+): SelectionBounds? {
+    val (selStartLine, _) = state.getLineAndLocalOffset(state.selection.min)
+    // Search outward from selection start for a line with valid layout
+    val nearestLayout = lineLayouts.filter { it.textLayoutResult != null }
+        .minByOrNull { kotlin.math.abs(it.lineIndex - selStartLine) }
+        ?: return null
+    val y = nearestLayout.yOffset
+    val h = nearestLayout.height
+    return SelectionBounds(
+        startOffset = Offset(0f, y),
+        endOffset = Offset(0f, y),
+        startLineHeight = h,
+        endLineHeight = h
     )
 }
 
@@ -423,6 +560,9 @@ private fun EditorContent(
     lineLayouts: MutableList<LineLayoutInfo>,
     viewConfiguration: ViewConfiguration,
     scrollState: ScrollState?,
+    lineTexts: List<String>,
+    hiddenIndices: Set<Int>,
+    effectiveHidden: Set<Int>,
     onCursorPositioned: (Int) -> Unit,
     onTapOnSelection: (Offset) -> Unit,
     onSelectionCompleted: () -> Unit,
@@ -455,55 +595,105 @@ private fun EditorContent(
         @Suppress("UNUSED_VARIABLE")
         val stateTrigger = state.stateVersion
 
-        state.lines.forEachIndexed { index, lineState ->
-            if (index < focusRequesters.size) {
-                // All lines use the same wrapper - directives are handled inline
-                ControlledLineViewWrapper(
-                    index = index,
-                    lineState = lineState,
-                    state = state,
-                    controller = controller,
-                    textStyle = textStyle,
-                    focusRequester = focusRequesters[index],
-                    lineLayouts = lineLayouts,
-                    onEditorFocusChanged = onEditorFocusChanged,
-                    directiveResults = directiveResults,
-                    directiveCallbacks = directiveCallbacks,
-                    buttonCallbacks = buttonCallbacks,
-                    onSymbolTap = onSymbolTap,
-                    symbolOverlays = symbolOverlaysProvider?.invoke(index) ?: emptyList()
-                )
+        val displayItems = remember(lineTexts, effectiveHidden) {
+            CompletedLineUtils.computeDisplayItemsFromHidden(lineTexts, effectiveHidden)
+        }
 
-                // Render edit rows for expanded directives on this line
-                // Skip view directives - they render DirectiveEditRow inside ViewDirectiveInlineContent
-                val lineContent = lineState.content
-                val lineDirectives = DirectiveFinder.findDirectives(lineContent)
-                for (found in lineDirectives) {
-                    val key = DirectiveFinder.directiveKey(index, found.startOffset)
-                    val result = directiveResults[key]
-                    // Skip view directives - they handle their own DirectiveEditRow at the top
-                    val isViewDirective = result?.toValue() is org.alkaline.taskbrain.dsl.runtime.values.ViewVal
-                    if (result != null && !result.collapsed && !isViewDirective) {
-                        // Key on position-based key so component recreates when directive moves
-                        key(key) {
-                            DirectiveEditRow(
-                                initialText = found.sourceText,
-                                textStyle = textStyle,
-                                errorMessage = result.error,
-                                warningMessage = result.warning?.displayMessage,
-                                onRefresh = { newText ->
-                                    directiveCallbacks.onViewDirectiveRefresh?.invoke(index, key, found.sourceText, newText)
-                                },
-                                onConfirm = { newText ->
-                                    directiveCallbacks.onViewDirectiveConfirm?.invoke(index, key, found.sourceText, newText)
-                                },
-                                onCancel = {
-                                    directiveCallbacks.onViewDirectiveCancel?.invoke(index, key, found.sourceText)
-                                },
-                                onHeightMeasured = { height ->
-                                    onDirectiveEditHeightMeasured?.invoke(key, height)
+        // Clear stale layout data for hidden lines so gesture hit-testing can't match them.
+        // Without this, hidden lines retain yOffset/height from when they were last rendered,
+        // causing taps to map to hidden line indices instead of visible ones.
+        remember(effectiveHidden) {
+            for (idx in effectiveHidden) {
+                if (idx < lineLayouts.size) {
+                    lineLayouts[idx] = LineLayoutInfo(idx, 0f, 0f, null)
+                }
+            }
+            effectiveHidden
+        }
+        val recentlyCheckedSnapshot = remember(controller.recentlyCheckedIndices.toSet()) {
+            controller.recentlyCheckedIndices.toSet()
+        }
+        val fadedIndices = remember(hiddenIndices, recentlyCheckedSnapshot) {
+            CompletedLineUtils.computeFadedIndices(hiddenIndices, recentlyCheckedSnapshot, lineTexts)
+        }
+
+        // Snap focus/selection when lines become newly hidden (e.g. toggling showCompleted).
+        // Track previous hidden set to only react to actual changes, not initial composition.
+        var prevEffectiveHidden by remember { mutableStateOf<Set<Int>>(emptySet()) }
+        LaunchedEffect(effectiveHidden) {
+            val newlyHidden = effectiveHidden - prevEffectiveHidden
+            prevEffectiveHidden = effectiveHidden
+            if (newlyHidden.isEmpty()) return@LaunchedEffect
+
+            if (state.focusedLineIndex in newlyHidden) {
+                val newFocus = CompletedLineUtils.nearestVisibleLine(lineTexts, state.focusedLineIndex, effectiveHidden)
+                controller.setCursor(newFocus, state.lines.getOrNull(newFocus)?.cursorPosition ?: 0)
+            }
+            if (state.hasSelection) {
+                state.clearSelection()
+            }
+        }
+
+        for (item in displayItems) {
+            when (item) {
+                is CompletedLineUtils.DisplayItem.CompletedPlaceholder -> {
+                    CompletedPlaceholderRow(
+                        count = item.count,
+                        indentLevel = item.indentLevel,
+                        textStyle = textStyle
+                    )
+                }
+                is CompletedLineUtils.DisplayItem.VisibleLine -> {
+                    val index = item.realIndex
+                    val lineState = state.lines.getOrNull(index) ?: return@Column
+                    val lineAlpha = if (index in fadedIndices) 0.4f else 1f
+                    if (index < focusRequesters.size) {
+                        ControlledLineViewWrapper(
+                            index = index,
+                            lineState = lineState,
+                            state = state,
+                            controller = controller,
+                            textStyle = textStyle,
+                            focusRequester = focusRequesters[index],
+                            lineLayouts = lineLayouts,
+                            onEditorFocusChanged = onEditorFocusChanged,
+                            directiveResults = directiveResults,
+                            directiveCallbacks = directiveCallbacks,
+                            buttonCallbacks = buttonCallbacks,
+                            onSymbolTap = onSymbolTap,
+                            symbolOverlays = symbolOverlaysProvider?.invoke(index) ?: emptyList(),
+                            alpha = lineAlpha
+                        )
+
+                        // Render edit rows for expanded directives on this line
+                        val lineContent = lineState.content
+                        val lineDirectives = DirectiveFinder.findDirectives(lineContent)
+                        for (found in lineDirectives) {
+                            val directiveKey = DirectiveFinder.directiveKey(index, found.startOffset)
+                            val result = directiveResults[directiveKey]
+                            val isViewDirective = result?.toValue() is org.alkaline.taskbrain.dsl.runtime.values.ViewVal
+                            if (result != null && !result.collapsed && !isViewDirective) {
+                                key(directiveKey) {
+                                    DirectiveEditRow(
+                                        initialText = found.sourceText,
+                                        textStyle = textStyle,
+                                        errorMessage = result.error,
+                                        warningMessage = result.warning?.displayMessage,
+                                        onRefresh = { newText ->
+                                            directiveCallbacks.onViewDirectiveRefresh?.invoke(index, directiveKey, found.sourceText, newText)
+                                        },
+                                        onConfirm = { newText ->
+                                            directiveCallbacks.onViewDirectiveConfirm?.invoke(index, directiveKey, found.sourceText, newText)
+                                        },
+                                        onCancel = {
+                                            directiveCallbacks.onViewDirectiveCancel?.invoke(index, directiveKey, found.sourceText)
+                                        },
+                                        onHeightMeasured = { height ->
+                                            onDirectiveEditHeightMeasured?.invoke(directiveKey, height)
+                                        }
+                                    )
                                 }
-                            )
+                            }
                         }
                     }
                 }
@@ -529,7 +719,8 @@ private fun ControlledLineViewWrapper(
     directiveCallbacks: DirectiveCallbacks = DirectiveCallbacks(),
     buttonCallbacks: ButtonCallbacks = ButtonCallbacks(),
     onSymbolTap: ((lineIndex: Int, charOffsetInLine: Int) -> Unit)? = null,
-    symbolOverlays: List<SymbolOverlay> = emptyList()
+    symbolOverlays: List<SymbolOverlay> = emptyList(),
+    alpha: Float = 1f
 ) {
     val lineSelection = state.getLineSelection(index)
     val lineEndOffset = state.getLineStartOffset(index) + lineState.text.length
@@ -569,6 +760,7 @@ private fun ControlledLineViewWrapper(
         symbolOverlays = symbolOverlays,
         modifier = Modifier
             .fillMaxWidth()
+            .alpha(alpha)
             .onGloballyPositioned { coordinates ->
                 if (index < lineLayouts.size) {
                     val pos = coordinates.positionInParent()

@@ -10,6 +10,7 @@ import org.alkaline.taskbrain.ui.currentnote.rendering.ButtonCallbacks
 import org.alkaline.taskbrain.ui.currentnote.util.AlarmSymbolUtils
 import org.alkaline.taskbrain.ui.currentnote.util.TappableSymbol
 import org.alkaline.taskbrain.ui.currentnote.util.ClipboardHtmlConverter
+import org.alkaline.taskbrain.ui.currentnote.util.CompletedLineUtils
 import org.alkaline.taskbrain.ui.currentnote.undo.UndoStatePersistence
 import androidx.compose.ui.res.stringResource
 import org.alkaline.taskbrain.R
@@ -80,6 +81,7 @@ fun CurrentNoteScreen(
     val isAlarmOperationPending by currentNoteViewModel.isAlarmOperationPending.observeAsState(false)
     val redoRollbackWarning by currentNoteViewModel.redoRollbackWarning.observeAsState()
     val isNoteDeletedFromVm by currentNoteViewModel.isNoteDeleted.observeAsState(false)
+    val showCompleted by currentNoteViewModel.showCompleted.observeAsState(true)
     val directiveResultsRaw by currentNoteViewModel.directiveResults.observeAsState(emptyMap())
     val directiveResults = remember(directiveResultsRaw) {
         currentNoteViewModel.getResultsByPosition()
@@ -125,6 +127,11 @@ fun CurrentNoteScreen(
         }
     }
     val controller = rememberEditorController(editorState)
+
+    // Update hidden indices for move system when showCompleted or lines change
+    controller.hiddenIndices = remember(userContent, showCompleted) {
+        CompletedLineUtils.computeHiddenIndices(editorState.lines.map { it.text }, showCompleted)
+    }
 
     // Inline editing state for view directives
     val inlineEditState = rememberInlineEditState()
@@ -367,7 +374,18 @@ fun CurrentNoteScreen(
             currentNoteViewModel = currentNoteViewModel,
             onContentChanged = { userContent = it },
             onMarkUnsaved = { isSaved = false },
-            onNavigateBack = onNavigateBack
+            showCompleted = showCompleted,
+            onShowCompletedToggle = { currentNoteViewModel.toggleShowCompleted() },
+            onDeleteNote = {
+                currentNoteViewModel.deleteCurrentNote(onSuccess = {
+                    recentTabsViewModel.closeTab(displayedNoteId ?: "")
+                    when (val result = TabState.closeTabNavigationTarget(recentTabs, displayedNoteId ?: "", displayedNoteId ?: "")) {
+                        is CloseTabResult.StayOnCurrent -> onNavigateBack()
+                        is CloseTabResult.NavigateBack -> onNavigateBack()
+                        is CloseTabResult.SwitchTo -> { displayedNoteId = result.noteId }
+                    }
+                })
+            }
         )
 
         // Loading indicator
@@ -434,6 +452,7 @@ fun CurrentNoteScreen(
                         directiveResults = directiveResults,
                         directiveCallbacks = directiveCallbacks,
                         buttonCallbacks = buttonCallbacks,
+                        showCompleted = showCompleted,
                         symbolOverlaysProvider = { lineIndex ->
                             currentNoteViewModel.getSymbolOverlays(lineIndex, noteAlarmsForOverlay)
                         },
@@ -686,12 +705,8 @@ private fun ContentSyncEffects(
         }
     }
 
-    // Remove tab when note is deleted
-    LaunchedEffect(isNoteDeleted, currentNoteId) {
-        if (isNoteDeleted && currentNoteId != null) {
-            recentTabsViewModel.onNoteDeleted(currentNoteId)
-        }
-    }
+    // Note: Tab removal on delete is handled by the onDeleteNote callback in NoteStatusBar,
+    // which closes the tab and navigates to the next one in a single step.
 
     // Handle alarm creation - insert symbol, record for undo, and save
     LaunchedEffect(alarmCreated) {
@@ -767,13 +782,16 @@ private fun NoteStatusBar(
     currentNoteViewModel: CurrentNoteViewModel,
     onContentChanged: (String) -> Unit,
     onMarkUnsaved: () -> Unit,
-    onNavigateBack: () -> Unit,
+    showCompleted: Boolean,
+    onShowCompletedToggle: () -> Unit,
+    onDeleteNote: () -> Unit,
 ) {
     StatusBar(
         isSaved = isSaved,
         onSaveClick = {
+            controller.sortCompletedToBottom()
             controller.commitUndoState(continueEditing = true)
-            currentNoteViewModel.saveContent(userContent)
+            currentNoteViewModel.saveContent(editorState.text)
         },
         canUndo = canUndo,
         canRedo = canRedo,
@@ -815,12 +833,12 @@ private fun NoteStatusBar(
             }
         },
         isDeleted = isNoteDeleted,
-        onDeleteClick = {
-            currentNoteViewModel.deleteCurrentNote(onSuccess = onNavigateBack)
-        },
+        onDeleteClick = onDeleteNote,
         onUndeleteClick = {
             currentNoteViewModel.undeleteCurrentNote(onSuccess = {})
-        }
+        },
+        showCompleted = showCompleted,
+        onShowCompletedToggle = onShowCompletedToggle
     )
 }
 

@@ -231,6 +231,115 @@ describe('calculateMove (moveLinesInternal)', () => {
   })
 })
 
+describe('findMoveUpTarget with hiddenIndices', () => {
+  it('skips hidden lines when scanning backward', () => {
+    // Lines: a, ☑ done, b  — hide index 1
+    const lines = makeLines('a', '☑ done', 'b')
+    const hidden = new Set([1])
+    expect(findMoveUpTarget(lines, 2, 2, hidden)).toBe(0)
+  })
+
+  it('returns null when all lines above are hidden', () => {
+    const lines = makeLines('title', '☑ done1', '☑ done2', 'active')
+    const hidden = new Set([1, 2])
+    // Line 3 trying to move up, lines 1-2 are hidden, line 0 is at same indent (valid)
+    expect(findMoveUpTarget(lines, 3, 3, hidden)).toBe(0)
+  })
+
+  it('returns null when only line 0 remains and target is hidden', () => {
+    const lines = makeLines('☑ done', 'active')
+    const hidden = new Set([0])
+    expect(findMoveUpTarget(lines, 1, 1, hidden)).toBeNull()
+  })
+
+  it('skips hidden block including children', () => {
+    // Lines: a, ☑ parent, \tchild, b — hide indices 1,2
+    const lines = makeLines('a', '☑ parent', '\tchild', 'b')
+    const hidden = new Set([1, 2])
+    expect(findMoveUpTarget(lines, 3, 3, hidden)).toBe(0)
+  })
+})
+
+describe('findMoveDownTarget with hiddenIndices', () => {
+  it('skips hidden lines when scanning forward', () => {
+    const lines = makeLines('a', '☑ done', 'b')
+    const hidden = new Set([1])
+    expect(findMoveDownTarget(lines, 0, 0, hidden)).toBe(3)
+  })
+
+  it('returns null when all lines below are hidden', () => {
+    const lines = makeLines('active', '☑ done1', '☑ done2')
+    const hidden = new Set([1, 2])
+    expect(findMoveDownTarget(lines, 0, 0, hidden)).toBeNull()
+  })
+
+  it('skips hidden block and finds target after it', () => {
+    const lines = makeLines('a', '☑ parent', '\tchild', 'b')
+    const hidden = new Set([1, 2])
+    // Moving 'a' down should skip hidden 1,2 and land after 'b'
+    expect(findMoveDownTarget(lines, 0, 0, hidden)).toBe(4)
+  })
+})
+
+describe('findMoveUpTarget skips hidden block above visible target', () => {
+  it('jumps past hidden block between visible lines', () => {
+    // Lines: unchecked, ☑ done1, ☑ done2, empty, unchecked2
+    // Moving unchecked2 up should land above the hidden block, not between it and the empty line
+    const lines = makeLines('unchecked1', '☑ done1', '☑ done2', '', 'unchecked2')
+    const hidden = new Set([1, 2])
+    expect(findMoveUpTarget(lines, 4, 4, hidden)).toBe(1)
+  })
+
+  it('does not skip hidden block at deeper indent', () => {
+    // Lines: ☐ parent (indent 1), ☑ child (hidden, indent 1), Root (indent 0), ☐ mover (indent 1)
+    // Moving mover up should swap with Root, not jump past the hidden child
+    const lines = makeLines('\t☐ parent', '\t☑ child', 'Root', '\t☐ mover')
+    const hidden = new Set([1])
+    expect(findMoveUpTarget(lines, 3, 3, hidden)).toBe(2)
+  })
+
+  it('skips hidden block with children above visible target', () => {
+    // Lines: unchecked, ☑ parent, \tchild (both hidden), empty, unchecked2
+    const lines = makeLines('unchecked1', '☑ parent', '\tchild', '', 'unchecked2')
+    const hidden = new Set([1, 2])
+    expect(findMoveUpTarget(lines, 4, 4, hidden)).toBe(1)
+  })
+})
+
+describe('findMoveDownTarget does not expand block through hidden siblings', () => {
+  it('stops block expansion at hidden sibling', () => {
+    // Lines: unchecked1, unchecked2, ☑ done1, ☑ done2, empty
+    // Moving unchecked1 down should swap with unchecked2, not jump past hidden lines
+    const lines = makeLines('unchecked1', 'unchecked2', '☑ done1', '☑ done2', '')
+    const hidden = new Set([2, 3])
+    expect(findMoveDownTarget(lines, 0, 0, hidden)).toBe(2)
+  })
+
+  it('still includes visible children in block expansion', () => {
+    // Lines: unchecked1, unchecked2, \tchild, ☑ done (hidden), empty
+    // Moving unchecked1 down should swap past unchecked2 + its child, stop at hidden sibling
+    const lines = makeLines('unchecked1', 'unchecked2', '\tchild', '☑ done', '')
+    const hidden = new Set([3])
+    expect(findMoveDownTarget(lines, 0, 0, hidden)).toBe(3)
+  })
+})
+
+describe('getMoveTarget with hiddenIndices', () => {
+  it('uses hiddenIndices for move up', () => {
+    const lines = makeLines('a', '☑ done', 'b')
+    const hidden = new Set([1])
+    const target = getMoveTarget(lines, false, SELECTION_NONE, 2, true, hidden)
+    expect(target).toBe(0)
+  })
+
+  it('uses hiddenIndices for move down', () => {
+    const lines = makeLines('a', '☑ done', 'b')
+    const hidden = new Set([1])
+    const target = getMoveTarget(lines, false, SELECTION_NONE, 0, false, hidden)
+    expect(target).toBe(3)
+  })
+})
+
 describe('empty line handling in moves', () => {
   it('empty lines have indent 0 and affect block boundaries', () => {
     const lines = makeLines('a', '', 'b')

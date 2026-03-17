@@ -120,6 +120,17 @@ describe('EditorState deleteSelection', () => {
     // The pre-existing empty line should still be there
     expect(state.text).toContain('\n')
   })
+
+  it('preserves empty spacer line when deleting whole lines before it', () => {
+    // Simulates cutting a hidden checked block that sits right before an empty spacer
+    const state = stateWithText('title\n☑ done1\n☑ done2\n\nactive')
+    // Select the two checked lines (whole-line gutter selection)
+    const start = state.getLineStartOffset(1)
+    const end = state.getLineStartOffset(2) + state.lines[2]!.text.length
+    state.setSelection(start, end)
+    state.deleteSelectionInternal()
+    expect(state.lines.map((l) => l.text)).toEqual(['title', '', 'active'])
+  })
 })
 
 describe('EditorState replaceSelection', () => {

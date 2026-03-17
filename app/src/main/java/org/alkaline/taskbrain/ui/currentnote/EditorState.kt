@@ -122,7 +122,6 @@ class EditorState {
         val newCursorPos = selStart
 
         updateFromText(newText)
-        removeEmptyLineAtCursor(newCursorPos)
         clearSelection()
 
         val (lineIndex, localOffset) = getLineAndLocalOffset(newCursorPos)
@@ -347,8 +346,8 @@ class EditorState {
      * Handles both selection and no-selection cases, including the special case
      * where selected lines span different indent levels.
      */
-    fun getMoveTarget(moveUp: Boolean): Int? =
-        MoveTargetFinder.getMoveTarget(lines, hasSelection, selection, focusedLineIndex, moveUp)
+    fun getMoveTarget(moveUp: Boolean, hiddenIndices: Set<Int> = emptySet()): Int? =
+        MoveTargetFinder.getMoveTarget(lines, hasSelection, selection, focusedLineIndex, moveUp, hiddenIndices)
 
     /**
      * Checks if moving with the current selection would break parent-child relationships.

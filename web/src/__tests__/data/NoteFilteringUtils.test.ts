@@ -19,6 +19,7 @@ function note(overrides: Partial<Note> & { id: string }): Note {
     state: null,
     path: '',
     rootNoteId: null,
+    showCompleted: true,
     ...overrides,
   }
 }

@@ -108,11 +108,14 @@ fun SelectionContextMenu(
                     screenWidthPx - menuWidthPx - marginPx
                 }
 
-                DpOffset(x.toDp(), y.toDp())
+                // Clamp: never position left of screen center
+                val minX = screenWidthPx / 2f
+                DpOffset(x.coerceAtLeast(minX).toDp(), y.toDp())
             } else {
-                // Fallback: use provided offset (legacy behavior)
+                // Fallback: use provided offset, clamped to right half
+                val minX = screenWidthPx / 2f
                 DpOffset(
-                    menuOffset.x.toDp(),
+                    menuOffset.x.coerceAtLeast(minX).toDp(),
                     menuOffset.y.toDp() - 48.dp
                 )
             }

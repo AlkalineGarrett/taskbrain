@@ -30,7 +30,7 @@
   background: white;
   cursor: pointer;
   font-size: 1rem;
-  color: #333;
+  color: var(--color-text);
   padding: 0;
 }
 
@@ -76,4 +76,53 @@
   color: var(--color-disabled-text);
   border-color: var(--color-disabled-bg);
   opacity: 1;
+}
+
+.menuContainer {
+  position: relative;
+}
+
+.menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: 0.25rem;
+  min-width: 10rem;
+  background: white;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 100;
+  padding: 0.25rem 0;
+}
+
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: none;
+  background: none;
+  text-align: left;
+  font-size: 0.875rem;
+  cursor: pointer;
+  color: var(--color-text);
+}
+
+.menuItem:hover {
+  background: var(--color-surface-hover);
+}
+
+.menuIcon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.menuItemDanger {
+  color: var(--color-menu-danger-text);
+}
+
+.menuItemDanger:hover {
+  background: var(--color-menu-danger-bg-hover);
 }

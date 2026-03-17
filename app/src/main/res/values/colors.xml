@@ -17,6 +17,17 @@
 
     <color name="destructive_text">#FFB71C1C</color>
 
+    <!-- Menu danger actions (web: color-error) -->
+    <color name="menu_danger_text">#FFF44336</color>
+
+    <!-- Status indicator icons (web: color-success, color-status-unsaved) -->
+    <color name="status_saved_icon">#FF4CAF50</color>
+    <color name="status_unsaved_icon">#FFFFC107</color>
+
+    <!-- Icon tints (web: color-icon-default, color-icon-disabled) -->
+    <color name="icon_default">#FF000000</color>
+    <color name="icon_disabled">#FF808080</color>
+
     <color name="deleted_note_background">#FFF0F0F0</color>
     <color name="deleted_note_text">#FF666666</color>
 </resources>

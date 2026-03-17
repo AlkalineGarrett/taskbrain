@@ -17,6 +17,7 @@ function makeNote(id: string, path: string): Note {
     state: null,
     path,
     rootNoteId: null,
+    showCompleted: true,
   }
 }
 

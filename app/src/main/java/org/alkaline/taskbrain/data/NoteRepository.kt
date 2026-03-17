@@ -609,6 +609,19 @@ class NoteRepository(
 
     // ── Utility operations ──────────────────────────────────────────────
 
+    suspend fun updateShowCompleted(noteId: String, showCompleted: Boolean): Result<Unit> = runCatching {
+        withContext(Dispatchers.IO) {
+            requireUserId()
+            noteRef(noteId).update(
+                mapOf(
+                    "showCompleted" to showCompleted,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+            Unit
+        }
+    }.onFailure { Log.e(TAG, "Error updating showCompleted", it) }
+
     suspend fun updateLastAccessed(noteId: String): Result<Unit> = runCatching {
         withContext(Dispatchers.IO) {
             requireUserId()

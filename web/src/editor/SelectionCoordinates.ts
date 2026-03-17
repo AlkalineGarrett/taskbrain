@@ -51,7 +51,7 @@ export function getLineSelection(
   const localStart = Math.max(0, Math.min(sMin - lineStart, lines[lineIndex]!.text.length))
   const localEnd = Math.max(0, Math.min(sMax - lineStart, lines[lineIndex]!.text.length))
 
-  if (localStart === localEnd) return null
+  if (localStart === localEnd && lines[lineIndex]!.text.length > 0) return null
 
   return [localStart, localEnd]
 }

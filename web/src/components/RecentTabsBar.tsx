@@ -161,6 +161,21 @@ export async function addOrUpdateTab(noteId: string, displayText: string): Promi
   }
 }
 
+/**
+ * Removes a tab and returns the noteId to navigate to (null = go home).
+ * Use when closing a tab programmatically (e.g., after deleting a note).
+ */
+export async function removeTab(noteId: string, currentNoteId: string | undefined): Promise<string | null> {
+  let navigateTo: string | null = null
+  await repo.removeTab(noteId)
+  setTabsNoAnimation?.((prev) => {
+    const result = removeTabState(prev, noteId, currentNoteId)
+    navigateTo = result.navigateTo ?? null
+    return result.tabs
+  })
+  return navigateTo
+}
+
 /** Call this when a note's title changes. Updates text without reordering (no animation). */
 export async function updateTabDisplayText(noteId: string, displayText: string): Promise<void> {
   setTabsNoAnimation?.((prev) => updateDisplayTextState(prev, noteId, displayText))

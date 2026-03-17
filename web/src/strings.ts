@@ -66,6 +66,11 @@ export const ERROR_CREATE_NOTE = 'Create Note Error'
 export const ERROR_TABS = 'Tabs Error'
 export const ERROR_ALARM = 'Alarm Error'
 
+// Note actions (Android: action_delete_note_confirm_title, action_delete_note_confirm_message)
+export const DELETE_NOTE_CONFIRM_TITLE = 'Delete note?'
+export const DELETE_NOTE_CONFIRM_MESSAGE = 'This note will be moved to the deleted notes section.'
+export const NOTE_MENU = 'Note menu'
+
 // Note editor (Android: new_note, close_tab, tab_menu, empty_line)
 export const NEW_NOTE = 'New Note'
 export const CLOSE_TAB = 'Close tab'
@@ -80,6 +85,10 @@ export const COMMAND_UNINDENT = 'Unindent'
 export const COMMAND_MOVE_UP = 'Move lines up'
 export const COMMAND_MOVE_DOWN = 'Move lines down'
 export const COMMAND_ADD_ALARM = 'Add alarm'
+
+// Show completed (Android: action_show_completed, completed_count)
+export const SHOW_COMPLETED = 'Show completed'
+export const COMPLETED_COUNT = '(%d completed)'
 
 // Inline editor
 export const EDITING_NOTE = 'Editing note'

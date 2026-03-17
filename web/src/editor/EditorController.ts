@@ -3,6 +3,7 @@ import { EditorState } from './EditorState'
 import { CommandType, UndoManager, type UndoSnapshot } from './UndoManager'
 import * as LP from './LinePrefixes'
 import { parseClipboardContent } from './ClipboardParser'
+import { sortCompletedToBottom as sortCompleted } from './CompletedLineUtils'
 import { executePaste } from './PasteHandler'
 
 export enum OperationType {
@@ -16,6 +17,7 @@ export enum OperationType {
   ALARM_SYMBOL = 'ALARM_SYMBOL',
   MOVE_LINES = 'MOVE_LINES',
   DIRECTIVE_EDIT = 'DIRECTIVE_EDIT',
+  SORT_COMPLETED = 'SORT_COMPLETED',
 }
 
 export interface MoveButtonState {
@@ -26,6 +28,10 @@ export interface MoveButtonState {
 export class EditorController {
   readonly state: EditorState
   readonly undoManager: UndoManager
+  /** Hidden line indices (completed lines when showCompleted=false). Set by the UI layer. */
+  hiddenIndices: Set<number> = new Set()
+  /** Line indices recently toggled from unchecked to checked. Visible at reduced opacity until save. */
+  readonly recentlyCheckedIndices: Set<number> = new Set()
 
   constructor(state: EditorState, undoManager?: UndoManager) {
     this.state = state
@@ -110,6 +116,7 @@ export class EditorController {
         break
       case OperationType.ALARM_SYMBOL:
       case OperationType.DIRECTIVE_EDIT:
+      case OperationType.SORT_COMPLETED:
         um.commitPendingUndoState(s.lines, s.focusedLineIndex)
         um.captureStateBeforeChange(s.lines, s.focusedLineIndex)
         break
@@ -131,6 +138,7 @@ export class EditorController {
       case OperationType.CUT:
       case OperationType.DELETE_SELECTION:
       case OperationType.DIRECTIVE_EDIT:
+      case OperationType.SORT_COMPLETED:
         um.beginEditingLine(s.lines, s.focusedLineIndex, s.focusedLineIndex)
         break
       case OperationType.COMMAND_INDENT:
@@ -159,9 +167,12 @@ export class EditorController {
   }
 
   toggleCheckbox(): void {
+    const lineIndex = this.state.focusedLineIndex
+    const wasUnchecked = this.state.lines[lineIndex]?.prefix.includes(LP.CHECKBOX_UNCHECKED) ?? false
     this.executeOperation(OperationType.COMMAND_CHECKBOX, () => {
       this.state.toggleCheckboxInternal()
     })
+    this.trackRecentlyChecked(lineIndex, wasUnchecked)
   }
 
   indent(): void {
@@ -239,14 +250,14 @@ export class EditorController {
 
   getMoveUpState(): MoveButtonState {
     return {
-      isEnabled: this.state.getMoveTarget(true) != null,
+      isEnabled: this.state.getMoveTarget(true, this.hiddenIndices) != null,
       isWarning: this.state.wouldOrphanChildren(),
     }
   }
 
   getMoveDownState(): MoveButtonState {
     return {
-      isEnabled: this.state.getMoveTarget(false) != null,
+      isEnabled: this.state.getMoveTarget(false, this.hiddenIndices) != null,
       isWarning: this.state.wouldOrphanChildren(),
     }
   }
@@ -259,7 +270,7 @@ export class EditorController {
     } else {
       ;[rangeFirst, rangeLast] = s.getLogicalBlock(s.focusedLineIndex)
     }
-    const target = s.getMoveTarget(true)
+    const target = s.getMoveTarget(true, this.hiddenIndices)
     if (target == null) return false
 
     this.undoManager.recordMoveCommand(s.lines, s.focusedLineIndex, [rangeFirst, rangeLast])
@@ -279,7 +290,7 @@ export class EditorController {
     } else {
       ;[rangeFirst, rangeLast] = s.getLogicalBlock(s.focusedLineIndex)
     }
-    const target = s.getMoveTarget(false)
+    const target = s.getMoveTarget(false, this.hiddenIndices)
     if (target == null) return false
 
     this.undoManager.recordMoveCommand(s.lines, s.focusedLineIndex, [rangeFirst, rangeLast])
@@ -289,6 +300,25 @@ export class EditorController {
       this.undoManager.markContentChanged()
     }
     return newRange != null
+  }
+
+  /**
+   * Sorts completed (checked) lines to the bottom of each sibling group.
+   * Called at save time so undo restores the pre-sort order.
+   * @returns true if any reordering occurred
+   */
+  sortCompletedToBottom(): boolean {
+    ;(this.recentlyCheckedIndices as Set<number> & { clear(): void }).clear()
+    const currentTexts = this.state.lines.map((l) => l.text)
+    const sorted = sortCompleted(currentTexts)
+    if (sorted.every((t, i) => t === currentTexts[i])) return false
+    this.executeOperation(OperationType.SORT_COMPLETED, () => {
+      this.state.lines.forEach((line, i) => {
+        line.updateFull(sorted[i]!, Math.min(line.cursorPosition, sorted[i]!.length))
+      })
+      this.state.notifyChange()
+    })
+    return true
   }
 
   /** Returns the selected text, prepending the first line's prefix when selection starts at content boundary. */
@@ -652,15 +682,29 @@ export class EditorController {
     return this.state.handleSpaceWithSelectionInternal()
   }
 
+  /** Updates recentlyCheckedIndices after a checkbox toggle. */
+  private trackRecentlyChecked(lineIndex: number, wasUnchecked: boolean): void {
+    const isNowChecked = this.state.lines[lineIndex]?.prefix.includes(LP.CHECKBOX_CHECKED) ?? false
+    const mutable = this.recentlyCheckedIndices as Set<number> & { add(v: number): void; delete(v: number): void }
+    if (wasUnchecked && isNowChecked) {
+      mutable.add(lineIndex)
+    } else {
+      mutable.delete(lineIndex)
+    }
+  }
+
   // --- Line Prefix Operations ---
 
   toggleCheckboxOnLine(lineIndex: number): void {
     const line = this.state.lines[lineIndex]
     if (!line) return
+    const wasUnchecked = line.prefix.includes(LP.CHECKBOX_UNCHECKED)
     this.undoManager.recordCommand(this.state.lines, this.state.focusedLineIndex, CommandType.CHECKBOX)
     line.toggleCheckboxState()
     this.undoManager.commitAfterCommand(this.state.lines, this.state.focusedLineIndex, CommandType.CHECKBOX)
+    this.state.requestFocusUpdate()
     this.state.notifyChange()
+    this.trackRecentlyChecked(lineIndex, wasUnchecked)
   }
 
   // --- Read Access ---

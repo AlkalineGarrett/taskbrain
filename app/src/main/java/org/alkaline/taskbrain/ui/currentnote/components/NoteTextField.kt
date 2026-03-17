@@ -64,6 +64,7 @@ fun NoteTextField(
     directiveResults: Map<String, DirectiveResult> = emptyMap(),
     directiveCallbacks: DirectiveCallbacks = DirectiveCallbacks(),
     buttonCallbacks: ButtonCallbacks = ButtonCallbacks(),
+    showCompleted: Boolean = true,
     symbolOverlaysProvider: ((lineIndex: Int) -> List<SymbolOverlay>)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -110,6 +111,7 @@ fun NoteTextField(
                     directiveResults = directiveResults,
                     directiveCallbacks = directiveCallbacks,
                     buttonCallbacks = buttonCallbacks,
+                    showCompleted = showCompleted,
                     onSymbolTap = onSymbolTap?.let { callback ->
                         { lineIndex: Int, charOffsetInLine: Int ->
                             val content = editorState.lines.getOrNull(lineIndex)?.content ?: ""

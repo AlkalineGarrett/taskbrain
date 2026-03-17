@@ -574,6 +574,16 @@ export class NoteRepository {
 
   // ── Utility operations ──────────────────────────────────────────────
 
+  async updateShowCompleted(noteId: string, showCompleted: boolean): Promise<void> {
+    return this.logged('updateShowCompleted', async () => {
+      this.requireUserId()
+      await updateDoc(this.noteRef(noteId), {
+        showCompleted,
+        updatedAt: serverTimestamp(),
+      })
+    })
+  }
+
   async updateLastAccessed(noteId: string): Promise<void> {
     return this.logged('updateLastAccessed', async () => {
       this.requireUserId()

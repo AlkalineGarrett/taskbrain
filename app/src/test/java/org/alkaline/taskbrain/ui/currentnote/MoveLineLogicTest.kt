@@ -1,5 +1,6 @@
 package org.alkaline.taskbrain.ui.currentnote
 
+import org.alkaline.taskbrain.ui.currentnote.move.MoveTargetFinder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -380,6 +381,108 @@ class MoveLineLogicTest {
         state.focusedLineIndex = 2
         val target = state.findMoveUpTarget(2..2)
         assertEquals(1, target) // Empty line is its own group
+    }
+
+    // ==================== Hidden indices (showCompleted=false) ====================
+
+    private fun lines(vararg texts: String): List<LineState> = texts.map { LineState(it) }
+
+    @Test
+    fun `findMoveUpTarget skips hidden lines`() {
+        val l = lines("a", "☑ done", "b")
+        val hidden = setOf(1)
+        assertEquals(0, MoveTargetFinder.findMoveUpTarget(l, 2..2, hidden))
+    }
+
+    @Test
+    fun `findMoveUpTarget returns null when target is hidden`() {
+        val l = lines("☑ done", "active")
+        val hidden = setOf(0)
+        assertNull(MoveTargetFinder.findMoveUpTarget(l, 1..1, hidden))
+    }
+
+    @Test
+    fun `findMoveUpTarget skips hidden block including children`() {
+        val l = lines("a", "☑ parent", "\tchild", "b")
+        val hidden = setOf(1, 2)
+        assertEquals(0, MoveTargetFinder.findMoveUpTarget(l, 3..3, hidden))
+    }
+
+    @Test
+    fun `findMoveDownTarget skips hidden lines`() {
+        val l = lines("a", "☑ done", "b")
+        val hidden = setOf(1)
+        assertEquals(3, MoveTargetFinder.findMoveDownTarget(l, 0..0, hidden))
+    }
+
+    @Test
+    fun `findMoveDownTarget returns null when all below are hidden`() {
+        val l = lines("active", "☑ done1", "☑ done2")
+        val hidden = setOf(1, 2)
+        assertNull(MoveTargetFinder.findMoveDownTarget(l, 0..0, hidden))
+    }
+
+    @Test
+    fun `findMoveDownTarget skips hidden block and finds target`() {
+        val l = lines("a", "☑ parent", "\tchild", "b")
+        val hidden = setOf(1, 2)
+        assertEquals(4, MoveTargetFinder.findMoveDownTarget(l, 0..0, hidden))
+    }
+
+    @Test
+    fun `findMoveUpTarget skips hidden block above visible target`() {
+        // Lines: unchecked, ☑ done1, ☑ done2, empty, unchecked2
+        // Moving unchecked2 up should land above the hidden block
+        val l = lines("unchecked1", "☑ done1", "☑ done2", "", "unchecked2")
+        val hidden = setOf(1, 2)
+        assertEquals(1, MoveTargetFinder.findMoveUpTarget(l, 4..4, hidden))
+    }
+
+    @Test
+    fun `findMoveUpTarget does not skip hidden block at deeper indent`() {
+        // Lines: \t☐ parent, \t☑ child (hidden), Root, \t☐ mover
+        // Moving mover up should swap with Root, not jump past hidden child
+        val l = lines("\t☐ parent", "\t☑ child", "Root", "\t☐ mover")
+        val hidden = setOf(1)
+        assertEquals(2, MoveTargetFinder.findMoveUpTarget(l, 3..3, hidden))
+    }
+
+    @Test
+    fun `findMoveUpTarget skips hidden block with children above visible target`() {
+        val l = lines("unchecked1", "☑ parent", "\tchild", "", "unchecked2")
+        val hidden = setOf(1, 2)
+        assertEquals(1, MoveTargetFinder.findMoveUpTarget(l, 4..4, hidden))
+    }
+
+    @Test
+    fun `findMoveDownTarget stops block expansion at hidden sibling`() {
+        // Lines: unchecked1, unchecked2, ☑ done1, ☑ done2, empty
+        // Moving unchecked1 down should swap with unchecked2, not jump past hidden lines
+        val l = lines("unchecked1", "unchecked2", "☑ done1", "☑ done2", "")
+        val hidden = setOf(2, 3)
+        assertEquals(2, MoveTargetFinder.findMoveDownTarget(l, 0..0, hidden))
+    }
+
+    @Test
+    fun `findMoveDownTarget still includes visible children in block expansion`() {
+        // Lines: unchecked1, unchecked2, \tchild, ☑ done (hidden), empty
+        val l = lines("unchecked1", "unchecked2", "\tchild", "☑ done", "")
+        val hidden = setOf(3)
+        assertEquals(3, MoveTargetFinder.findMoveDownTarget(l, 0..0, hidden))
+    }
+
+    @Test
+    fun `getMoveTarget with hiddenIndices move up`() {
+        val l = lines("a", "☑ done", "b")
+        val hidden = setOf(1)
+        assertEquals(0, MoveTargetFinder.getMoveTarget(l, false, EditorState().selection, 2, true, hidden))
+    }
+
+    @Test
+    fun `getMoveTarget with hiddenIndices move down`() {
+        val l = lines("a", "☑ done", "b")
+        val hidden = setOf(1)
+        assertEquals(3, MoveTargetFinder.getMoveTarget(l, false, EditorState().selection, 0, false, hidden))
     }
 
     // ==================== Edge cases ====================

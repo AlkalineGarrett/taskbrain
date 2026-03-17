@@ -61,7 +61,7 @@ object SelectionCoordinates {
         val localStart = (selMin - lineStart).coerceIn(0, lines[lineIndex].text.length)
         val localEnd = (selMax - lineStart).coerceIn(0, lines[lineIndex].text.length)
 
-        if (localStart == localEnd) {
+        if (localStart == localEnd && lines[lineIndex].text.isNotEmpty()) {
             return null
         }
 

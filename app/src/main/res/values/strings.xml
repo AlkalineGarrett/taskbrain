@@ -30,6 +30,8 @@
     <string name="action_more_options">More options</string>
     <string name="action_delete_note">Delete note</string>
     <string name="action_restore_note">Restore note</string>
+    <string name="action_delete_note_confirm_title">Delete note?</string>
+    <string name="action_delete_note_confirm_message">This note will be moved to the deleted notes section.</string>
 
     <!-- Common Actions -->
     <string name="action_ok">OK</string>
@@ -81,6 +83,10 @@
     <string name="command_move_up">Move lines up</string>
     <string name="command_move_down">Move lines down</string>
     <string name="command_add_alarm">Add alarm</string>
+
+    <!-- Show Completed Strings -->
+    <string name="action_show_completed">Show completed</string>
+    <string name="completed_count">(%d completed)</string>
 
     <!-- Alarm Config Dialog Strings -->
     <string name="alarm_show_upcoming">Show in Upcoming list</string>

@@ -23,6 +23,7 @@ function makeNote(id: string, content = 'Note content', path = `path/${id}`): No
     state: null,
     path,
     rootNoteId: null,
+    showCompleted: true,
   }
 }
 

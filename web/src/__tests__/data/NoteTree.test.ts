@@ -21,6 +21,7 @@ function note(
     tags: [],
     state: null,
     path: '',
+    showCompleted: true,
   }
 }
 
