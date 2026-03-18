@@ -42,10 +42,16 @@
             </intent-filter>
         </activity>
 
-        <!-- Full-screen alarm activity -->
+        <!-- Full-screen alarm activity.
+             Separate taskAffinity so it runs in its own task, keeping the main app
+             accessible independently (user can switch back to TaskBrain without
+             having to dismiss/complete the alarm first).
+             excludeFromRecents keeps it out of the recents list. -->
         <activity
             android:name=".ui.alarm.AlarmActivity"
             android:exported="false"
+            android:taskAffinity=".alarm"
+            android:excludeFromRecents="true"
             android:showOnLockScreen="true"
             android:turnScreenOn="true"
             android:theme="@style/Theme.TaskBrain" />

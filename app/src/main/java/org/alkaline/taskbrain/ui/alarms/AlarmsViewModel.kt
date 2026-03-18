@@ -18,6 +18,7 @@ import org.alkaline.taskbrain.data.AlarmUpdateEvent
 import org.alkaline.taskbrain.data.RecurringAlarm
 import org.alkaline.taskbrain.data.RecurringAlarmRepository
 import org.alkaline.taskbrain.service.AlarmStateManager
+import org.alkaline.taskbrain.service.NotificationHelper
 import org.alkaline.taskbrain.service.UrgentStateManager
 import org.alkaline.taskbrain.service.RecurrenceConfigMapper
 import org.alkaline.taskbrain.ui.currentnote.components.RecurrenceConfig
@@ -27,6 +28,7 @@ class AlarmsViewModel(application: Application) : AndroidViewModel(application) 
     private val repository = AlarmRepository()
     private val recurringRepository = RecurringAlarmRepository()
     private val alarmStateManager = AlarmStateManager(application)
+    private val notificationHelper = NotificationHelper(application)
 
     private val _pastDueAlarms = MutableLiveData<List<Alarm>>(emptyList())
     val pastDueAlarms: LiveData<List<Alarm>> = _pastDueAlarms
@@ -145,6 +147,23 @@ class AlarmsViewModel(application: Application) : AndroidViewModel(application) 
     fun deleteAlarm(alarmId: String) = executeAlarmOperation { alarmStateManager.delete(alarmId) }
 
     fun reactivateAlarm(alarmId: String) = executeAlarmOperation { alarmStateManager.reactivate(alarmId) }
+
+    /**
+     * Re-shows notifications for all pending alarms that have at least one stage
+     * whose time has already passed but whose notification is not currently active.
+     */
+    fun reshowNotifications() {
+        viewModelScope.launch {
+            val now = Timestamp.now()
+            val allPending = (_pastDueAlarms.value.orEmpty() + _upcomingAlarms.value.orEmpty())
+            for (alarm in allPending) {
+                val earliest = alarm.earliestThresholdTime ?: continue
+                if (earliest <= now && !notificationHelper.isNotificationActive(alarm.id)) {
+                    notificationHelper.showNotification(alarm)
+                }
+            }
+        }
+    }
 
     fun updateAlarm(
         alarm: Alarm,

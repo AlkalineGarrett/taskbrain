@@ -121,6 +121,7 @@
     <string name="alarm_cancel_desc">Cancel</string>
     <string name="alarm_reactivate">Reactivate</string>
     <string name="alarm_skipped">Skipped</string>
+    <string name="alarm_reshow_notifications">Re-show notifications</string>
     <string name="alarm_reopen">Re-open</string>
     <string name="alarm_untitled">Untitled alarm</string>
     <string name="alarm_delete_all_recurring">Delete all recurring alarms</string>

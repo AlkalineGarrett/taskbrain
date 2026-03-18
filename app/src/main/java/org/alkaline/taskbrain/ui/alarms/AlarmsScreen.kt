@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
@@ -231,6 +232,24 @@ fun AlarmsScreen(
                     contentPadding = PaddingValues(16.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
+                    if (pastDueAlarms.isNotEmpty() || upcomingAlarms.isNotEmpty()) {
+                        item {
+                            OutlinedButton(
+                                onClick = { alarmsViewModel.reshowNotifications() },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Notifications,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(stringResource(R.string.alarm_reshow_notifications))
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                    }
+
                     fun openRecurrenceEditor(alarm: Alarm, recurring: RecurringAlarm) {
                         recurrenceEditTarget = RecurrenceEditTarget(
                             recurringAlarmId = recurring.id,
