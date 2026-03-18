@@ -136,10 +136,12 @@ fun AlarmsScreen(
         val hasPrevious = currentIndex > 0
         val hasNext = currentIndex >= 0 && currentIndex < siblingInstances.lastIndex
 
+        val isSingleInstance = recurringAlarm != null && siblingInstances.size <= 1
         AlarmConfigDialog(
             lineContent = alarm.displayName.ifEmpty { stringResource(R.string.alarm_untitled) },
             existingAlarm = alarm,
             existingRecurrenceConfig = recurrenceConfig,
+            recurringInstanceCount = siblingInstances.size,
             onSave = { dueTime, stages ->
                 alarmsViewModel.updateAlarm(alarm, dueTime, stages)
             },
@@ -147,6 +149,14 @@ fun AlarmsScreen(
                 alarmsViewModel.updateAlarmAndRecurrence(
                     alarm, dueTime, stages, recurrenceConfig = config
                 )
+            },
+            onEndRecurrence = recurringAlarm?.let { ra ->
+                {
+                    alarmsViewModel.endRecurrence(
+                        ra.id,
+                        deleteTemplate = isSingleInstance
+                    )
+                }
             },
             onMarkDone = { alarmsViewModel.markDone(alarm.id) },
             onMarkCancelled = { alarmsViewModel.markCancelled(alarm.id) },
@@ -198,6 +208,9 @@ fun AlarmsScreen(
             initialConfig = target.config,
             onSave = { config ->
                 alarmsViewModel.updateRecurrence(target.recurringAlarmId, config)
+            },
+            onEndRecurrence = {
+                alarmsViewModel.endRecurrence(target.recurringAlarmId)
             },
             onDismiss = { recurrenceEditTarget = null }
         )

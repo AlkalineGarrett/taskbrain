@@ -275,6 +275,29 @@ class AlarmsViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /**
+     * Ends a recurrence: marks the template as ENDED and cancels/deletes all future
+     * pending instances. Completed/cancelled instances are preserved.
+     * If [deleteTemplate] is true, hard-deletes the template and unlinks the alarm
+     * (used when only one instance exists).
+     */
+    fun endRecurrence(recurringAlarmId: String, deleteTemplate: Boolean = false) = executeAlarmOperation {
+        // Cancel all pending instances
+        val pendingInstances = repository.getPendingInstancesForRecurring(recurringAlarmId)
+            .getOrDefault(emptyList())
+        for (instance in pendingInstances) {
+            alarmStateManager.deactivate(instance.id)
+            repository.markCancelled(instance.id)
+        }
+
+        if (deleteTemplate) {
+            recurringRepository.delete(recurringAlarmId)
+        } else {
+            recurringRepository.end(recurringAlarmId)
+        }
+        Result.success(Unit)
+    }
+
     fun deleteAllRecurringAlarms() = executeAlarmOperation {
         // Delete all recurring alarm instances (alarms with recurringAlarmId set)
         val instanceIds = repository.deleteRecurringAlarmInstances().getOrDefault(emptyList())

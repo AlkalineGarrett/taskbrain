@@ -1,5 +1,7 @@
 package org.alkaline.taskbrain.ui.alarms
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,8 +11,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -20,6 +24,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -37,6 +42,7 @@ fun RecurrenceEditDialog(
     lineContent: String,
     initialConfig: RecurrenceConfig,
     onSave: (RecurrenceConfig) -> Unit,
+    onEndRecurrence: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     var config by remember(initialConfig) { mutableStateOf(initialConfig) }
@@ -70,8 +76,23 @@ fun RecurrenceEditDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp),
-                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.End
+                    horizontalArrangement = Arrangement.End
                 ) {
+                    if (onEndRecurrence != null) {
+                        OutlinedButton(
+                            onClick = {
+                                onEndRecurrence()
+                                onDismiss()
+                            },
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = colorResource(R.color.destructive_text)
+                            ),
+                            border = BorderStroke(1.dp, colorResource(R.color.destructive_text).copy(alpha = 0.5f))
+                        ) {
+                            Text(stringResource(R.string.recurrence_end_now_short))
+                        }
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
                     TextButton(onClick = onDismiss) {
                         Text(stringResource(R.string.action_close))
                     }

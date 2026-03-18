@@ -1,6 +1,7 @@
 package org.alkaline.taskbrain.ui.currentnote.components
 
 import android.text.format.DateFormat
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.defaultMinSize
@@ -81,8 +82,10 @@ fun AlarmConfigDialog(
     lineContent: String,
     existingAlarm: Alarm?,
     existingRecurrenceConfig: RecurrenceConfig? = null,
+    recurringInstanceCount: Int = 0,
     onSave: (dueTime: Timestamp?, stages: List<AlarmStage>) -> Unit,
     onSaveRecurring: ((dueTime: Timestamp?, stages: List<AlarmStage>, recurrenceConfig: RecurrenceConfig) -> Unit)? = null,
+    onEndRecurrence: (() -> Unit)? = null,
     onMarkDone: (() -> Unit)? = null,
     onMarkCancelled: (() -> Unit)? = null,
     onReactivate: (() -> Unit)? = null,
@@ -167,14 +170,27 @@ fun AlarmConfigDialog(
 
                     // Recurrence config
                     if (onSaveRecurring != null) {
+                        val showRecurrenceToggle = recurringInstanceCount <= 1
                         Spacer(modifier = Modifier.height(4.dp))
                         HorizontalDivider()
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        RecurrenceConfigSection(
-                            config = recurrenceConfig,
-                            onConfigChange = { if (formEnabled) recurrenceConfig = it }
-                        )
+                        if (showRecurrenceToggle) {
+                            RecurrenceConfigSection(
+                                config = recurrenceConfig,
+                                onConfigChange = { if (formEnabled) recurrenceConfig = it }
+                            )
+                        } else {
+                            RecurrenceConfigSection(
+                                config = recurrenceConfig,
+                                onConfigChange = { if (formEnabled) recurrenceConfig = it },
+                                showToggle = false
+                            )
+                            if (onEndRecurrence != null) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                EndRecurrenceButton(onEndRecurrence, onDismiss)
+                            }
+                        }
                     }
                 }
 
@@ -192,6 +208,7 @@ fun AlarmConfigDialog(
                     recurrenceConfig = recurrenceConfig,
                     onSave = onSave,
                     onSaveRecurring = onSaveRecurring,
+                    onEndRecurrence = onEndRecurrence,
                     onDelete = onDelete,
                     onDismiss = onDismiss
                 )
@@ -453,6 +470,7 @@ private fun BottomButtons(
     recurrenceConfig: RecurrenceConfig,
     onSave: (dueTime: Timestamp?, stages: List<AlarmStage>) -> Unit,
     onSaveRecurring: ((dueTime: Timestamp?, stages: List<AlarmStage>, recurrenceConfig: RecurrenceConfig) -> Unit)?,
+    onEndRecurrence: (() -> Unit)?,
     onDelete: (() -> Unit)?,
     onDismiss: () -> Unit
 ) {
@@ -483,6 +501,8 @@ private fun BottomButtons(
                     onSaveRecurring(dueTime, stages, recurrenceConfig)
                 } else {
                     onSave(dueTime, stages)
+                    // If recurrence was toggled off, delete the template
+                    if (!recurrenceConfig.enabled) onEndRecurrence?.invoke()
                 }
                 onDismiss()
             },
@@ -493,6 +513,32 @@ private fun BottomButtons(
             )
         ) {
             Text(stringResource(if (existingAlarm != null) R.string.action_update else R.string.action_create))
+        }
+    }
+}
+
+@Composable
+private fun EndRecurrenceButton(
+    onEndRecurrence: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.Start
+    ) {
+        OutlinedButton(
+            onClick = {
+                onEndRecurrence()
+                onDismiss()
+            },
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = colorResource(R.color.destructive_text)
+            ),
+            border = BorderStroke(1.dp, colorResource(R.color.destructive_text).copy(alpha = 0.5f))
+        ) {
+            Text(stringResource(R.string.recurrence_end_now))
         }
     }
 }

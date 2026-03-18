@@ -162,6 +162,8 @@
     <string name="recurrence_after">After</string>
     <string name="recurrence_times">times</string>
     <string name="recurrence_edit">Edit recurrence</string>
+    <string name="recurrence_end_now">End recurrence</string>
+    <string name="recurrence_end_now_short">End now</string>
 
     <!-- Recurrence Description Strings -->
     <string name="recurrence_desc_daily">Repeats daily</string>
