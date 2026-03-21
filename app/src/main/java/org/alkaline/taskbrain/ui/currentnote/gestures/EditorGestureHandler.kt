@@ -118,7 +118,7 @@ internal fun positionToGlobalOffset(
     val displayOffset = getCharacterOffsetInContent(
         position = position,
         lineYOffset = layoutInfo?.yOffset ?: 0f,
-        prefixLength = lineState.prefix.length,
+        prefixWidthPx = layoutInfo?.prefixWidthPx ?: (lineState.prefix.length * EditorConfig.EstimatedCharWidthPx),
         contentLength = displayResult.displayText.length,
         textLayout = layoutInfo?.textLayoutResult
     )
@@ -163,11 +163,10 @@ private fun mapDisplayToSourceOffset(displayOffset: Int, displayResult: DisplayT
 private fun getCharacterOffsetInContent(
     position: Offset,
     lineYOffset: Float,
-    prefixLength: Int,
+    prefixWidthPx: Float,
     contentLength: Int,
     textLayout: TextLayoutResult?
 ): Int {
-    val prefixWidthPx = prefixLength * EditorConfig.EstimatedCharWidthPx
     val localX = (position.x - prefixWidthPx).coerceAtLeast(0f)
     val localY = (position.y - lineYOffset).coerceAtLeast(0f)
 

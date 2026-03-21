@@ -272,27 +272,23 @@ internal fun DirectiveAwareLineInput(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .then(
-                        if (hasTappableSymbol) {
-                            Modifier.pointerInput(content, onSymbolTap) {
-                                detectTapGestures { offset ->
-                                    textLayoutResultState?.let { layout ->
-                                        val position = layout.getOffsetForPosition(offset)
-                                        val symbolIndex = findTappedSymbol(
-                                            content, position, layout::getBoundingBox, offset.x
-                                        )
-                                        if (symbolIndex != null) {
-                                            onSymbolTap?.invoke(lineIndex, symbolIndex)
-                                        } else {
-                                            controller.setContentCursor(lineIndex, position)
-                                        }
+                    .pointerInput(content, onSymbolTap) {
+                        detectTapGestures { offset ->
+                            textLayoutResultState?.let { layout ->
+                                val position = layout.getOffsetForPosition(offset)
+                                if (hasTappableSymbol) {
+                                    val symbolIndex = findTappedSymbol(
+                                        content, position, layout::getBoundingBox, offset.x
+                                    )
+                                    if (symbolIndex != null) {
+                                        onSymbolTap?.invoke(lineIndex, symbolIndex)
+                                        return@detectTapGestures
                                     }
                                 }
+                                controller.setContentCursor(lineIndex, position)
                             }
-                        } else {
-                            Modifier
                         }
-                    )
+                    }
                     .drawCursor(
                         isFocused = isFocused,
                         hasExternalSelection = hasExternalSelection,
@@ -429,17 +425,28 @@ private fun DirectiveOverlayText(
                             val sourcePosition = mapDisplayToSourceCursor(displayPosition, displayResult)
 
                             // Check if tap landed on an alarm directive. Use display position
-                            // since mapDisplayToSourceCursor maps inside-directive taps to
-                            // sourceRange.last + 1. Extend range by 1 because tap positions
-                            // are cursor positions between characters — tapping the right
-                            // half of ⏰ at display index N returns position N+1.
+                            // for initial range check, then verify against the actual bounding
+                            // box to avoid triggering when tapping empty space to the right
+                            // of the alarm emoji (getOffsetForPosition clamps to text length).
                             val alarmDirective = displayResult.directiveDisplayRanges.find {
                                 it.isAlarm && displayPosition >= it.displayRange.first
                                     && displayPosition <= it.displayRange.last + 1
                             }
                             if (alarmDirective != null && onSymbolTap != null) {
-                                onSymbolTap(lineIndex, alarmDirective.sourceRange.first)
-                                return@detectTapGestures
+                                // Verify tap X is actually within the alarm emoji bounds
+                                val alarmDisplayIdx = alarmDirective.displayRange.first
+                                val alarmBounds = try {
+                                    if (alarmDisplayIdx < layout.layoutInput.text.length)
+                                        layout.getBoundingBox(alarmDisplayIdx)
+                                    else null
+                                } catch (_: Exception) { null }
+                                val tapHitsAlarm = alarmBounds != null &&
+                                    offset.x >= alarmBounds.left &&
+                                    offset.x <= alarmBounds.right
+                                if (tapHitsAlarm) {
+                                    onSymbolTap(lineIndex, alarmDirective.sourceRange.first)
+                                    return@detectTapGestures
+                                }
                             }
 
                             val symbolIndex = findTappedSymbol(
