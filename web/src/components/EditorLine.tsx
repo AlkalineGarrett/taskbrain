@@ -3,9 +3,9 @@ import type { EditorController } from '@/editor/EditorController'
 import type { EditorState } from '@/editor/EditorState'
 import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
 import { hasCheckbox } from '@/editor/LinePrefixes'
-import { hasDirectives } from '@/dsl/directives/DirectiveSegmenter'
+import { hasDirectives, segmentLine } from '@/dsl/directives/DirectiveSegmenter'
 import { DirectiveLineContent } from './DirectiveLineContent'
-import { getCharOffsetHidingTextarea, getWordBoundsAt, isOnFirstVisualRow, isOnLastVisualRow } from '@/editor/TextMeasure'
+import { getCharOffsetFromPoint, getCharOffsetHidingTextarea, getWordBoundsAt, isOnFirstVisualRow, isOnLastVisualRow, mapDisplayOffsetToSource } from '@/editor/TextMeasure'
 import styles from './EditorLine.module.css'
 
 interface EditorLineProps {
@@ -39,6 +39,7 @@ export function EditorLine({
 }: EditorLineProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
+  const directiveContentRef = useRef<HTMLDivElement>(null)
   const composingRef = useRef(false)
   const line = editorState.lines[lineIndex]
   if (!line) return null
@@ -489,6 +490,29 @@ export function EditorLine({
     }
   }, [controller, editorState, lineIndex])
 
+  /** Click on unfocused directive line: map click position to source offset and place cursor. */
+  const handleDirectiveContentMouseDown = useCallback(
+    (e: MouseEvent<HTMLDivElement>) => {
+      if (editorState.hasSelection) return
+      e.preventDefault()
+      const el = directiveContentRef.current
+      if (!el) {
+        controller.focusLine(lineIndex)
+        return
+      }
+      const displayOffset = getCharOffsetFromPoint(el, e.clientX, e.clientY)
+      if (displayOffset == null) {
+        controller.focusLine(lineIndex)
+        return
+      }
+      const segments = segmentLine(content, lineIndex, directiveResults ?? new Map())
+      const sourceOffset = mapDisplayOffsetToSource(displayOffset, segments)
+      const globalOffset = editorState.getLineStartOffset(lineIndex) + prefix.length + sourceOffset
+      controller.setCursorFromGlobalOffset(globalOffset)
+    },
+    [controller, editorState, lineIndex, content, prefix.length, directiveResults],
+  )
+
   const handleGutterClick = useCallback(() => {
     if (hasCheckbox(line.text)) {
       controller.toggleCheckboxOnLine(lineIndex)
@@ -537,7 +561,7 @@ export function EditorLine({
         </div>
       ) : null}
       {showDirectiveChips ? (
-        <div className={styles.directiveContent} onClick={handleFocus}>
+        <div ref={directiveContentRef} className={styles.directiveContent} onMouseDown={handleDirectiveContentMouseDown}>
           <DirectiveLineContent
             content={content}
             lineIndex={lineIndex}
@@ -586,3 +610,5 @@ export function EditorLine({
     </div>
   )
 }
+
+

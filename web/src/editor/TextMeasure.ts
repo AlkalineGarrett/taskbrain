@@ -1,3 +1,6 @@
+import type { DirectiveSegment } from '@/dsl/directives/DirectiveSegmenter'
+import { directiveResultToValue } from '@/dsl/directives/DirectiveResult'
+
 /** Measures text width using a canvas context for fast, accurate results. */
 let measureCanvas: HTMLCanvasElement | null = null
 
@@ -228,4 +231,46 @@ export function isOnLastVisualRow(element: HTMLElement, charIndex: number, total
   const cursorRect = getCharRectInElement(element, charIndex)
   if (!lastRect || !cursorRect) return true
   return Math.abs(cursorRect.top - lastRect.top) < VISUAL_ROW_TOLERANCE_PX
+}
+
+/**
+ * Maps a character offset in the displayed directive content (text segments + chip text)
+ * back to a character offset in the source content (with raw directive syntax).
+ *
+ * Display text has rendered chip text (e.g., "⏰" for alarms), while source has
+ * the directive syntax (e.g., "[alarm(id)]"). This walks through segments to convert.
+ */
+export function mapDisplayOffsetToSource(
+  displayOffset: number,
+  segments: DirectiveSegment[],
+): number {
+  let displayPos = 0
+  for (const segment of segments) {
+    if (segment.kind === 'Text') {
+      const segLen = segment.content.length
+      if (displayOffset <= displayPos + segLen) {
+        return segment.rangeStart + (displayOffset - displayPos)
+      }
+      displayPos += segLen
+    } else {
+      // Directive segment: compute the display length from what DirectiveChip renders
+      const value = segment.result ? directiveResultToValue(segment.result) : null
+      let chipDisplayLen: number
+      if (value?.kind === 'AlarmVal') {
+        chipDisplayLen = '⏰'.length
+      } else if (value?.kind === 'ButtonVal') {
+        chipDisplayLen = `▶ ${value.label}`.length
+      } else {
+        chipDisplayLen = segment.displayText.length
+      }
+      if (displayOffset <= displayPos + chipDisplayLen) {
+        // Click landed on a directive chip — place cursor after the directive
+        return segment.rangeEnd
+      }
+      displayPos += chipDisplayLen
+    }
+  }
+  // Past all segments — return end of content
+  const last = segments[segments.length - 1]
+  return last ? last.rangeEnd : 0
 }
