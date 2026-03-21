@@ -362,6 +362,36 @@ class AlarmTest {
         assertEquals("", alarm.displayName)
     }
 
+    @Test
+    fun `displayName strips alarm directive`() {
+        val alarm = Alarm(lineContent = "Buy groceries [alarm(\"abc123\")]")
+        assertEquals("Buy groceries", alarm.displayName)
+    }
+
+    @Test
+    fun `displayName strips alarm directive with tab and bullet`() {
+        val alarm = Alarm(lineContent = "\t• Task [alarm(\"xyz\")]")
+        assertEquals("Task", alarm.displayName)
+    }
+
+    @Test
+    fun `displayName strips multiple alarm directives`() {
+        val alarm = Alarm(lineContent = "Task [alarm(\"a\")] and [alarm(\"b\")]")
+        assertEquals("Task  and", alarm.displayName)
+    }
+
+    @Test
+    fun `displayName strips both plain symbol and directive`() {
+        val alarm = Alarm(lineContent = "Task ⏰ [alarm(\"x\")]")
+        assertEquals("Task", alarm.displayName)
+    }
+
+    @Test
+    fun `displayName handles directive-only content`() {
+        val alarm = Alarm(lineContent = "[alarm(\"abc\")]")
+        assertEquals("", alarm.displayName)
+    }
+
     // endregion
 
     // region TimeOfDay tests

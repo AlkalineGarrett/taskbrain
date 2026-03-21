@@ -168,4 +168,91 @@ class AlarmSymbolUtilsTest {
     }
 
     // endregion
+
+    // region alarmDirective tests
+
+    @Test
+    fun `alarmDirective creates correct directive string`() {
+        assertEquals("[alarm(\"abc123\")]", AlarmSymbolUtils.alarmDirective("abc123"))
+    }
+
+    @Test
+    fun `alarmDirective handles special characters in ID`() {
+        assertEquals("[alarm(\"f3GxY2abc\")]", AlarmSymbolUtils.alarmDirective("f3GxY2abc"))
+    }
+
+    // endregion
+
+    // region migrateLine tests
+
+    @Test
+    fun `migrateLine replaces single alarm symbol`() {
+        assertEquals(
+            "Buy groceries [alarm(\"abc\")]",
+            AlarmSymbolUtils.migrateLine("Buy groceries ⏰", listOf("abc"))
+        )
+    }
+
+    @Test
+    fun `migrateLine replaces multiple alarm symbols in order`() {
+        assertEquals(
+            "Task [alarm(\"a1\")] and [alarm(\"a2\")]",
+            AlarmSymbolUtils.migrateLine("Task ⏰ and ⏰", listOf("a1", "a2"))
+        )
+    }
+
+    @Test
+    fun `migrateLine leaves extra symbols when not enough alarms`() {
+        assertEquals(
+            "Task [alarm(\"a1\")] and ⏰",
+            AlarmSymbolUtils.migrateLine("Task ⏰ and ⏰", listOf("a1"))
+        )
+    }
+
+    @Test
+    fun `migrateLine returns original when no symbols`() {
+        assertEquals(
+            "No alarms here",
+            AlarmSymbolUtils.migrateLine("No alarms here", listOf("abc"))
+        )
+    }
+
+    @Test
+    fun `migrateLine returns original when no alarm IDs`() {
+        assertEquals(
+            "Has ⏰ but no IDs",
+            AlarmSymbolUtils.migrateLine("Has ⏰ but no IDs", emptyList())
+        )
+    }
+
+    // endregion
+
+    // region stripAlarmMarkers tests
+
+    @Test
+    fun `stripAlarmMarkers removes plain alarm symbol`() {
+        assertEquals("Buy groceries ", AlarmSymbolUtils.stripAlarmMarkers("Buy groceries ⏰"))
+    }
+
+    @Test
+    fun `stripAlarmMarkers removes alarm directive`() {
+        assertEquals("Buy groceries ", AlarmSymbolUtils.stripAlarmMarkers("Buy groceries [alarm(\"abc\")]"))
+    }
+
+    @Test
+    fun `stripAlarmMarkers removes both`() {
+        assertEquals("Buy  groceries ", AlarmSymbolUtils.stripAlarmMarkers("Buy ⏰ groceries [alarm(\"abc\")]"))
+    }
+
+    @Test
+    fun `stripAlarmMarkers handles no markers`() {
+        assertEquals("Just text", AlarmSymbolUtils.stripAlarmMarkers("Just text"))
+    }
+
+    @Test
+    fun `stripAlarmMarkers handles multiple directives`() {
+        assertEquals("A  B", AlarmSymbolUtils.stripAlarmMarkers("A [alarm(\"x\")] B[alarm(\"y\")]"))
+    }
+
+    // endregion
 }

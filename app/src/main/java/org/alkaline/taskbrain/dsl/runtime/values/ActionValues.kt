@@ -70,6 +70,34 @@ data class ButtonVal(
  * @param atTime Optional specific time for daily/weekly schedules (e.g., "09:00")
  * @param precise Whether to use exact timing (AlarmManager) vs approximate (WorkManager)
  */
+/**
+ * An alarm reference value that renders as an alarm symbol (⏰) in the editor.
+ * Created by the alarm() function to link a directive to a specific alarm document.
+ *
+ * Unlike ButtonVal/ScheduleVal, AlarmVal has no lambda — it's a pure reference to
+ * an existing alarm document. The alarm ID is the Firestore document ID.
+ *
+ * @param alarmId The Firestore alarm document ID
+ */
+data class AlarmVal(
+    val alarmId: String
+) : DslValue() {
+    override val typeName: String = "alarm"
+
+    override fun toDisplayString(): String = "⏰"
+
+    override fun serializeValue(): Any = mapOf(
+        "alarmId" to alarmId
+    )
+
+    companion object {
+        fun deserialize(map: Map<String, Any?>): AlarmVal {
+            val alarmId = map["alarmId"] as? String ?: ""
+            return AlarmVal(alarmId)
+        }
+    }
+}
+
 data class ScheduleVal(
     val frequency: ScheduleFrequency,
     val action: LambdaVal,

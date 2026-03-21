@@ -38,6 +38,8 @@ export interface DirectiveDisplayRange {
   hasWarning: boolean
   isView: boolean
   isButton: boolean
+  isAlarm: boolean
+  alarmId?: string
 }
 
 export interface DisplayTextResult {
@@ -142,6 +144,8 @@ export function buildDisplayText(
         hasWarning: segment.result?.warning != null,
         isView: resultValue?.kind === 'ViewVal',
         isButton: resultValue?.kind === 'ButtonVal',
+        isAlarm: resultValue?.kind === 'AlarmVal',
+        alarmId: resultValue?.kind === 'AlarmVal' ? resultValue.alarmId : undefined,
       })
     }
   }

@@ -236,4 +236,232 @@ class DirectiveSegmenterTest {
     }
 
     // endregion
+
+    // region alarm directive display range tests
+
+    @Test
+    fun `buildDisplayText sets isAlarm true for alarm directive`() {
+        val content = "[alarm(\"abc123\")]"
+        val results = DirectiveFinder.executeAllDirectives(content, 0)
+        val result = DirectiveSegmenter.buildDisplayText(content, 0, results)
+
+        assertEquals(1, result.directiveDisplayRanges.size)
+        val range = result.directiveDisplayRanges[0]
+        assertTrue(range.isAlarm)
+        assertEquals("abc123", range.alarmId)
+        assertFalse(range.isView)
+        assertFalse(range.isButton)
+    }
+
+    @Test
+    fun `buildDisplayText alarm directive displays as clock emoji`() {
+        val content = "[alarm(\"test\")]"
+        val results = DirectiveFinder.executeAllDirectives(content, 0)
+        val result = DirectiveSegmenter.buildDisplayText(content, 0, results)
+
+        assertEquals("⏰", result.displayText)
+        assertEquals("⏰", result.directiveDisplayRanges[0].displayText)
+    }
+
+    @Test
+    fun `buildDisplayText alarm with surrounding text`() {
+        val content = "Buy milk [alarm(\"x\")] today"
+        val results = DirectiveFinder.executeAllDirectives(content, 0)
+        val result = DirectiveSegmenter.buildDisplayText(content, 0, results)
+
+        assertEquals("Buy milk ⏰ today", result.displayText)
+        val range = result.directiveDisplayRanges[0]
+        assertTrue(range.isAlarm)
+        assertEquals("x", range.alarmId)
+    }
+
+    @Test
+    fun `buildDisplayText non-alarm directive has isAlarm false`() {
+        val content = "[42]"
+        val results = DirectiveFinder.executeAllDirectives(content, 0)
+        val result = DirectiveSegmenter.buildDisplayText(content, 0, results)
+
+        assertEquals(1, result.directiveDisplayRanges.size)
+        assertFalse(result.directiveDisplayRanges[0].isAlarm)
+        assertNull(result.directiveDisplayRanges[0].alarmId)
+    }
+
+    @Test
+    fun `buildDisplayText alarm sourceRange covers entire directive text`() {
+        // Tap handlers use `charOffset in sourceRange` to detect alarm taps,
+        // so sourceRange must span the full [alarm("id")] text
+        val content = "Buy milk [alarm(\"abc\")] today"
+        val results = DirectiveFinder.executeAllDirectives(content, 0)
+        val result = DirectiveSegmenter.buildDisplayText(content, 0, results)
+
+        val range = result.directiveDisplayRanges[0]
+        val directiveText = content.substring(range.sourceRange.first, range.sourceRange.last + 1)
+        assertEquals("[alarm(\"abc\")]", directiveText)
+        // Every character offset within the directive source range should match
+        for (offset in range.sourceRange) {
+            assertTrue("offset $offset should be in sourceRange", offset in range.sourceRange)
+        }
+        // Offsets just outside should NOT match
+        assertFalse(range.sourceRange.first - 1 in range.sourceRange)
+        assertFalse(range.sourceRange.last + 1 in range.sourceRange)
+    }
+
+    @Test
+    fun `buildDisplayText alarm displayRange is single emoji width`() {
+        // Display range for ⏰ must be exactly 1 char wide.
+        // Tap handlers extend by +1 for cursor-position semantics.
+        val content = "Task [alarm(\"x\")]"
+        val results = DirectiveFinder.executeAllDirectives(content, 0)
+        val result = DirectiveSegmenter.buildDisplayText(content, 0, results)
+
+        val range = result.directiveDisplayRanges[0]
+        assertEquals("⏰", range.displayText)
+        // Display range length = 1 (single emoji character)
+        assertEquals(1, range.displayRange.last - range.displayRange.first + 1)
+    }
+
+    @Test
+    fun `buildDisplayText alarm with prefix adjustment has correct ranges`() {
+        // End-to-end: checkbox prefix "☐ " (2 chars) + content with alarm
+        val content = "[alarm(\"z\")]"
+        val prefixLength = 2
+        val fullOffset = prefixLength // directive starts right after prefix
+        val key = DirectiveFinder.directiveKey(0, fullOffset)
+        val results = mapOf(key to DirectiveFinder.executeDirective("[alarm(\"z\")]").result)
+
+        val adjusted = DirectiveSegmenter.adjustKeysForPrefix(results, 0, prefixLength)
+        val result = DirectiveSegmenter.buildDisplayText(content, 0, adjusted)
+
+        assertEquals("⏰", result.displayText)
+        val range = result.directiveDisplayRanges[0]
+        assertTrue(range.isAlarm)
+        assertEquals("z", range.alarmId)
+        // Source range should cover the content-only text [alarm("z")]
+        assertEquals(0..11, range.sourceRange)
+        // Display range should be just the emoji
+        assertEquals(0..0, range.displayRange)
+    }
+
+    // endregion
+
+    // region adjustKeysForPrefix tests
+
+    @Test
+    fun `adjustKeysForPrefix returns same map when prefixLength is 0`() {
+        val results = mapOf(
+            "3:5" to DirectiveResult.success(NumberVal(42.0))
+        )
+        val adjusted = DirectiveSegmenter.adjustKeysForPrefix(results, 3, 0)
+        assertSame(results, adjusted)
+    }
+
+    @Test
+    fun `adjustKeysForPrefix subtracts prefix length from offset`() {
+        val result = DirectiveResult.success(NumberVal(42.0))
+        val results = mapOf("3:15" to result)
+        val adjusted = DirectiveSegmenter.adjustKeysForPrefix(results, 3, 2)
+        assertTrue(adjusted.containsKey("3:13"))
+        assertFalse(adjusted.containsKey("3:15"))
+        assertEquals(result, adjusted["3:13"])
+    }
+
+    @Test
+    fun `adjustKeysForPrefix only adjusts keys matching lineIndex`() {
+        val r1 = DirectiveResult.success(NumberVal(1.0))
+        val r2 = DirectiveResult.success(NumberVal(2.0))
+        val results = mapOf("3:10" to r1, "5:10" to r2)
+        val adjusted = DirectiveSegmenter.adjustKeysForPrefix(results, 3, 2)
+        // Line 3 key adjusted
+        assertTrue(adjusted.containsKey("3:8"))
+        // Line 5 key unchanged
+        assertTrue(adjusted.containsKey("5:10"))
+    }
+
+    @Test
+    fun `adjustKeysForPrefix handles multiple directives on same line`() {
+        val r1 = DirectiveResult.success(NumberVal(1.0))
+        val r2 = DirectiveResult.success(NumberVal(2.0))
+        val results = mapOf("0:5" to r1, "0:20" to r2)
+        val adjusted = DirectiveSegmenter.adjustKeysForPrefix(results, 0, 3)
+        assertTrue(adjusted.containsKey("0:2"))
+        assertTrue(adjusted.containsKey("0:17"))
+    }
+
+    @Test
+    fun `adjustKeysForPrefix skips keys where adjusted offset would be negative`() {
+        val result = DirectiveResult.success(NumberVal(42.0))
+        val results = mapOf("0:1" to result)
+        val adjusted = DirectiveSegmenter.adjustKeysForPrefix(results, 0, 5)
+        // Offset 1 - 5 = -4, should keep original key
+        assertTrue(adjusted.containsKey("0:1"))
+    }
+
+    // endregion
+
+    // region prefix key adjustment integration tests (end-to-end with buildDisplayText)
+
+    @Test
+    fun `buildDisplayText finds result when keys adjusted for checkbox prefix`() {
+        // Simulate: full line is "☐ [alarm("x")]" (prefix "☐ " = 2 chars)
+        // parseAllDirectiveLocations would find directive at offset 2 in full text
+        // But buildDisplayText receives content "[alarm("x")]" and looks up at offset 0
+        val content = "[alarm(\"x\")]"
+        val fullLineOffset = 2 // "☐ " prefix length
+        val key = DirectiveFinder.directiveKey(0, fullLineOffset)
+        val results = mapOf(key to DirectiveFinder.executeDirective("[alarm(\"x\")]").result)
+
+        // Without adjustment: lookup fails
+        val unadjusted = DirectiveSegmenter.buildDisplayText(content, 0, results)
+        assertEquals("[alarm(\"x\")]", unadjusted.displayText) // Falls back to source
+
+        // With adjustment: lookup succeeds
+        val adjusted = DirectiveSegmenter.adjustKeysForPrefix(results, 0, fullLineOffset)
+        val result = DirectiveSegmenter.buildDisplayText(content, 0, adjusted)
+        assertEquals("⏰", result.displayText)
+        assertTrue(result.directiveDisplayRanges[0].isAlarm)
+    }
+
+    @Test
+    fun `buildDisplayText finds result when keys adjusted for bullet prefix`() {
+        val content = "Buy milk [alarm(\"y\")]"
+        val prefixLength = 2 // "• " prefix
+        val fullOffset = 9 + prefixLength // "Buy milk " = 9 chars + 2 prefix
+        val key = DirectiveFinder.directiveKey(5, fullOffset)
+        val results = mapOf(key to DirectiveFinder.executeDirective("[alarm(\"y\")]").result)
+
+        val adjusted = DirectiveSegmenter.adjustKeysForPrefix(results, 5, prefixLength)
+        val result = DirectiveSegmenter.buildDisplayText(content, 5, adjusted)
+        assertEquals("Buy milk ⏰", result.displayText)
+    }
+
+    @Test
+    fun `buildDisplayText finds result when keys adjusted for tab prefix`() {
+        val content = "[42]"
+        val prefixLength = 1 // single tab
+        val fullOffset = prefixLength // directive starts right after tab
+        val key = DirectiveFinder.directiveKey(0, fullOffset)
+        val results = mapOf(key to DirectiveFinder.executeDirective("[42]").result)
+
+        val adjusted = DirectiveSegmenter.adjustKeysForPrefix(results, 0, prefixLength)
+        val result = DirectiveSegmenter.buildDisplayText(content, 0, adjusted)
+        assertEquals("42", result.displayText)
+    }
+
+    @Test
+    fun `buildDisplayText finds result when keys adjusted for tab plus checkbox prefix`() {
+        // "\t☐ [alarm("z")]" — prefix is "\t☐ " = 3 chars
+        val content = "[alarm(\"z\")]"
+        val prefixLength = 3
+        val fullOffset = prefixLength
+        val key = DirectiveFinder.directiveKey(2, fullOffset)
+        val results = mapOf(key to DirectiveFinder.executeDirective("[alarm(\"z\")]").result)
+
+        val adjusted = DirectiveSegmenter.adjustKeysForPrefix(results, 2, prefixLength)
+        val result = DirectiveSegmenter.buildDisplayText(content, 2, adjusted)
+        assertEquals("⏰", result.displayText)
+        assertTrue(result.directiveDisplayRanges[0].isAlarm)
+        assertEquals("z", result.directiveDisplayRanges[0].alarmId)
+    }
+
+    // endregion
 }

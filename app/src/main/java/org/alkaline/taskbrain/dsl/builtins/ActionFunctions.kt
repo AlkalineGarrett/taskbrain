@@ -10,18 +10,21 @@ import org.alkaline.taskbrain.dsl.runtime.ExecutionException
 import org.alkaline.taskbrain.dsl.runtime.LambdaVal
 import org.alkaline.taskbrain.dsl.runtime.ScheduleFrequency
 import org.alkaline.taskbrain.dsl.runtime.ScheduleVal
+import org.alkaline.taskbrain.dsl.runtime.AlarmVal
 import org.alkaline.taskbrain.dsl.runtime.StringVal
 
 /**
- * Action-related builtin functions: button and schedule.
+ * Action-related builtin functions: button, schedule, and alarm.
  *
  * Phase 0f: Part of view caching plan - button and schedule support.
+ * Alarm identity: alarm() function for stable alarm references.
  */
 object ActionFunctions {
 
     fun register(registry: BuiltinRegistry) {
         registry.register(buttonFunction)
         registry.register(scheduleFunction)
+        registry.register(alarmFunction)
 
         // Register schedule frequency constants
         ScheduleConstants.register(registry)
@@ -44,18 +47,23 @@ object ActionFunctions {
     }
 
     /**
+     * alarm(id) - Creates an alarm reference that renders as ⏰ in the editor.
+     *
+     * Each alarm directive encodes the Firestore alarm document ID, providing
+     * stable identity that survives text editing and eliminates positional
+     * mapping bugs.
+     *
+     * Usage: [alarm("f3GxY2abc")]
+     *
+     * @param id The Firestore alarm document ID
+     */
+    private val alarmFunction = BuiltinFunction(name = "alarm") { args, _ ->
+        val id = args.requireString(0, "alarm", "id")
+        AlarmVal(id.value)
+    }
+
+    /**
      * schedule(frequency, action) - Creates a scheduled action that runs at specified intervals.
-     *
-     * Usage:
-     * - schedule(daily, [new(path: date)])           - daily at any time
-     * - schedule(daily_at("09:00"), [new(path: date)]) - daily at 9 AM
-     * - schedule(daily_at("09:00", precise: true), [new(path: date)]) - daily at 9 AM exactly
-     * - schedule(hourly, [refresh_data])
-     *
-     * @param frequency Schedule frequency - can be:
-     *   - ScheduleVal from daily_at(), weekly_at() (includes time and precision)
-     *   - StringVal identifier (daily, hourly, weekly)
-     * @param action Lambda/deferred block to execute on schedule
      */
     private val scheduleFunction = BuiltinFunction(name = "schedule") { args, _ ->
         val frequencyArg = args.require(0, "frequency")

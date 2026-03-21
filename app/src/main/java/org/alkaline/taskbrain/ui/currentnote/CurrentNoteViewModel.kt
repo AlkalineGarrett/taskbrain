@@ -22,7 +22,6 @@ import com.google.firebase.firestore.ListenerRegistration
 import org.alkaline.taskbrain.data.Alarm
 import org.alkaline.taskbrain.data.AlarmRepository
 import org.alkaline.taskbrain.data.AlarmStage
-import org.alkaline.taskbrain.data.AlarmStatus
 import org.alkaline.taskbrain.data.Note
 import org.alkaline.taskbrain.data.RecurringAlarm
 import org.alkaline.taskbrain.data.RecurringAlarmRepository
@@ -53,6 +52,7 @@ import org.alkaline.taskbrain.dsl.directives.DirectiveResult
 import org.alkaline.taskbrain.dsl.directives.DirectiveResultRepository
 import org.alkaline.taskbrain.dsl.directives.ScheduleManager
 import org.alkaline.taskbrain.dsl.directives.matchDirectiveInstances
+import org.alkaline.taskbrain.dsl.runtime.values.AlarmVal
 import org.alkaline.taskbrain.dsl.runtime.values.DateTimeVal
 import org.alkaline.taskbrain.dsl.runtime.values.DateVal
 import org.alkaline.taskbrain.dsl.runtime.values.TimeVal
@@ -126,6 +126,10 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     // Event emitted when a save completes successfully - allows other screens to refresh
     private val _saveCompleted = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val saveCompleted: SharedFlow<Unit> = _saveCompleted.asSharedFlow()
+
+    /** Emitted after save when new noteIds are assigned to lines that had none. Map: lineIndex → newNoteId */
+    private val _newlyAssignedNoteIds = MutableSharedFlow<Map<Int, String>>(extraBufferCapacity = 1)
+    val newlyAssignedNoteIds: SharedFlow<Map<Int, String>> = _newlyAssignedNoteIds.asSharedFlow()
 
     private val _loadStatus = MutableLiveData<LoadStatus>()
     val loadStatus: LiveData<LoadStatus> = _loadStatus
@@ -257,6 +261,10 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      */
     fun getTrackedLines(): List<NoteLine> = lineTracker.getTrackedLines()
 
+    /** Extracts noteIds from NoteLines for passing to EditorState via LoadStatus. */
+    private fun noteLinesToNoteIds(lines: List<NoteLine>): List<List<String>> =
+        lines.map { listOfNotNull(it.noteId) }
+
     /**
      * Starts a Firestore snapshot listener on the current note's parent document.
      * When an external change is detected (not from our own save), reloads the full note.
@@ -294,7 +302,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                             if (noteId != currentNoteId) return@fold
                             lineTracker.setTrackedLines(freshLines)
                             val freshContent = freshLines.joinToString("\n") { it.content }
-                            _loadStatus.value = LoadStatus.Success(freshContent)
+                            _loadStatus.value = LoadStatus.Success(freshContent, noteLinesToNoteIds(freshLines))
                             recentTabsViewModel?.cacheNoteContent(
                                 noteId, freshLines, _isNoteDeleted.value ?: false
                             )
@@ -336,7 +344,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             _isNoteDeleted.value = cached.isDeleted
             lineTracker.setTrackedLines(cached.noteLines)
             val fullContent = cached.noteLines.joinToString("\n") { it.content }
-            _loadStatus.value = LoadStatus.Success(fullContent)
+            _loadStatus.value = LoadStatus.Success(fullContent, noteLinesToNoteIds(cached.noteLines))
             // Still update lastAccessedAt, load showCompleted, and directive results in background
             viewModelScope.launch {
                 repository.updateLastAccessed(currentNoteId)
@@ -357,7 +365,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                         if (freshContent != fullContent && cachedNoteId == currentNoteId) {
                             Log.d(TAG, "loadContent: background refresh found changes for $cachedNoteId")
                             lineTracker.setTrackedLines(freshLines)
-                            _loadStatus.value = LoadStatus.Success(freshContent)
+                            _loadStatus.value = LoadStatus.Success(freshContent, noteLinesToNoteIds(freshLines))
                             recentTabsViewModel?.cacheNoteContent(
                                 cachedNoteId,
                                 freshLines,
@@ -400,7 +408,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 onSuccess = { loadedLines ->
                     lineTracker.setTrackedLines(loadedLines)
                     val fullContent = loadedLines.joinToString("\n") { it.content }
-                    _loadStatus.value = LoadStatus.Success(fullContent)
+                    _loadStatus.value = LoadStatus.Success(fullContent, noteLinesToNoteIds(loadedLines))
 
                     // Cache the loaded content for future tab switches
                     recentTabsViewModel?.cacheNoteContent(
@@ -441,9 +449,15 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         }
     }
 
-    fun saveContent(content: String) {
-        // Update tracked lines before saving to ensure we have the latest state mapping
-        updateTrackedLines(content)
+    fun saveContent(content: String, lineNoteIds: List<List<String>> = emptyList()) {
+        // Update tracked lines - use editor noteIds if available, else fall back to content matching
+        if (lineNoteIds.isNotEmpty()) {
+            val contentLines = content.lines()
+            val noteLines = resolveNoteIds(contentLines, lineNoteIds)
+            lineTracker.setTrackedLines(noteLines)
+        } else {
+            updateTrackedLines(content)
+        }
 
         // Suppress the next snapshot update since it will be from our own save
         suppressSnapshotUpdate = true
@@ -460,9 +474,14 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                     for ((index, newId) in newIdsMap) {
                         lineTracker.updateLineNoteId(index, newId)
                     }
+                    // Notify UI of newly assigned noteIds so EditorState stays in sync
+                    if (newIdsMap.isNotEmpty()) {
+                        _newlyAssignedNoteIds.tryEmit(newIdsMap)
+                    }
 
-                    // Sync alarm line content with updated note content
+                    // Sync alarm line content and noteId with updated note content
                     syncAlarmLineContent(trackedLines)
+                    syncAlarmNoteIds(trackedLines)
 
                     // Invalidate notes cache so other notes' view directives get fresh data
                     // This must happen BEFORE executeAndStoreDirectives to ensure
@@ -492,11 +511,14 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         viewModelScope.launch {
             try {
                 val updatedContent = agent.processCommand(currentContent, command)
-                // Update the UI with the new content
-                _loadStatus.value = LoadStatus.Success(updatedContent)
-                
                 // Also update tracked lines since content changed externally
                 updateTrackedLines(updatedContent)
+
+                // Update the UI with the new content
+                _loadStatus.value = LoadStatus.Success(
+                    updatedContent,
+                    noteLinesToNoteIds(lineTracker.getTrackedLines())
+                )
                 
                 // Signal that the content has been modified and is unsaved
                 _contentModified.value = true
@@ -519,6 +541,22 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 line.noteId?.let { noteId ->
                     alarmRepository.updateLineContentForNote(noteId, line.content)
                 }
+            }
+        }
+    }
+
+    /**
+     * Syncs alarm noteIds with line noteIds.
+     * For each line containing alarm directives, updates the alarm's noteId
+     * if it doesn't match the line's current noteId.
+     */
+    private fun syncAlarmNoteIds(trackedLines: List<NoteLine>) {
+        viewModelScope.launch {
+            val updates = findAlarmNoteIdUpdates(trackedLines) { alarmId ->
+                alarmRepository.getAlarm(alarmId).getOrNull()?.noteId
+            }
+            for (update in updates) {
+                alarmRepository.updateAlarmNoteId(update.alarmId, update.lineNoteId)
             }
         }
     }
@@ -563,6 +601,28 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 }
             )
             onComplete?.invoke()
+        }
+    }
+
+    /**
+     * Fetches a specific alarm by its document ID.
+     * Also populates lineAlarms so the dialog has sibling context.
+     */
+    fun fetchAlarmById(alarmId: String, onComplete: (Alarm?) -> Unit) {
+        viewModelScope.launch {
+            val result = alarmRepository.getAlarm(alarmId)
+            val alarm = result.getOrNull()
+            if (alarm != null) {
+                // Also fetch sibling alarms for the same note
+                val siblingsResult = alarmRepository.getAlarmsForNote(alarm.noteId)
+                siblingsResult.fold(
+                    onSuccess = { alarms -> _lineAlarms.value = alarms },
+                    onFailure = { _lineAlarms.value = listOfNotNull(alarm) }
+                )
+            } else {
+                _lineAlarms.value = emptyList()
+            }
+            onComplete(alarm)
         }
     }
 
@@ -620,6 +680,31 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     }
 
     /**
+     * Migrates plain ⏰ characters to [alarm("id")] directives.
+     *
+     * For each line with plain ⏰ characters, matches them to alarms for that line's
+     * noteId (sorted by createdAt, matching the existing overlay order). Returns the
+     * migrated content, or null if no migration was needed.
+     */
+    fun migrateAlarmSymbols(
+        content: String,
+        noteAlarms: Map<String, List<Alarm>>
+    ): String? {
+        val lines = content.lines()
+        val trackedLines = lineTracker.getTrackedLines()
+        val lineNoteIds = lines.indices.map { index ->
+            if (index < trackedLines.size) {
+                trackedLines[index].noteId ?: currentNoteId
+            } else {
+                currentNoteId
+            }
+        }
+
+        val result = migrateAlarmSymbolLines(lines, lineNoteIds, noteAlarms) ?: return null
+        return if (result.migrated) result.lines.joinToString("\n") else null
+    }
+
+    /**
      * Returns [SymbolOverlay] list for each alarm symbol on the given line.
      * The list is ordered by alarm creation time (matching symbol left-to-right order).
      */
@@ -637,26 +722,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             .map { alarm -> AlarmOverlayMapping.alarmToOverlay(alarm, now) }
     }
 
-    /**
-     * For recurring alarms, keeps only the most recent instance per recurringAlarmId.
-     * Non-recurring alarms are kept as-is.
-     */
-    private fun filterToActiveRecurringInstances(alarms: List<Alarm>): List<Alarm> {
-        val nonRecurring = alarms.filter { it.recurringAlarmId == null }
-        val recurring = alarms.filter { it.recurringAlarmId != null }
-
-        // Group by recurringAlarmId, keep the most recent instance from each group
-        val latestPerRecurring = recurring
-            .groupBy { it.recurringAlarmId }
-            .values
-            .mapNotNull { instances ->
-                // Prefer PENDING instance; if none, take the most recently updated
-                instances.firstOrNull { it.status == AlarmStatus.PENDING }
-                    ?: instances.maxByOrNull { it.updatedAt?.toDate()?.time ?: 0L }
-            }
-
-        return nonRecurring + latestPerRecurring
-    }
+    // Delegated to package-level filterToActiveRecurringInstances() in ViewModelPureLogic.kt
 
     // Scheduling failure warning
     private val _schedulingWarning = MutableLiveData<String?>()
@@ -689,6 +755,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                     for ((index, newId) in newIdsMap) {
                         lineTracker.updateLineNoteId(index, newId)
                     }
+                    if (newIdsMap.isNotEmpty()) _newlyAssignedNoteIds.tryEmit(newIdsMap)
                     syncAlarmLineContent(trackedLines)
                     _saveStatus.value = SaveStatus.Success
                     _saveCompleted.tryEmit(Unit)
@@ -726,6 +793,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                     for ((index, newId) in newIdsMap) {
                         lineTracker.updateLineNoteId(index, newId)
                     }
+                    if (newIdsMap.isNotEmpty()) _newlyAssignedNoteIds.tryEmit(newIdsMap)
                     syncAlarmLineContent(trackedLines)
                     _saveStatus.value = SaveStatus.Success
                     _saveCompleted.tryEmit(Unit)
@@ -1210,10 +1278,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
 
             // Merge fresh results with CURRENT collapsed state (read at merge time to avoid race)
             // This ensures we don't overwrite collapsed state changes made while executing
-            val mergedResults = freshResults.mapValues { (uuid, result) ->
-                val latestCollapsed = _directiveResults.value?.get(uuid)?.collapsed ?: true
-                result.copy(collapsed = latestCollapsed)
-            }
+            val mergedResults = mergeDirectiveResults(freshResults, _directiveResults.value)
 
             // Update local state
             _directiveResults.value = mergedResults
@@ -1305,7 +1370,12 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                     cachedValue is DateTimeVal ||
                     cachedResultType in listOf("date", "time", "datetime")
 
-            if (cached != null && !isViewResult && !isBareTemporalResult) {
+            // Skip cached alarm results - alarm() is a trivial pure function and
+            // cached results may fail to deserialize from Firestore, causing the
+            // directive to show as raw text instead of the ⏰ symbol
+            val isAlarmResult = cachedValue is AlarmVal || cachedResultType == "alarm"
+
+            if (cached != null && !isViewResult && !isBareTemporalResult && !isAlarmResult) {
                 uuidResults[instance.uuid] = cached
             } else {
                 missingInstances.add(instance)
@@ -1335,8 +1405,10 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             registerRefreshTriggersIfNeeded(instance.sourceText, cachedCurrentNote?.id)
             // Store in Firestore using text hash
             // Skip view directive results - they depend on other notes and can become stale
+            // Skip alarm results - trivial to re-execute and avoids deserialization issues
             val isViewResult = viewVal != null
-            if (!isViewResult) {
+            val isAlarmResult = cachedResult.result.toValue() is AlarmVal
+            if (!isViewResult && !isAlarmResult) {
                 val textHash = DirectiveResult.hashDirective(instance.sourceText)
                 directiveResultRepository.saveResult(currentNoteId, textHash, cachedResult.result)
                     .onFailure { e ->
@@ -1544,22 +1616,8 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      */
     fun getResultsByPosition(): Map<String, DirectiveResult> {
         val uuidResults = _directiveResults.value ?: return emptyMap()
-        val positionResults = mutableMapOf<String, DirectiveResult>()
-        for (instance in directiveInstances) {
-            val result = uuidResults[instance.uuid]
-            if (result != null) {
-                val positionKey = DirectiveFinder.directiveKey(instance.lineIndex, instance.startOffset)
-                positionResults[positionKey] = result
-            }
-        }
-        return positionResults
+        return mapResultsByPosition(directiveInstances, uuidResults)
     }
-
-    /**
-     * A position identifier for a directive: line index and start offset within line content.
-     * Used for undo/redo to restore expanded state by matching positions.
-     */
-    data class DirectivePosition(val lineIndex: Int, val startOffset: Int)
 
     /**
      * Gets the positions of all currently expanded directive edit rows.
@@ -1567,14 +1625,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      */
     fun getExpandedDirectivePositions(content: String): Set<DirectivePosition> {
         val current = _directiveResults.value ?: return emptySet()
-        val expandedUuids = current.filter { !it.value.collapsed }.keys
-        if (expandedUuids.isEmpty()) return emptySet()
-
-        // Convert expanded UUIDs to DirectivePosition using current instances
-        return directiveInstances
-            .filter { it.uuid in expandedUuids }
-            .map { DirectivePosition(it.lineIndex, it.startOffset) }
-            .toSet()
+        return findExpandedPositions(directiveInstances, current)
     }
 
     /**
@@ -2188,7 +2239,10 @@ sealed class SaveStatus {
 
 sealed class LoadStatus {
     object Loading : LoadStatus()
-    data class Success(val content: String) : LoadStatus()
+    data class Success(
+        val content: String,
+        val lineNoteIds: List<List<String>> = emptyList()
+    ) : LoadStatus()
     data class Error(val throwable: Throwable) : LoadStatus()
 }
 

@@ -158,18 +158,31 @@ export function getCharOffsetFromPoint(
 }
 
 /**
- * Gets the character offset within an overlay element, temporarily hiding a sibling textarea
- * so that caretRangeFromPoint can reach the overlay's text nodes.
+ * Gets the character offset within an overlay element, temporarily hiding all sibling
+ * elements (textarea, highlight layers, etc.) so that caretRangeFromPoint only hits
+ * the overlay's text nodes.
  */
 export function getCharOffsetHidingTextarea(
   overlay: HTMLElement,
-  textarea: HTMLElement,
+  _textarea: HTMLElement,
   clientX: number,
   clientY: number,
 ): number | null {
-  textarea.style.visibility = 'hidden'
+  // Hide all siblings so caretRangeFromPoint only sees the overlay text
+  const parent = overlay.parentElement
+  const hiddenSiblings: HTMLElement[] = []
+  if (parent) {
+    for (const child of parent.children) {
+      if (child !== overlay && child instanceof HTMLElement && child.style.visibility !== 'hidden') {
+        child.style.visibility = 'hidden'
+        hiddenSiblings.push(child)
+      }
+    }
+  }
   const offset = getCharOffsetFromPoint(overlay, clientX, clientY)
-  textarea.style.visibility = ''
+  for (const el of hiddenSiblings) {
+    el.style.visibility = ''
+  }
   return offset
 }
 

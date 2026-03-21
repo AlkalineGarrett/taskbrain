@@ -3,6 +3,7 @@ import type { RecentTab } from './RecentTabsRepository'
 const MAX_TABS = 5
 const MAX_DISPLAY_LENGTH = 12
 const ALARM_SYMBOL = '⏰'
+const ALARM_DIRECTIVE_REGEX = /\[alarm\("[^"]+"\)]/g
 
 /**
  * Moves an existing tab to the front, updating its display text.
@@ -59,7 +60,7 @@ export function removeTabState(
  */
 export function extractDisplayText(content: string): string {
   const firstLine = content.split('\n')[0] ?? ''
-  const cleaned = firstLine.replaceAll(ALARM_SYMBOL, '').trim()
+  const cleaned = firstLine.replaceAll(ALARM_SYMBOL, '').replace(ALARM_DIRECTIVE_REGEX, '').trim()
   if (cleaned.length > MAX_DISPLAY_LENGTH) {
     return cleaned.slice(0, MAX_DISPLAY_LENGTH - 1) + '…'
   }

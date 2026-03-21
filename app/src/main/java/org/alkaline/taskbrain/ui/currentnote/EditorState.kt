@@ -212,8 +212,8 @@ class EditorState {
         return true
     }
 
-    internal fun indentInternal() {
-        val linesToIndent = getSelectedLineIndices()
+    internal fun indentInternal(hiddenIndices: Set<Int> = emptySet()) {
+        val linesToIndent = getSelectedLineIndices(hiddenIndices)
         val hadSelection = hasSelection
         val oldSelStart = selection.start
         val oldSelEnd = selection.end
@@ -241,8 +241,8 @@ class EditorState {
         notifyChange()
     }
 
-    internal fun unindentInternal() {
-        val linesToUnindent = getSelectedLineIndices()
+    internal fun unindentInternal(hiddenIndices: Set<Int> = emptySet()) {
+        val linesToUnindent = getSelectedLineIndices(hiddenIndices)
         val hadSelection = hasSelection
         val oldSelStart = selection.start
         val oldSelEnd = selection.end
@@ -278,24 +278,54 @@ class EditorState {
      * Gets the indices of all lines that are part of the current selection.
      * If no selection, returns just the focused line index.
      */
-    private fun getSelectedLineIndices(): List<Int> {
+    private fun getSelectedLineIndices(hiddenIndices: Set<Int> = emptySet()): List<Int> {
         if (!hasSelection) {
             return listOf(focusedLineIndex)
         }
 
         val startLine = getLineAndLocalOffset(selection.min).first
         val endLine = getLineAndLocalOffset(selection.max).first
-        return (startLine..endLine).toList()
+        return (startLine..endLine).filter { it !in hiddenIndices }
     }
 
     internal fun toggleBulletInternal() {
-        currentLine?.toggleBullet()
-        requestFocusUpdate()
-        notifyChange()
+        togglePrefixOnSelectedLines { it.toggleBullet() }
     }
 
     internal fun toggleCheckboxInternal() {
-        currentLine?.toggleCheckbox()
+        togglePrefixOnSelectedLines { it.toggleCheckbox() }
+    }
+
+    private fun togglePrefixOnSelectedLines(toggle: (LineState) -> Unit) {
+        val lineIndices = getSelectedLineIndices()
+        val hadSelection = hasSelection
+        val oldSelStart = selection.start
+        val oldSelEnd = selection.end
+
+        data class LineDelta(val lineIndex: Int, val delta: Int)
+        val deltas = mutableListOf<LineDelta>()
+        for (lineIndex in lineIndices) {
+            val line = lines.getOrNull(lineIndex) ?: continue
+            val lenBefore = line.text.length
+            toggle(line)
+            deltas.add(LineDelta(lineIndex, line.text.length - lenBefore))
+        }
+
+        if (hadSelection) {
+            val (startLine, _) = getLineAndLocalOffset(oldSelStart)
+            val (endLine, _) = getLineAndLocalOffset(oldSelEnd)
+            var startAdjust = 0
+            var endAdjust = 0
+            for ((lineIndex, delta) in deltas) {
+                if (lineIndex <= startLine) startAdjust += delta
+                if (lineIndex <= endLine) endAdjust += delta
+            }
+            selection = EditorSelection(
+                maxOf(0, oldSelStart + startAdjust),
+                maxOf(0, oldSelEnd + endAdjust)
+            )
+        }
+
         requestFocusUpdate()
         notifyChange()
     }
@@ -364,6 +394,9 @@ class EditorState {
      * Returns the new range of the moved lines, or null if move failed.
      */
     internal fun moveLinesInternal(sourceRange: IntRange, targetIndex: Int): IntRange? {
+        // Capture noteIds before the move
+        val oldNoteIds = lines.map { it.noteIds }
+
         // Calculate the move result using pure function
         val selectionForCalc = if (hasSelection) selection else null
         val result = MoveExecutor.calculateMove(
@@ -374,10 +407,22 @@ class EditorState {
             selection = selectionForCalc
         ) ?: return null
 
+        // Calculate noteIds reordering (same logic as text reordering in MoveExecutor)
+        val moveCount = sourceRange.last - sourceRange.first + 1
+        val reorderedNoteIds = mutableListOf<List<String>>()
+        for (i in oldNoteIds.indices) {
+            if (i !in sourceRange) reorderedNoteIds.add(oldNoteIds[i])
+        }
+        val adjustedTarget = if (targetIndex > sourceRange.first) targetIndex - moveCount else targetIndex
+        for (i in sourceRange) {
+            reorderedNoteIds.add(adjustedTarget + (i - sourceRange.first), oldNoteIds[i])
+        }
+
         // Apply the result to state
         lines.clear()
-        result.newLines.forEach { lineText ->
-            lines.add(LineState(lineText))
+        result.newLines.forEachIndexed { index, lineText ->
+            val noteIds = reorderedNoteIds.getOrElse(index) { emptyList() }
+            lines.add(LineState(lineText, lineText.length, noteIds))
         }
         focusedLineIndex = result.newFocusedLineIndex
         if (result.newSelection != null) {
@@ -407,12 +452,48 @@ class EditorState {
     }
 
     internal fun updateFromText(newText: String) {
+        val oldNoteIds = lines.map { it.noteIds }
+        val oldContents = lines.map { it.text }
+        val oldConsumed = BooleanArray(oldContents.size)
         val newLines = newText.split("\n")
+
+        // Build content→indices map for exact matching
+        val contentToIndices = mutableMapOf<String, MutableList<Int>>()
+        oldContents.forEachIndexed { i, content ->
+            contentToIndices.getOrPut(content) { mutableListOf() }.add(i)
+        }
+
         lines.clear()
-        newLines.forEach { lineText ->
-            lines.add(LineState(lineText))
+        newLines.forEachIndexed { index, lineText ->
+            var noteIds = emptyList<String>()
+            // Phase 1: Exact content match
+            val indices = contentToIndices[lineText]
+            if (!indices.isNullOrEmpty()) {
+                val oldIdx = indices.removeAt(0)
+                noteIds = oldNoteIds[oldIdx]
+                oldConsumed[oldIdx] = true
+            } else {
+                // Phase 2: Positional fallback
+                if (index < oldNoteIds.size && !oldConsumed[index]) {
+                    noteIds = oldNoteIds[index]
+                    oldConsumed[index] = true
+                }
+            }
+            lines.add(LineState(lineText, lineText.length, noteIds))
         }
         focusedLineIndex = focusedLineIndex.coerceIn(0, lines.lastIndex.coerceAtLeast(0))
+    }
+
+    /**
+     * Initializes the editor from note lines with their associated noteIds.
+     * Used when loading a note from Firestore.
+     */
+    internal fun initFromNoteLines(noteLines: List<Pair<String, List<String>>>) {
+        lines.clear()
+        noteLines.forEach { (text, noteIds) ->
+            lines.add(LineState(text, text.length, noteIds))
+        }
+        focusedLineIndex = 0
     }
 
     /**

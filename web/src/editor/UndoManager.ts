@@ -9,6 +9,7 @@ export enum CommandType {
 
 export interface UndoSnapshot {
   lineContents: string[]
+  lineNoteIds: string[][]
   focusedLineIndex: number
   cursorPosition: number
 }
@@ -67,10 +68,11 @@ export class UndoManager {
     return this.redoStack.length > 0
   }
 
-  private captureSnapshot(lines: { text: string }[], focusedLineIndex: number): UndoSnapshot {
-    const focusedLine = lines[focusedLineIndex] as { text: string; cursorPosition: number } | undefined
+  private captureSnapshot(lines: { text: string; noteIds?: string[] }[], focusedLineIndex: number): UndoSnapshot {
+    const focusedLine = lines[focusedLineIndex] as { text: string; cursorPosition: number; noteIds?: string[] } | undefined
     return {
       lineContents: lines.map((l) => l.text),
+      lineNoteIds: lines.map((l) => l.noteIds ?? []),
       focusedLineIndex,
       cursorPosition: focusedLine?.cursorPosition ?? 0,
     }

@@ -174,4 +174,20 @@ describe('extractDisplayText', () => {
   it('returns (empty) for alarm-symbol-only content', () => {
     expect(extractDisplayText('⏰')).toBe('(empty)')
   })
+
+  it('removes alarm directive from display text', () => {
+    expect(extractDisplayText('Task [alarm("abc123")]')).toBe('Task')
+  })
+
+  it('removes multiple alarm directives', () => {
+    expect(extractDisplayText('[alarm("a1")] Task [alarm("a2")]')).toBe('Task')
+  })
+
+  it('returns (empty) for alarm-directive-only content', () => {
+    expect(extractDisplayText('[alarm("abc")]')).toBe('(empty)')
+  })
+
+  it('removes both alarm symbol and alarm directive', () => {
+    expect(extractDisplayText('⏰ Task [alarm("id1")]')).toBe('Task')
+  })
 })

@@ -244,6 +244,23 @@ fun CurrentNoteScreen(
         onSavedChanged = { isSaved = it }
     )
 
+    // Migrate plain ⏰ characters to [alarm("id")] directives when alarms are loaded
+    LaunchedEffect(noteAlarmsForOverlay) {
+        if (noteAlarmsForOverlay.isNotEmpty()) {
+            val migrated = currentNoteViewModel.migrateAlarmSymbols(
+                editorState.text, noteAlarmsForOverlay
+            )
+            if (migrated != null) {
+                editorState.updateFromText(migrated)
+                userContent = migrated
+                textFieldValue = TextFieldValue(migrated, TextRange(migrated.length))
+                controller.resetUndoHistory()
+                currentNoteViewModel.saveContent(migrated, editorState.lines.map { it.noteIds })
+                currentNoteViewModel.executeDirectivesLive(migrated)
+            }
+        }
+    }
+
     DirectiveMutationEffect(
         currentNoteId = currentNoteId,
         userContent = userContent,
@@ -362,7 +379,7 @@ fun CurrentNoteScreen(
             currentNoteId = displayedNoteId ?: "",
             onTabClick = { targetNoteId ->
                 if (!isSaved && userContent.isNotEmpty()) {
-                    currentNoteViewModel.saveContent(userContent)
+                    currentNoteViewModel.saveContent(userContent, editorState.lines.map { it.noteIds })
                 }
                 displayedNoteId = targetNoteId
             },
@@ -454,9 +471,21 @@ fun CurrentNoteScreen(
                                     val lineContent = editorState.lines.getOrNull(tapInfo.lineIndex)?.text ?: ""
                                     alarmDialogLineContent = TextLineUtils.trimLineForAlarm(lineContent)
                                     alarmDialogLineIndex = tapInfo.lineIndex
-                                    alarmDialogSymbolIndex = tapInfo.symbolIndexOnLine
-                                    currentNoteViewModel.fetchAlarmsForLine(tapInfo.lineIndex) {
-                                        showAlarmDialog = true
+
+                                    if (tapInfo.alarmId != null) {
+                                        // Alarm directive tap — fetch by ID directly
+                                        currentNoteViewModel.fetchAlarmById(tapInfo.alarmId) { alarm ->
+                                            alarmDialogOverride = alarm
+                                            alarmDialogSymbolIndex = 0
+                                            showAlarmDialog = true
+                                        }
+                                    } else {
+                                        // Legacy plain symbol tap — use positional index
+                                        alarmDialogOverride = null
+                                        alarmDialogSymbolIndex = tapInfo.symbolIndexOnLine
+                                        currentNoteViewModel.fetchAlarmsForLine(tapInfo.lineIndex) {
+                                            showAlarmDialog = true
+                                        }
                                     }
                                 }
                             }
@@ -561,7 +590,7 @@ private fun LifecycleAutoSaveEffect(
                     UndoStatePersistence.saveStateBlocking(context, noteId, controller.undoManager)
                 }
                 if (!currentIsSaved && currentUserContent.isNotEmpty()) {
-                    currentNoteViewModel.saveContent(currentUserContent)
+                    currentNoteViewModel.saveContent(currentUserContent, controller.state.lines.map { it.noteIds })
                 }
             }
         }
@@ -581,7 +610,7 @@ private fun LifecycleAutoSaveEffect(
                     currentIsNoteDeleted
                 )
                 recentTabsViewModel.updateTabDisplayText(currentNoteIdForPersistence!!, currentUserContent)
-                currentNoteViewModel.saveContent(currentUserContent)
+                currentNoteViewModel.saveContent(currentUserContent, controller.state.lines.map { it.noteIds })
             }
         }
     }
@@ -627,7 +656,12 @@ private fun DataLoadingEffects(
                 // CRITICAL: Update editorState BEFORE setBaseline() below!
                 // Without this line, editorState is empty when baseline is captured,
                 // which means undo can restore to empty state and LOSE USER DATA.
-                editorState.updateFromText(loadedContent)
+                if (loadStatus.lineNoteIds.isNotEmpty()) {
+                    val noteLines = loadedContent.split("\n").zip(loadStatus.lineNoteIds)
+                    editorState.initFromNoteLines(noteLines)
+                } else {
+                    editorState.updateFromText(loadedContent)
+                }
             }
 
             // Always set up undo state (needed even for cached content on initial load)
@@ -641,6 +675,19 @@ private fun DataLoadingEffects(
             }
             controller.undoManager.beginEditingLine(editorState, editorState.focusedLineIndex)
             editorState.requestFocusUpdate()
+        }
+    }
+
+    // Update EditorState noteIds when save assigns new IDs to lines
+    LaunchedEffect(Unit) {
+        currentNoteViewModel.newlyAssignedNoteIds.collect { newIds ->
+            for ((index, newId) in newIds) {
+                editorState.lines.getOrNull(index)?.let { line ->
+                    if (line.noteIds.isEmpty()) {
+                        line.noteIds = listOf(newId)
+                    }
+                }
+            }
         }
     }
 
@@ -721,15 +768,15 @@ private fun ContentSyncEffects(
     // Note: Tab removal on delete is handled by the onDeleteNote callback in NoteStatusBar,
     // which closes the tab and navigates to the next one in a single step.
 
-    // Handle alarm creation - insert symbol, record for undo, and save
+    // Handle alarm creation - insert alarm directive, record for undo, and save
     LaunchedEffect(alarmCreated) {
         alarmCreated?.let { event ->
-            controller.insertAtEndOfCurrentLine(AlarmSymbolUtils.ALARM_SYMBOL)
+            controller.insertAtEndOfCurrentLine(AlarmSymbolUtils.alarmDirective(event.alarmId))
             onContentChanged(editorState.text)
             event.alarmSnapshot?.let { snapshot ->
                 controller.recordAlarmCreation(snapshot)
             }
-            currentNoteViewModel.saveContent(editorState.text)
+            currentNoteViewModel.saveContent(editorState.text, editorState.lines.map { it.noteIds })
             currentNoteViewModel.clearAlarmCreatedEvent()
         }
     }
@@ -804,7 +851,7 @@ private fun NoteStatusBar(
         onSaveClick = {
             controller.sortCompletedToBottom()
             controller.commitUndoState(continueEditing = true)
-            currentNoteViewModel.saveContent(editorState.text)
+            currentNoteViewModel.saveContent(editorState.text, editorState.lines.map { it.noteIds })
         },
         canUndo = canUndo,
         canRedo = canRedo,
@@ -834,7 +881,18 @@ private fun NoteStatusBar(
                 snapshot.createdAlarm?.let { alarm ->
                     currentNoteViewModel.recreateAlarm(
                         alarmSnapshot = alarm,
-                        onAlarmCreated = { newId -> controller.updateLastUndoAlarmId(newId) },
+                        onAlarmCreated = { newId ->
+                            controller.updateLastUndoAlarmId(newId)
+                            // Update alarm directive in text with new ID
+                            val oldDirective = AlarmSymbolUtils.alarmDirective(alarm.id)
+                            val newDirective = AlarmSymbolUtils.alarmDirective(newId)
+                            val updatedText = editorState.text.replace(oldDirective, newDirective)
+                            if (updatedText != editorState.text) {
+                                editorState.updateFromText(updatedText)
+                                onContentChanged(editorState.text)
+                                currentNoteViewModel.saveContent(editorState.text, editorState.lines.map { it.noteIds })
+                            }
+                        },
                         onFailure = { errorMessage ->
                             val rollbackSnapshot = controller.undo()
                             val rollbackSucceeded = rollbackSnapshot != null

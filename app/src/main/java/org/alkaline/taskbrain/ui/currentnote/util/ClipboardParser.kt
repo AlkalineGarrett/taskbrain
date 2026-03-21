@@ -26,14 +26,16 @@ data class ParsedLine(
 object ClipboardParser {
 
     fun parse(plainText: String, html: String?): List<ParsedLine> {
+        // Normalize line endings (CRLF → LF, CR → LF)
+        val normalized = plainText.replace("\r\n", "\n").replace("\r", "\n")
         if (html != null) {
             val htmlLines = parseHtml(html)
             if (htmlLines != null) return htmlLines
         }
-        if (looksLikeMarkdown(plainText)) {
-            return parseMarkdown(plainText)
+        if (looksLikeMarkdown(normalized)) {
+            return parseMarkdown(normalized)
         }
-        return parseInternal(plainText)
+        return parseInternal(normalized)
     }
 
     // --- Internal format ---

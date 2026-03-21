@@ -3,9 +3,9 @@ import { doc, onSnapshot } from 'firebase/firestore'
 import { EditorState } from '@/editor/EditorState'
 import { EditorController } from '@/editor/EditorController'
 import { UndoManager, type UndoManagerState } from '@/editor/UndoManager'
-import { LineState } from '@/editor/LineState'
 import type { NoteLine } from '@/data/Note'
-import { NoteRepository, matchLinesToIds } from '@/data/NoteRepository'
+import { NoteRepository } from '@/data/NoteRepository'
+import { resolveNoteIds } from '@/editor/resolveNoteIds'
 import { db, auth } from '@/firebase/config'
 import { ERROR_LOAD, ERROR_SAVE } from '@/strings'
 
@@ -97,11 +97,21 @@ export function useEditor(noteId: string | undefined) {
 
     const populateEditor = (lines: NoteLine[], wasCached: boolean, cachedDirty: boolean, cachedTexts?: string[]) => {
       if (cancelled) return
-      // Use cached editor texts if available (preserves unsaved edits)
-      const lineTexts = cachedTexts ?? lines.map((l) => l.content)
-      editorState.lines = lineTexts.map((t) => new LineState(t))
-      editorState.focusedLineIndex = 0
-      editorState.clearSelection()
+      if (cachedTexts) {
+        // Use cached editor texts (preserves unsaved edits) — noteIds come from tracked lines
+        const noteLines = cachedTexts.map((text, i) => ({
+          text,
+          noteIds: lines[i]?.noteId ? [lines[i]!.noteId!] : [],
+        }))
+        editorState.initFromNoteLines(noteLines)
+      } else {
+        // Fresh load — noteIds come from loaded NoteLine data
+        const noteLines = lines.map((l) => ({
+          text: l.content,
+          noteIds: l.noteId ? [l.noteId] : [],
+        }))
+        editorState.initFromNoteLines(noteLines)
+      }
       editorState.requestFocusUpdate()
 
       trackedLinesRef.current = lines
@@ -191,9 +201,11 @@ export function useEditor(noteId: string | undefined) {
           if (freshContent === currentContent) return
 
           console.log('Snapshot listener detected external change for', noteId)
-          editorState.lines = freshLines.map((l) => new LineState(l.content))
-          editorState.focusedLineIndex = 0
-          editorState.clearSelection()
+          const noteLines = freshLines.map((l) => ({
+            text: l.content,
+            noteIds: l.noteId ? [l.noteId] : [],
+          }))
+          editorState.initFromNoteLines(noteLines)
           editorState.requestFocusUpdate()
           trackedLinesRef.current = freshLines
           setDirty(false)
@@ -215,16 +227,16 @@ export function useEditor(noteId: string | undefined) {
       controller.sortCompletedToBottom()
       controller.commitUndoState(true)
 
-      // Build tracked lines from current editor state + tracked IDs
+      // Build tracked lines from editor state's noteIds (already kept in sync
+      // through all operations: indent, split, merge, paste, move, etc.)
+      // resolveNoteIds deduplicates when multiple lines claim the same noteId.
       const currentLines = editorState.lines.map((l) => l.text)
-      const existingTracked = trackedLinesRef.current
-
-      // Re-match lines to IDs using the same algorithm as Android
-      const newTracked = matchLinesToIds(
-        targetNoteId,
-        existingTracked,
-        currentLines,
-      )
+      const currentNoteIds = editorState.lines.map((l) => l.noteIds)
+      let newTracked = resolveNoteIds(currentLines, currentNoteIds)
+      // Ensure first line always maps to the parent noteId
+      if (newTracked.length > 0 && newTracked[0]!.noteId !== targetNoteId) {
+        newTracked = [{ ...newTracked[0]!, noteId: targetNoteId }, ...newTracked.slice(1)]
+      }
 
       const createdIds = await repo.saveNoteWithChildren(targetNoteId, newTracked)
 
@@ -234,6 +246,11 @@ export function useEditor(noteId: string | undefined) {
         return newId ? { ...line, noteId: newId } : line
       })
       trackedLinesRef.current = updatedTracked
+
+      // Push updated noteIds back into editor state so the UI reflects new IDs
+      editorState.updateNoteIds(
+        updatedTracked.map((l) => (l.noteId ? [l.noteId] : []))
+      )
 
       setDirty(false)
     } catch (e) {

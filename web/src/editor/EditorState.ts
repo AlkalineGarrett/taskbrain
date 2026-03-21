@@ -185,8 +185,8 @@ export class EditorState {
     return true
   }
 
-  indentInternal(): void {
-    const linesToIndent = this.getSelectedLineIndices()
+  indentInternal(hiddenIndices: Set<number> = new Set()): void {
+    const linesToIndent = this.getSelectedLineIndices(hiddenIndices)
     const hadSelection = this.hasSelection
     const oldSelStart = this.selection.start
     const oldSelEnd = this.selection.end
@@ -210,8 +210,8 @@ export class EditorState {
     this.notifyChange()
   }
 
-  unindentInternal(): void {
-    const linesToUnindent = this.getSelectedLineIndices()
+  unindentInternal(hiddenIndices: Set<number> = new Set()): void {
+    const linesToUnindent = this.getSelectedLineIndices(hiddenIndices)
     const hadSelection = this.hasSelection
     const oldSelStart = this.selection.start
     const oldSelEnd = this.selection.end
@@ -240,23 +240,55 @@ export class EditorState {
     }
   }
 
-  private getSelectedLineIndices(): number[] {
+  private getSelectedLineIndices(hiddenIndices: Set<number> = new Set()): number[] {
     if (!this.hasSelection) return [this.focusedLineIndex]
     const startLine = this.getLineAndLocalOffset(selMin(this.selection))[0]
     const endLine = this.getLineAndLocalOffset(selMax(this.selection))[0]
     const result: number[] = []
-    for (let i = startLine; i <= endLine; i++) result.push(i)
+    for (let i = startLine; i <= endLine; i++) {
+      if (!hiddenIndices.has(i)) result.push(i)
+    }
     return result
   }
 
   toggleBulletInternal(): void {
-    this.currentLine?.toggleBullet()
-    this.requestFocusUpdate()
-    this.notifyChange()
+    this.togglePrefixOnSelectedLines((line) => line.toggleBullet())
   }
 
   toggleCheckboxInternal(): void {
-    this.currentLine?.toggleCheckbox()
+    this.togglePrefixOnSelectedLines((line) => line.toggleCheckbox())
+  }
+
+  private togglePrefixOnSelectedLines(toggle: (line: LineState) => void): void {
+    const lineIndices = this.getSelectedLineIndices()
+    const hadSelection = this.hasSelection
+    const oldSelStart = this.selection.start
+    const oldSelEnd = this.selection.end
+
+    const deltas: { lineIndex: number; delta: number }[] = []
+    for (const lineIndex of lineIndices) {
+      const line = this.lines[lineIndex]
+      if (!line) continue
+      const lenBefore = line.text.length
+      toggle(line)
+      deltas.push({ lineIndex, delta: line.text.length - lenBefore })
+    }
+
+    if (hadSelection) {
+      const [startLine] = this.getLineAndLocalOffset(oldSelStart)
+      const [endLine] = this.getLineAndLocalOffset(oldSelEnd)
+      let startAdjust = 0
+      let endAdjust = 0
+      for (const { lineIndex, delta } of deltas) {
+        if (lineIndex <= startLine) startAdjust += delta
+        if (lineIndex <= endLine) endAdjust += delta
+      }
+      this.selection = {
+        start: Math.max(0, oldSelStart + startAdjust),
+        end: Math.max(0, oldSelEnd + endAdjust),
+      }
+    }
+
     this.requestFocusUpdate()
     this.notifyChange()
   }
@@ -289,13 +321,17 @@ export class EditorState {
 
   moveLinesInternal(sourceFirst: number, sourceLast: number, targetIndex: number): [number, number] | null {
     const selectionForCalc = this.hasSelection ? this.selection : null
+    // Capture noteIds before move
+    const oldNoteIds = this.lines.map((l) => l.noteIds)
     const result = ME.calculateMove(
       this.lines, sourceFirst, sourceLast, targetIndex,
       this.focusedLineIndex, selectionForCalc,
     )
     if (!result) return null
 
-    this.lines = result.newLines.map((t) => new LineState(t))
+    // Reorder noteIds in parallel with text
+    const reorderedNoteIds = result.newLineOrder.map((oldIdx) => oldNoteIds[oldIdx] ?? [])
+    this.lines = result.newLines.map((t, i) => new LineState(t, undefined, reorderedNoteIds[i]))
     this.focusedLineIndex = result.newFocusedLineIndex
     if (result.newSelection) {
       this.selection = result.newSelection
@@ -317,9 +353,56 @@ export class EditorState {
   }
 
   updateFromText(newText: string): void {
-    const newLines = newText.split('\n')
-    this.lines = newLines.map((t) => new LineState(t))
+    const oldLines = this.lines
+    const newLineTexts = newText.split('\n')
+
+    // Build content-to-old-indices map for exact matching
+    const contentToOldIndices = new Map<string, number[]>()
+    oldLines.forEach((line, index) => {
+      const indices = contentToOldIndices.get(line.text)
+      if (indices) indices.push(index)
+      else contentToOldIndices.set(line.text, [index])
+    })
+
+    const matchedNoteIds: (string[] | null)[] = new Array(newLineTexts.length).fill(null) as (string[] | null)[]
+    const oldConsumed = new Array(oldLines.length).fill(false) as boolean[]
+
+    // Phase 1: Exact content match
+    newLineTexts.forEach((text, index) => {
+      const indices = contentToOldIndices.get(text)
+      if (indices && indices.length > 0) {
+        const oldIdx = indices.shift()!
+        matchedNoteIds[index] = oldLines[oldIdx]!.noteIds
+        oldConsumed[oldIdx] = true
+      }
+    })
+
+    // Phase 2: Positional fallback
+    newLineTexts.forEach((_, index) => {
+      if (matchedNoteIds[index] == null) {
+        if (index < oldLines.length && !oldConsumed[index]) {
+          matchedNoteIds[index] = oldLines[index]!.noteIds
+          oldConsumed[index] = true
+        }
+      }
+    })
+
+    this.lines = newLineTexts.map((t, i) => new LineState(t, undefined, matchedNoteIds[i] ?? []))
     this.focusedLineIndex = Math.max(0, Math.min(this.focusedLineIndex, this.lines.length - 1))
+  }
+
+  /** Initializes editor lines with noteIds from loaded note data. */
+  initFromNoteLines(noteLines: Array<{ text: string; noteIds: string[] }>): void {
+    this.lines = noteLines.map((nl) => new LineState(nl.text, undefined, nl.noteIds))
+    this.focusedLineIndex = 0
+    this.clearSelection()
+  }
+
+  /** Updates noteIds on existing lines without disturbing editor state. */
+  updateNoteIds(lineNoteIds: string[][]): void {
+    for (let i = 0; i < this.lines.length && i < lineNoteIds.length; i++) {
+      this.lines[i]!.noteIds = lineNoteIds[i]!
+    }
   }
 
   private removeEmptyLineAtCursor(cursorPosition: number): void {

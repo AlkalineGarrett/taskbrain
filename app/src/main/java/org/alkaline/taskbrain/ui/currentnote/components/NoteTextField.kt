@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import org.alkaline.taskbrain.dsl.directives.DirectiveSegmenter
 import org.alkaline.taskbrain.ui.currentnote.util.SymbolTapInfo
 import org.alkaline.taskbrain.ui.currentnote.util.TappableSymbol
 import androidx.compose.foundation.layout.fillMaxSize
@@ -124,6 +125,23 @@ fun NoteTextField(
                                     lineIndex = lineIndex,
                                     symbolIndexOnLine = textBefore.count { ch -> ch.toString() == symbol.char }
                                 ))
+                            } else {
+                                // Check if tap landed on an alarm directive [alarm("id")]
+                                val prefixLen = editorState.lines.getOrNull(lineIndex)?.prefix?.length ?: 0
+                                val adjustedResults = DirectiveSegmenter.adjustKeysForPrefix(directiveResults, lineIndex, prefixLen)
+                                val displayResult = DirectiveSegmenter.buildDisplayText(content, lineIndex, adjustedResults)
+                                val alarmRange = displayResult.directiveDisplayRanges.find {
+                                    it.isAlarm && charOffsetInLine in it.sourceRange
+                                }
+                                if (alarmRange?.alarmId != null) {
+                                    callback(SymbolTapInfo(
+                                        symbol = TappableSymbol.ALARM,
+                                        charOffset = charOffsetInLine,
+                                        lineIndex = lineIndex,
+                                        symbolIndexOnLine = 0,
+                                        alarmId = alarmRange.alarmId
+                                    ))
+                                }
                             }
                         }
                     },

@@ -63,6 +63,10 @@ export function DirectiveChip({
     }
   }, [isButton, onButtonClick, onClick])
 
+  if (value?.kind === 'AlarmVal') {
+    return <span>⏰</span>
+  }
+
   if (isView && value?.kind === 'ViewVal') {
     return (
       <ViewDirectiveRenderer

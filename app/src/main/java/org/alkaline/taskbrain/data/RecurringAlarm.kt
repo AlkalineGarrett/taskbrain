@@ -68,21 +68,7 @@ data class RecurringAlarm(
         }
 
     /** Display-friendly name derived from line content. */
-    val displayName: String by lazy {
-        var result = lineContent
-        result = result.trimStart('\t')
-        DISPLAY_PREFIXES.forEach { prefix ->
-            if (result.startsWith(prefix)) {
-                result = result.removePrefix(prefix)
-            }
-        }
-        result = result.trimStart()
-        if (result.endsWith(ALARM_SYMBOL)) {
-            result = result.dropLast(ALARM_SYMBOL.length)
-            if (result.endsWith(" ")) result = result.dropLast(1)
-        }
-        result.trim()
-    }
+    val displayName: String by lazy { AlarmMarkers.displayName(lineContent) }
 
     /**
      * Returns true if the alarm instance's time-of-day and stages match the template's
@@ -91,11 +77,6 @@ data class RecurringAlarm(
     fun timesMatchInstance(alarm: Alarm): Boolean {
         val instanceTimeOfDay = alarm.dueTime?.toTimeOfDay()
         return instanceTimeOfDay == anchorTimeOfDay && alarm.stages == stages
-    }
-
-    companion object {
-        private const val ALARM_SYMBOL = "⏰"
-        private val DISPLAY_PREFIXES = listOf("• ", "☐ ", "☑ ")
     }
 }
 

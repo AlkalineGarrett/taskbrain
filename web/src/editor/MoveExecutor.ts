@@ -5,6 +5,8 @@ import * as SC from './SelectionCoordinates'
 
 export interface MoveResult {
   newLines: string[]
+  /** Maps new index → old index, for reordering parallel arrays (e.g. noteIds). */
+  newLineOrder: number[]
   newFocusedLineIndex: number
   newSelection: EditorSelection | null
   newRange: [number, number]
@@ -32,16 +34,20 @@ export function calculateMove(
     ;[selEndLine, selEndLocal] = SC.getLineAndLocalOffset(lines, selection.end)
   }
 
-  const linesToMove = []
+  const linesToMove: string[] = []
+  const moveIndices: number[] = []
   for (let i = sourceFirst; i <= sourceLast; i++) {
     linesToMove.push(lines[i]!.text)
+    moveIndices.push(i)
   }
 
   // Build new lines list (without source range)
   const withoutSource: string[] = []
+  const withoutSourceOrder: number[] = []
   for (let i = 0; i < lines.length; i++) {
     if (i < sourceFirst || i > sourceLast) {
       withoutSource.push(lines[i]!.text)
+      withoutSourceOrder.push(i)
     }
   }
 
@@ -49,8 +55,10 @@ export function calculateMove(
 
   // Insert moved lines
   const newLines = [...withoutSource]
+  const newLineOrder = [...withoutSourceOrder]
   for (let i = 0; i < linesToMove.length; i++) {
     newLines.splice(adjustedTarget + i, 0, linesToMove[i]!)
+    newLineOrder.splice(adjustedTarget + i, 0, moveIndices[i]!)
   }
 
   const newRangeStart = adjustedTarget
@@ -95,6 +103,7 @@ export function calculateMove(
 
   return {
     newLines,
+    newLineOrder,
     newFocusedLineIndex,
     newSelection,
     newRange: [newRangeStart, newRangeEnd],

@@ -1,5 +1,6 @@
 package org.alkaline.taskbrain.dsl.language
 
+import org.alkaline.taskbrain.dsl.runtime.AlarmVal
 import org.alkaline.taskbrain.dsl.runtime.ButtonVal
 import org.alkaline.taskbrain.dsl.runtime.DslValue
 import org.alkaline.taskbrain.dsl.runtime.Environment
@@ -359,6 +360,76 @@ class ActionFunctionsTest {
         val directive = parse("[button(\"Test\", [time])]")
         // The lambda body contains dynamic call, so the lambda is dynamic
         assertTrue(DynamicCallAnalyzer.containsDynamicCalls(directive.expression))
+    }
+
+    // endregion
+
+    // region alarm() function
+
+    @Test
+    fun `alarm with id creates AlarmVal`() {
+        val result = execute("[alarm(\"f3GxY2abc\")]")
+
+        assertTrue(result is AlarmVal)
+        val alarm = result as AlarmVal
+        assertEquals("f3GxY2abc", alarm.alarmId)
+    }
+
+    @Test
+    fun `alarm displays as clock emoji`() {
+        val result = execute("[alarm(\"test123\")]") as AlarmVal
+
+        assertEquals("⏰", result.toDisplayString())
+    }
+
+    @Test
+    fun `alarm with variable id`() {
+        val env = Environment()
+        env.define("id", StringVal("dynamicId"))
+
+        val result = execute("[alarm(id)]", env)
+
+        assertTrue(result is AlarmVal)
+        assertEquals("dynamicId", (result as AlarmVal).alarmId)
+    }
+
+    @Test
+    fun `alarm missing id throws error`() {
+        val exception = assertThrows(ExecutionException::class.java) {
+            execute("[alarm()]")
+        }
+        assertTrue(exception.message!!.contains("id"))
+    }
+
+    @Test
+    fun `alarm with non-string id throws error`() {
+        val exception = assertThrows(ExecutionException::class.java) {
+            execute("[alarm(42)]")
+        }
+        assertTrue(exception.message!!.contains("string"))
+    }
+
+    @Test
+    fun `alarm serialization roundtrip`() {
+        val original = AlarmVal("abc123")
+        val serialized = original.serialize()
+        val deserialized = DslValue.deserialize(serialized)
+
+        assertTrue(deserialized is AlarmVal)
+        assertEquals("abc123", (deserialized as AlarmVal).alarmId)
+    }
+
+    @Test
+    fun `alarm is idempotent`() {
+        val directive = parse("[alarm(\"test\")]")
+        val result = IdempotencyAnalyzer.analyze(directive.expression)
+        assertTrue(result.isIdempotent)
+    }
+
+    @Test
+    fun `alarm is not dynamic`() {
+        val directive = parse("[alarm(\"test\")]")
+        assertFalse(DynamicCallAnalyzer.containsDynamicCalls(directive.expression))
     }
 
     // endregion

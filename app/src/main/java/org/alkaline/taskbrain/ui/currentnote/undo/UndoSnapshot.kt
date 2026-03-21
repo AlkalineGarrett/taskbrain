@@ -11,7 +11,8 @@ data class UndoSnapshot(
     val lineContents: List<String>,
     val focusedLineIndex: Int,
     val cursorPosition: Int,
-    val createdAlarm: AlarmSnapshot? = null
+    val createdAlarm: AlarmSnapshot? = null,
+    val lineNoteIds: List<List<String>> = emptyList()
 )
 
 /**

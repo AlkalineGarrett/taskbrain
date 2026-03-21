@@ -1,10 +1,8 @@
 package org.alkaline.taskbrain.dsl.directives
 
-import android.util.Log
+import org.alkaline.taskbrain.dsl.runtime.values.AlarmVal
 import org.alkaline.taskbrain.dsl.runtime.values.ButtonVal
 import org.alkaline.taskbrain.dsl.runtime.values.ViewVal
-
-private const val TAG = "DirectiveSegmenter"
 
 /**
  * Represents a segment of line content - either plain text or a directive.
@@ -33,9 +31,12 @@ sealed class DirectiveSegment {
     ) : DirectiveSegment() {
         /** Display text - result value if computed, source if not */
         val displayText: String
-            get() = result?.let {
-                if (it.isComputed) it.toValue()?.toDisplayString() ?: sourceText else sourceText
-            } ?: sourceText
+            get() {
+                val r = result ?: return sourceText
+                if (!r.isComputed) return sourceText
+                val value = r.toValue() ?: return sourceText
+                return value.toDisplayString()
+            }
 
         /** Whether this directive has been computed */
         val isComputed: Boolean
@@ -83,11 +84,12 @@ object DirectiveSegmenter {
 
             // Add the directive segment with position-based key
             val key = DirectiveFinder.directiveKey(lineIndex, directive.startOffset)
+            val lookupResult = results[key]
             segments.add(
                 DirectiveSegment.Directive(
                     sourceText = directive.sourceText,
                     key = key,
-                    result = results[key],
+                    result = lookupResult,
                     range = directive.startOffset until directive.endOffset
                 )
             )
@@ -123,6 +125,36 @@ object DirectiveSegmenter {
         return directives.any { directive ->
             val key = DirectiveFinder.directiveKey(lineIndex, directive.startOffset)
             results[key]?.isComputed ?: false
+        }
+    }
+
+    /**
+     * Adjusts directive result keys from full-line offsets to content-only offsets.
+     *
+     * Directive results are keyed by position in the full line text (including prefix like
+     * bullets/checkboxes/tabs), but [buildDisplayText] operates on content-only text (prefix
+     * stripped). This adjusts the keys so lookups match.
+     *
+     * @param results The directive results keyed by full-line offsets
+     * @param lineIndex The line index to adjust keys for
+     * @param prefixLength The length of the prefix to subtract from offsets
+     * @return Results with adjusted keys
+     */
+    fun adjustKeysForPrefix(
+        results: Map<String, DirectiveResult>,
+        lineIndex: Int,
+        prefixLength: Int
+    ): Map<String, DirectiveResult> {
+        if (prefixLength == 0) return results
+        return results.mapKeys { (key, _) ->
+            val parts = key.split(":")
+            if (parts.size == 2 && parts[0] == lineIndex.toString()) {
+                val fullOffset = parts[1].toIntOrNull() ?: return@mapKeys key
+                val contentOffset = fullOffset - prefixLength
+                if (contentOffset >= 0) "$lineIndex:$contentOffset" else key
+            } else {
+                key
+            }
         }
     }
 
@@ -164,11 +196,12 @@ object DirectiveSegmenter {
                     displayBuilder.append(displayText)
                     val displayEnd = displayBuilder.length
 
-                    // Check if the result is a ViewVal or ButtonVal for special UI handling
+                    // Check if the result is a ViewVal, ButtonVal, or AlarmVal for special UI handling
                     val resultValue = segment.result?.toValue()
                     val isViewResult = resultValue is ViewVal
                     val isButtonResult = resultValue is ButtonVal
-                    Log.d(TAG, "buildDisplayText: key=${segment.key}, resultValue=${resultValue?.javaClass?.simpleName}, isButton=$isButtonResult, isView=$isViewResult")
+                    val isAlarmResult = resultValue is AlarmVal
+                    val alarmId = (resultValue as? AlarmVal)?.alarmId
 
                     directiveRanges.add(
                         DirectiveDisplayRange(
@@ -181,7 +214,9 @@ object DirectiveSegmenter {
                             hasError = segment.result?.error != null,
                             hasWarning = segment.result?.hasWarning ?: false,
                             isView = isViewResult,
-                            isButton = isButtonResult
+                            isButton = isButtonResult,
+                            isAlarm = isAlarmResult,
+                            alarmId = alarmId
                         )
                     )
                 }
@@ -211,6 +246,7 @@ data class DisplayTextResult(
  * Milestone 8: Added hasWarning for no-effect warnings.
  * Milestone 10: Added isView for view directive special rendering.
  * Button UI: Added isButton for button directive special rendering.
+ * Alarm identity: Added isAlarm/alarmId for alarm directive rendering (no dashed box).
  */
 data class DirectiveDisplayRange(
     val key: String,             // Position-based key (e.g., "3:15" for line 3, offset 15)
@@ -221,6 +257,8 @@ data class DirectiveDisplayRange(
     val isComputed: Boolean,
     val hasError: Boolean,
     val hasWarning: Boolean = false,
-    val isView: Boolean = false,  // True if result is a ViewVal
-    val isButton: Boolean = false // True if result is a ButtonVal
+    val isView: Boolean = false,   // True if result is a ViewVal
+    val isButton: Boolean = false, // True if result is a ButtonVal
+    val isAlarm: Boolean = false,  // True if result is an AlarmVal
+    val alarmId: String? = null    // Alarm document ID (when isAlarm is true)
 )

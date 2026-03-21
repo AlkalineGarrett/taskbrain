@@ -409,4 +409,24 @@ class TextLineUtilsTest {
     fun `trimLineForAlarm handles line with only alarm symbol`() {
         assertEquals("", TextLineUtils.trimLineForAlarm("⏰"))
     }
+
+    @Test
+    fun `trimLineForAlarm removes alarm directive`() {
+        assertEquals("Buy groceries", TextLineUtils.trimLineForAlarm("Buy groceries [alarm(\"abc123\")]"))
+    }
+
+    @Test
+    fun `trimLineForAlarm removes alarm directive with prefix`() {
+        assertEquals("Call mom", TextLineUtils.trimLineForAlarm("\t• Call mom [alarm(\"xyz\")]"))
+    }
+
+    @Test
+    fun `trimLineForAlarm removes alarm directive without space`() {
+        assertEquals("Buy groceries", TextLineUtils.trimLineForAlarm("Buy groceries[alarm(\"abc\")]"))
+    }
+
+    @Test
+    fun `trimLineForAlarm handles line with only alarm directive`() {
+        assertEquals("", TextLineUtils.trimLineForAlarm("[alarm(\"abc\")]"))
+    }
 }

@@ -130,10 +130,18 @@ fun DirectiveLineContent(
                         val directiveRange = displayResult.directiveDisplayRanges.find { it.key == segment.key }
                         val isView = directiveRange?.isView ?: false
                         val isButton = directiveRange?.isButton ?: false
+                        val isAlarm = directiveRange?.isAlarm ?: false
 
-                        Log.d(TAG, "Directive render: key=${segment.key}, isButton=$isButton, isView=$isView, isComputed=${segment.isComputed}, hasError=${segment.result?.error != null}")
+                        Log.d(TAG, "Directive render: key=${segment.key}, isButton=$isButton, isView=$isView, isAlarm=$isAlarm, isComputed=${segment.isComputed}, hasError=${segment.result?.error != null}")
 
                         when {
+                            isAlarm && segment.isComputed && segment.result?.error == null -> {
+                                // Alarm directives render as plain text (⏰)
+                                Text(
+                                    text = segment.displayText,
+                                    style = textStyle
+                                )
+                            }
                             isView && segment.isComputed && segment.result?.error == null -> {
                                 // Extract ViewVal from result to get notes
                                 val viewVal = segment.result?.toValue() as? ViewVal
@@ -203,10 +211,18 @@ fun DirectiveLineContent(
                         val directiveRange = displayResult.directiveDisplayRanges.find { it.key == segment.key }
                         val isView = directiveRange?.isView ?: false
                         val isButton = directiveRange?.isButton ?: false
+                        val isAlarm = directiveRange?.isAlarm ?: false
 
-                        Log.d(TAG, "Directive render: key=${segment.key}, isButton=$isButton, isView=$isView, isComputed=${segment.isComputed}, hasError=${segment.result?.error != null}")
+                        Log.d(TAG, "Directive render: key=${segment.key}, isButton=$isButton, isView=$isView, isAlarm=$isAlarm, isComputed=${segment.isComputed}, hasError=${segment.result?.error != null}")
 
                         when {
+                            isAlarm && segment.isComputed && segment.result?.error == null -> {
+                                // Alarm directives render as plain text (⏰)
+                                Text(
+                                    text = segment.displayText,
+                                    style = textStyle
+                                )
+                            }
                             isView && segment.isComputed && segment.result?.error == null -> {
                                 // Extract ViewVal from result to get notes
                                 val viewVal = segment.result?.toValue() as? ViewVal

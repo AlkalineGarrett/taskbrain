@@ -1,4 +1,4 @@
-import { useRef, useEffect, useLayoutEffect, useCallback, useState, type KeyboardEvent, type ChangeEvent, type MouseEvent, type ClipboardEvent } from 'react'
+import { useRef, useEffect, useLayoutEffect, useCallback, useState, type KeyboardEvent, type ChangeEvent, type MouseEvent, type ClipboardEvent, type CompositionEvent } from 'react'
 import type { EditorController } from '@/editor/EditorController'
 import type { EditorState } from '@/editor/EditorState'
 import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
@@ -39,6 +39,7 @@ export function EditorLine({
 }: EditorLineProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
+  const composingRef = useRef(false)
   const line = editorState.lines[lineIndex]
   if (!line) return null
 
@@ -97,16 +98,16 @@ export function EditorLine({
     range.setStart(startNode, startOffset)
     range.setEnd(endNode, endOffset)
     const overlayRect = overlay.getBoundingClientRect()
-    const lineHeight = parseFloat(getComputedStyle(overlay).lineHeight)
+    const parsedLineHeight = parseFloat(getComputedStyle(overlay).lineHeight)
+    const lineHeight = isNaN(parsedLineHeight) ? overlay.getBoundingClientRect().height : parsedLineHeight
     const rects: DOMRect[] = []
     const rawRects = range.getClientRects()
     // Deduplicate rects (Range can return multiple rects per visual row)
-    const seen = new Set<number>()
+    const seenTops: number[] = []
     for (let i = 0; i < rawRects.length; i++) {
       const r = rawRects[i]!
-      const rowKey = Math.round(r.top)
-      if (seen.has(rowKey)) continue
-      seen.add(rowKey)
+      if (seenTops.some(t => Math.abs(t - r.top) < 2)) continue
+      seenTops.push(r.top)
       // Expand to full line-height, centered on the glyph center
       const glyphCenter = r.top + r.height / 2
       const top = glyphCenter - lineHeight / 2
@@ -163,11 +164,25 @@ export function EditorLine({
         e.target.value = content
         return
       }
+      // During IME composition, don't commit intermediate text to editor state
+      if (composingRef.current) return
       const newContent = e.target.value
       const newCursor = e.target.selectionStart ?? newContent.length
       controller.updateLineContent(lineIndex, newContent, newCursor)
     },
     [controller, editorState, lineIndex, content],
+  )
+
+  const handleCompositionStart = useCallback(() => { composingRef.current = true }, [])
+  const handleCompositionEnd = useCallback(
+    (e: CompositionEvent<HTMLTextAreaElement>) => {
+      composingRef.current = false
+      // Commit the final composed text
+      const newContent = e.currentTarget.value
+      const newCursor = e.currentTarget.selectionStart ?? newContent.length
+      controller.updateLineContent(lineIndex, newContent, newCursor)
+    },
+    [controller, lineIndex],
   )
 
   /** Let the textarea handle intra-line arrow navigation, then sync the cursor position back. */
@@ -219,6 +234,8 @@ export function EditorLine({
           // Let the native paste event fire — handled by onPaste
           return
         }
+        // Unhandled Cmd/Ctrl combo (e.g. Cmd+Left/Right) — let browser handle, sync cursor
+        syncCursorAfterNativeNav()
         return
       }
 
@@ -262,20 +279,24 @@ export function EditorLine({
             return
           }
           case 'ArrowUp': {
-            if (lineIndex > 0) {
+            let target = lineIndex - 1
+            while (target >= 0 && controller.hiddenIndices.has(target)) target--
+            if (target >= 0) {
               e.preventDefault()
-              const prevLine = editorState.lines[lineIndex - 1]!
-              const prevLineStart = editorState.getLineStartOffset(lineIndex - 1)
+              const prevLine = editorState.lines[target]!
+              const prevLineStart = editorState.getLineStartOffset(target)
               const localPos = Math.min(line.cursorPosition, prevLine.text.length)
               editorState.extendSelectionTo(prevLineStart + localPos)
             }
             return
           }
           case 'ArrowDown': {
-            if (lineIndex < editorState.lines.length - 1) {
+            let target = lineIndex + 1
+            while (target < editorState.lines.length && controller.hiddenIndices.has(target)) target++
+            if (target < editorState.lines.length) {
               e.preventDefault()
-              const nextLine = editorState.lines[lineIndex + 1]!
-              const nextLineStart = editorState.getLineStartOffset(lineIndex + 1)
+              const nextLine = editorState.lines[target]!
+              const nextLineStart = editorState.getLineStartOffset(target)
               const localPos = Math.min(line.cursorPosition, nextLine.text.length)
               editorState.extendSelectionTo(nextLineStart + localPos)
             }
@@ -321,20 +342,30 @@ export function EditorLine({
           }
           break
 
-        case 'ArrowLeft':
-          if (cursor === 0 && lineIndex > 0) {
+        case 'ArrowLeft': {
+          let target = lineIndex - 1
+          while (target >= 0 && controller.hiddenIndices.has(target)) target--
+          if (cursor === 0 && target >= 0) {
             e.preventDefault()
-            controller.setCursor(lineIndex - 1, editorState.lines[lineIndex - 1]!.text.length)
+            controller.setCursor(target, editorState.lines[target]!.text.length)
+          } else {
+            syncCursorAfterNativeNav()
           }
           break
+        }
 
-        case 'ArrowRight':
-          if (cursor === content.length && lineIndex < editorState.lines.length - 1) {
+        case 'ArrowRight': {
+          let target = lineIndex + 1
+          while (target < editorState.lines.length && controller.hiddenIndices.has(target)) target++
+          if (cursor === content.length && target < editorState.lines.length) {
             e.preventDefault()
-            const nextLine = editorState.lines[lineIndex + 1]!
-            controller.setCursor(lineIndex + 1, nextLine.prefix.length)
+            const nextLine = editorState.lines[target]!
+            controller.setCursor(target, nextLine.prefix.length)
+          } else {
+            syncCursorAfterNativeNav()
           }
           break
+        }
 
         case 'ArrowUp': {
           const overlay = overlayRef.current
@@ -342,8 +373,10 @@ export function EditorLine({
             syncCursorAfterNativeNav()
           } else {
             e.preventDefault()
-            if (lineIndex > 0) {
-              controller.setCursor(lineIndex - 1, editorState.lines[lineIndex - 1]!.text.length)
+            let target = lineIndex - 1
+            while (target >= 0 && controller.hiddenIndices.has(target)) target--
+            if (target >= 0) {
+              controller.setCursor(target, editorState.lines[target]!.text.length)
             }
           }
           break
@@ -355,12 +388,19 @@ export function EditorLine({
             syncCursorAfterNativeNav()
           } else {
             e.preventDefault()
-            if (lineIndex < editorState.lines.length - 1) {
-              controller.setCursor(lineIndex + 1, 0)
+            let target = lineIndex + 1
+            while (target < editorState.lines.length && controller.hiddenIndices.has(target)) target++
+            if (target < editorState.lines.length) {
+              controller.setCursor(target, 0)
             }
           }
           break
         }
+
+        default:
+          // Any other key the browser handles natively (Home, End, etc.) — sync cursor
+          syncCursorAfterNativeNav()
+          break
       }
     },
     [controller, editorState, lineIndex, content, syncCursorAfterNativeNav],
@@ -388,6 +428,18 @@ export function EditorLine({
       return content.length
     },
     [content.length],
+  )
+
+  const handleContextMenu = useCallback(
+    (e: MouseEvent<HTMLTextAreaElement>) => {
+      // Position cursor at right-click location so native Cut/Copy/Paste operate on the right spot
+      const charIdx = getCharIndexFromEvent(e)
+      const globalOffset = editorState.getLineStartOffset(lineIndex) + prefix.length + charIdx
+      if (!editorState.hasSelection) {
+        controller.setCursorFromGlobalOffset(globalOffset)
+      }
+    },
+    [getCharIndexFromEvent, controller, editorState, lineIndex, prefix.length],
   )
 
   const handleMouseDown = useCallback(
@@ -506,19 +558,26 @@ export function EditorLine({
             onChange={handleChange}
             onKeyDown={handleKeyDown}
             onMouseDown={handleMouseDown}
+            onContextMenu={handleContextMenu}
             onPaste={handlePaste}
             onFocus={handleFocus}
+            onCompositionStart={handleCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
             spellCheck={false}
             autoComplete="off"
           />
+          {selectionRects.length > 0 && (
+            <div className={styles.highlightLayer} aria-hidden>
+              {selectionRects.map((r, i) => (
+                <div
+                  key={i}
+                  className={styles.selectionHighlight}
+                  style={{ left: r.x, top: r.y, width: r.width, height: r.height }}
+                />
+              ))}
+            </div>
+          )}
           <div ref={overlayRef} className={styles.textOverlay} data-text-overlay aria-hidden>
-            {selectionRects.map((r, i) => (
-              <div
-                key={i}
-                className={styles.selectionHighlight}
-                style={{ left: r.x, top: r.y, width: r.width, height: r.height }}
-              />
-            ))}
             {content}
           </div>
         </div>

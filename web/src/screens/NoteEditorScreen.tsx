@@ -320,6 +320,7 @@ export function NoteEditorScreen() {
 
   // --- Drag selection across lines ---
   const editorRef = useRef<HTMLDivElement>(null)
+  const noteIdColumnRef = useRef<HTMLDivElement>(null)
   const dropCursorRef = useRef<HTMLDivElement>(null)
   const isDraggingRef = useRef(false)
   const isMoveDraggingRef = useRef(false)
@@ -340,25 +341,39 @@ export function NoteEditorScreen() {
 
     const lineElements = editorEl.querySelectorAll('[data-line-index]')
     let targetLineIndex = -1
+    let matchedLineEl: Element | null = null
     for (let i = 0; i < lineElements.length; i++) {
       const rect = lineElements[i]!.getBoundingClientRect()
       if (clientY >= rect.top && clientY < rect.bottom) {
         targetLineIndex = parseInt(lineElements[i]!.getAttribute('data-line-index')!)
+        matchedLineEl = lineElements[i]!
         break
       }
     }
     if (targetLineIndex < 0) {
-      if (clientY < (lineElements[0]?.getBoundingClientRect().top ?? 0)) {
+      // Mouse is between visible line elements (e.g. over a placeholder row) or outside.
+      // Find the nearest visible line element by Y-distance instead of jumping to first/last.
+      let bestDist = Infinity
+      for (let i = 0; i < lineElements.length; i++) {
+        const rect = lineElements[i]!.getBoundingClientRect()
+        const dist = clientY < rect.top ? rect.top - clientY : clientY - rect.bottom
+        if (dist < bestDist) {
+          bestDist = dist
+          targetLineIndex = parseInt(lineElements[i]!.getAttribute('data-line-index')!)
+          matchedLineEl = lineElements[i]!
+        }
+      }
+      // Final fallback if no line elements exist at all
+      if (targetLineIndex < 0) {
         targetLineIndex = 0
-      } else {
-        targetLineIndex = editorState.lines.length - 1
+        matchedLineEl = null
       }
     }
 
     const targetLine = editorState.lines[targetLineIndex]
     if (!targetLine) return null
 
-    const lineEl = lineElements[targetLineIndex] ?? null
+    const lineEl = matchedLineEl
     const overlayEl = lineEl?.querySelector('[data-text-overlay]') ?? null
     if (!overlayEl) {
       const lineStart = editorState.getLineStartOffset(targetLineIndex)
@@ -441,6 +456,17 @@ export function NoteEditorScreen() {
     }
   }, [editorState, controller, getGlobalOffsetFromPoint, positionDropCursor])
 
+  // Sync note ID column scroll with editor scroll
+  useEffect(() => {
+    const scrollEl = editorRef.current
+    const colEl = noteIdColumnRef.current
+    if (!scrollEl || !colEl) return
+    const syncScroll = () => { colEl.scrollTop = scrollEl.scrollTop }
+    syncScroll()
+    scrollEl.addEventListener('scroll', syncScroll, { passive: true })
+    return () => scrollEl.removeEventListener('scroll', syncScroll)
+  })
+
   // Compute display items and hidden indices for show/hide completed lines
   const lineTexts = editorState.lines.map((l) => l.text)
   const lineTextsKey = lineTexts.join('\n')
@@ -522,10 +548,27 @@ export function NoteEditorScreen() {
         onCancel={() => setShowDeleteConfirm(false)}
       />
 
-      <div
-        ref={editorRef}
-        className={`${styles.editor} ${currentNote?.state === 'deleted' ? styles.deletedEditor : ''}`}
-      >
+      <div className={styles.editorArea}>
+        <div ref={noteIdColumnRef} className={styles.noteIdColumn}>
+          {displayItems.map((item, i) =>
+            item.type === 'placeholder' ? (
+              <div key={`ph-${i}`}>
+                {Array.from({ length: item.count }, (_, j) => {
+                  const lineIdx = item.startIndex + j
+                  return editorState.lines[lineIdx]?.noteIds ?? []
+                }).flat().join(', ') || '\u00A0'}
+              </div>
+            ) : (
+              <div key={item.realIndex}>
+                {editorState.lines[item.realIndex]?.noteIds.join(', ') || '\u00A0'}
+              </div>
+            )
+          )}
+        </div>
+        <div
+          ref={editorRef}
+          className={`${styles.editor} ${currentNote?.state === 'deleted' ? styles.deletedEditor : ''}`}
+        >
         <div ref={dropCursorRef} className={styles.dropCursor} style={{ display: 'none' }} />
         {displayItems.map((item, i) =>
           item.type === 'placeholder' ? (
@@ -565,6 +608,7 @@ export function NoteEditorScreen() {
             </div>
           ),
         )}
+      </div>
       </div>
 
       {inlineEditNoteId && (

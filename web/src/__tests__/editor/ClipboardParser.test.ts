@@ -167,4 +167,20 @@ describe('parseClipboardContent', () => {
       { indent: 0, bullet: '', content: 'plain text' },
     ])
   })
+
+  it('normalizes CRLF line endings', () => {
+    const result = parseClipboardContent('a\r\nb\r\nc', null)
+    expect(result.length).toBe(3)
+    expect(result[0]!.content).toBe('a')
+    expect(result[1]!.content).toBe('b')
+    expect(result[2]!.content).toBe('c')
+  })
+
+  it('normalizes bare CR line endings', () => {
+    const result = parseClipboardContent('a\rb\rc', null)
+    expect(result.length).toBe(3)
+    expect(result[0]!.content).toBe('a')
+    expect(result[1]!.content).toBe('b')
+    expect(result[2]!.content).toBe('c')
+  })
 })

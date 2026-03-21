@@ -12,12 +12,17 @@ import org.alkaline.taskbrain.ui.currentnote.util.LinePrefixes
  */
 class LineState(
     text: String,
-    cursorPosition: Int = text.length
+    cursorPosition: Int = text.length,
+    noteIds: List<String> = emptyList()
 ) {
     var text by mutableStateOf(text)
         private set
     var cursorPosition by mutableIntStateOf(cursorPosition.coerceIn(0, text.length))
         private set
+
+    /** Note IDs associated with this line (first = primary, rest = from merges). */
+    var noteIds: List<String> = noteIds
+        internal set
 
     /** The prefix portion (tabs + bullet/checkbox) */
     val prefix: String get() = extractPrefix(text)

@@ -905,6 +905,32 @@ class EditorStateTest {
         assertTrue(state.hasSelection)
     }
 
+    // ==================== EditorState indent/unindent with hidden lines ====================
+
+    @Test
+    fun `indentInternal skips hidden lines in selection`() {
+        val state = EditorState()
+        state.updateFromText("a\n\u2611 done\nb")
+        // Select all text
+        state.setSelection(0, state.text.length)
+        state.indentInternal(hiddenIndices = setOf(1))
+        assertEquals("\ta", state.lines[0].text)
+        assertEquals("\u2611 done", state.lines[1].text) // unchanged
+        assertEquals("\tb", state.lines[2].text)
+    }
+
+    @Test
+    fun `unindentInternal skips hidden lines in selection`() {
+        val state = EditorState()
+        state.updateFromText("\ta\n\u2611 done\n\tb")
+        // Select all text
+        state.setSelection(0, state.text.length)
+        state.unindentInternal(hiddenIndices = setOf(1))
+        assertEquals("a", state.lines[0].text)
+        assertEquals("\u2611 done", state.lines[1].text) // unchanged
+        assertEquals("b", state.lines[2].text)
+    }
+
     @Test
     fun `handleSpaceWithSelection double space unindents`() {
         val state = EditorState()
@@ -920,5 +946,41 @@ class EditorStateTest {
         // Second space within threshold - unindents twice (undo + go further)
         state.handleSpaceWithSelectionInternal()
         assertEquals("line1\nline2\nline3", state.text)
+    }
+
+    // ==================== toggleBullet/toggleCheckbox with selection ====================
+
+    @Test
+    fun `toggleBulletInternal applies to all selected lines`() {
+        val state = EditorState()
+        state.updateFromText("abc\ndef\nghi")
+        state.setSelection(0, state.text.length)
+        state.toggleBulletInternal()
+        assertEquals("• abc", state.lines[0].text)
+        assertEquals("• def", state.lines[1].text)
+        assertEquals("• ghi", state.lines[2].text)
+    }
+
+    @Test
+    fun `toggleCheckboxInternal applies to all selected lines`() {
+        val state = EditorState()
+        state.updateFromText("abc\ndef\nghi")
+        state.setSelection(0, state.text.length)
+        state.toggleCheckboxInternal()
+        assertEquals("☐ abc", state.lines[0].text)
+        assertEquals("☐ def", state.lines[1].text)
+        assertEquals("☐ ghi", state.lines[2].text)
+    }
+
+    @Test
+    fun `toggleBulletInternal preserves selection across multiple lines`() {
+        val state = EditorState()
+        state.updateFromText("abc\ndef")
+        state.setSelection(0, 7)
+        state.toggleBulletInternal()
+        assertTrue(state.hasSelection)
+        // Both lines should have bullets
+        assertEquals("• abc", state.lines[0].text)
+        assertEquals("• def", state.lines[1].text)
     }
 }

@@ -29,23 +29,30 @@ object PasteHandler {
         focusedLineIndex: Int,
         selection: EditorSelection,
         parsed: List<ParsedLine>,
+        cutLines: List<LineState>? = null,
     ): PasteResult {
         if (parsed.isEmpty()) {
             return PasteResult(lines, focusedLineIndex, 0)
         }
 
-        // Rule 5: single-line paste with no prefix = simple text insertion
-        if (parsed.size == 1 && !parsed[0].hasPrefix) {
-            return applySingleLinePaste(lines, focusedLineIndex, selection, parsed[0].content)
+        val result = when {
+            // Rule 5: single-line paste with no prefix = simple text insertion
+            parsed.size == 1 && !parsed[0].hasPrefix ->
+                applySingleLinePaste(lines, focusedLineIndex, selection, parsed[0].content)
+            // Rule 3: full-line selection = clean replacement
+            selection.hasSelection && isFullLineSelection(lines, selection) ->
+                applyFullLineReplace(lines, selection, parsed)
+            // Rules 1, 2, 4: multi-line or prefixed paste
+            else ->
+                applyStructuredPaste(lines, focusedLineIndex, selection, parsed)
         }
 
-        // Rule 3: full-line selection = clean replacement
-        if (selection.hasSelection && isFullLineSelection(lines, selection)) {
-            return applyFullLineReplace(lines, selection, parsed)
+        // Recover noteIds from cut lines for any pasted lines that have none
+        if (cutLines != null) {
+            recoverCutNoteIds(result.lines, cutLines)
         }
 
-        // Rules 1, 2, 4: multi-line or prefixed paste
-        return applyStructuredPaste(lines, focusedLineIndex, selection, parsed)
+        return result
     }
 
     // --- Full-line detection ---
@@ -78,13 +85,15 @@ object PasteHandler {
             val sMax = selection.max.coerceIn(0, fullText.length)
             val newText = fullText.substring(0, sMin) + text + fullText.substring(sMax)
             val cursorPos = sMin + text.length
-            val rebuilt = newText.split('\n').map { LineState(it) }
+            val oldNoteIds = lines.map { it.noteIds }
+            val oldContents = lines.map { it.text }
+            val rebuilt = rebuildWithNoteIds(newText, oldContents, oldNoteIds)
             val (lineIdx, localOff) = SelectionCoordinates.getLineAndLocalOffset(rebuilt, cursorPos)
             rebuilt.getOrNull(lineIdx)?.updateFull(rebuilt[lineIdx].text, localOff)
             return PasteResult(rebuilt, lineIdx, localOff)
         }
 
-        val newLines = lines.map { LineState(it.text, it.cursorPosition) }
+        val newLines = lines.map { LineState(it.text, it.cursorPosition, it.noteIds) }
         val line = newLines.getOrNull(focusedLineIndex)
             ?: return PasteResult(newLines, focusedLineIndex, 0)
         val cursor = line.cursorPosition
@@ -110,7 +119,13 @@ object PasteHandler {
 
         val before = lines.subList(0, startLine)
         val after = lines.subList(endLine + 1, lines.size)
-        val pastedLines = parsed.map { LineState(it.toLineText()) }
+        val deletedLines = lines.subList(startLine, endLine + 1)
+        val pastedTexts = parsed.map { it.toLineText() }
+
+        // Content-match noteIds from deleted lines to pasted lines
+        val oldContents = deletedLines.map { it.text }
+        val oldNoteIds = deletedLines.map { it.noteIds }
+        val pastedLines = rebuildWithNoteIds(pastedTexts.joinToString("\n"), oldContents, oldNoteIds)
 
         val newLines = before + pastedLines + after
         val cursorLineIndex = before.size + pastedLines.size - 1
@@ -189,9 +204,10 @@ object PasteHandler {
 
         val trailingContent = trailingText.drop(LineState.extractPrefix(trailingText).length)
         val hasTrailingContent = trailingContent.isNotEmpty()
-        // Preserve trailing half if it has content, or if cursor was at the start
-        // of the line (no leading content) — the original line scoots down
-        if (hasTrailingContent || !hasLeadingContent) {
+        // Only preserve trailing half if it has actual content. Lines that are empty
+        // or prefix-only (e.g. bare "☐ ") have nothing worth preserving — the pasted
+        // content replaces them.
+        if (hasTrailingContent) {
             result.add(LineState(trailingPrefix + trailingContent))
         }
 
@@ -202,5 +218,56 @@ object PasteHandler {
         val cursorPosition = result.getOrNull(lastPastedIndex)?.text?.length ?: 0
 
         return PasteResult(result, lastPastedIndex, cursorPosition)
+    }
+
+    /**
+     * Recovers noteIds from cut lines onto pasted lines that have no noteIds.
+     * Matches by content (excluding prefix) so indent changes from paste don't prevent recovery.
+     */
+    private fun recoverCutNoteIds(resultLines: List<LineState>, cutLines: List<LineState>) {
+        val contentToNoteIds = mutableMapOf<String, MutableList<List<String>>>()
+        for (cl in cutLines) {
+            if (cl.noteIds.isEmpty()) continue
+            val content = cl.text.drop(LineState.extractPrefix(cl.text).length)
+            contentToNoteIds.getOrPut(content) { mutableListOf() }.add(cl.noteIds)
+        }
+
+        for (line in resultLines) {
+            if (line.noteIds.isNotEmpty()) continue
+            val content = line.text.drop(LineState.extractPrefix(line.text).length)
+            val entries = contentToNoteIds[content]
+            if (entries != null && entries.isNotEmpty()) {
+                line.noteIds = entries.removeAt(0)
+            }
+        }
+    }
+
+    /**
+     * Rebuilds LineState objects from text, preserving noteIds via content matching.
+     */
+    private fun rebuildWithNoteIds(
+        newText: String,
+        oldContents: List<String>,
+        oldNoteIds: List<List<String>>
+    ): List<LineState> {
+        val contentToIndices = mutableMapOf<String, MutableList<Int>>()
+        oldContents.forEachIndexed { i, content ->
+            contentToIndices.getOrPut(content) { mutableListOf() }.add(i)
+        }
+        val oldConsumed = BooleanArray(oldContents.size)
+
+        return newText.split('\n').mapIndexed { index, lineText ->
+            var noteIds = emptyList<String>()
+            val indices = contentToIndices[lineText]
+            if (!indices.isNullOrEmpty()) {
+                val oldIdx = indices.removeAt(0)
+                noteIds = oldNoteIds[oldIdx]
+                oldConsumed[oldIdx] = true
+            } else if (index < oldNoteIds.size && !oldConsumed[index]) {
+                noteIds = oldNoteIds[index]
+                oldConsumed[index] = true
+            }
+            LineState(lineText, lineText.length, noteIds)
+        }
     }
 }

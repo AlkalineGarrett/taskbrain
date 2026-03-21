@@ -2,13 +2,18 @@ package org.alkaline.taskbrain.ui.currentnote.util
 
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import org.alkaline.taskbrain.data.AlarmMarkers
 
 /**
  * Utilities for managing alarm symbols in text.
+ * Delegates shared constants/functions to [AlarmMarkers] in the data layer.
  */
 object AlarmSymbolUtils {
 
-    const val ALARM_SYMBOL = "⏰"
+    const val ALARM_SYMBOL = AlarmMarkers.ALARM_SYMBOL
+
+    /** Regex matching alarm directives like [alarm("abc123")] */
+    val ALARM_DIRECTIVE_REGEX = AlarmMarkers.ALARM_DIRECTIVE_REGEX
 
     /**
      * Inserts an alarm symbol at the end of the line containing the cursor.
@@ -61,6 +66,37 @@ object AlarmSymbolUtils {
         return positions
     }
 
+    /** Creates an alarm directive string: [alarm("abc123")] */
+    fun alarmDirective(alarmId: String): String = AlarmMarkers.alarmDirective(alarmId)
+
+    /** Strips all alarm directives and plain alarm symbols from text. */
+    fun stripAlarmMarkers(text: String): String = AlarmMarkers.stripAlarmMarkers(text)
+
+    /**
+     * Migrates plain ⏰ characters in a line to [alarm("id")] directives.
+     *
+     * Each ⏰ (left to right) is paired with the corresponding alarm ID.
+     * If there are more ⏰ than alarm IDs, extra ⏰ are left as-is.
+     *
+     * @param line The line content
+     * @param alarmIds Alarm IDs in the order they should be assigned (typically sorted by createdAt)
+     * @return The migrated line, or the original if no ⏰ were found
+     */
+    fun migrateLine(line: String, alarmIds: List<String>): String {
+        val positions = findAllAlarmSymbols(line)
+        if (positions.isEmpty()) return line
+
+        val replacements = positions.zip(alarmIds).reversed()
+        if (replacements.isEmpty()) return line
+
+        var result = line
+        for ((pos, id) in replacements) {
+            val directive = alarmDirective(id)
+            result = result.substring(0, pos) + directive + result.substring(pos + 1)
+        }
+        return result
+    }
+
     /**
      * Removes an alarm symbol at the specified position.
      * Also removes the preceding space if present.
@@ -90,4 +126,3 @@ object AlarmSymbolUtils {
         )
     }
 }
-

@@ -81,6 +81,11 @@ sealed class DslValue {
                     val scheduleMap = value as Map<String, Any?>
                     ScheduleVal.deserialize(scheduleMap)
                 }
+                "alarm" -> {
+                    @Suppress("UNCHECKED_CAST")
+                    val alarmMap = value as Map<String, Any?>
+                    AlarmVal.deserialize(alarmMap)
+                }
                 else -> throw IllegalArgumentException("Unknown DslValue type: $type")
             }
         }

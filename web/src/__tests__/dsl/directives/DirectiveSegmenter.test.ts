@@ -3,7 +3,7 @@ import { segmentLine, buildDisplayText, hasDirectives } from '../../../dsl/direc
 import type { DirectiveResult } from '../../../dsl/directives/DirectiveResult'
 import { directiveResultSuccess, directiveResultFailure } from '../../../dsl/directives/DirectiveResult'
 import { directiveKey } from '../../../dsl/directives/DirectiveFinder'
-import { numberVal, stringVal } from '../../../dsl/runtime/DslValue'
+import { numberVal, stringVal, alarmVal } from '../../../dsl/runtime/DslValue'
 
 function resultsMap(entries: [string, DirectiveResult][]): Map<string, DirectiveResult> {
   return new Map(entries)
@@ -197,6 +197,42 @@ describe('buildDisplayText', () => {
     // Second: "CDEF" at display 3..7 (after "AB ")
     expect(ranges[1]!.displayRangeStart).toBe(3)
     expect(ranges[1]!.displayRangeEnd).toBe(7)
+  })
+})
+
+describe('buildDisplayText alarm directives', () => {
+  it('marks alarm directive with isAlarm and alarmId', () => {
+    const key = directiveKey(0, 0)
+    const dr = directiveResultSuccess(alarmVal('alarm-123'))
+    const result = buildDisplayText('[alarm("alarm-123")]', 0, resultsMap([[key, dr]]))
+
+    expect(result.directiveDisplayRanges).toHaveLength(1)
+    const range = result.directiveDisplayRanges[0]!
+    expect(range.isAlarm).toBe(true)
+    expect(range.alarmId).toBe('alarm-123')
+    expect(range.isButton).toBe(false)
+    expect(range.isView).toBe(false)
+  })
+
+  it('non-alarm directive has isAlarm false and no alarmId', () => {
+    const key = directiveKey(0, 0)
+    const dr = directiveResultSuccess(numberVal(42))
+    const result = buildDisplayText('[calc]', 0, resultsMap([[key, dr]]))
+
+    const range = result.directiveDisplayRanges[0]!
+    expect(range.isAlarm).toBe(false)
+    expect(range.alarmId).toBeUndefined()
+  })
+
+  it('alarm directive mixed with text preserves display ranges', () => {
+    const key = directiveKey(0, 5)
+    const dr = directiveResultSuccess(alarmVal('a1'))
+    const result = buildDisplayText('Task [alarm("a1")] done', 0, resultsMap([[key, dr]]))
+
+    expect(result.directiveDisplayRanges).toHaveLength(1)
+    const range = result.directiveDisplayRanges[0]!
+    expect(range.isAlarm).toBe(true)
+    expect(range.alarmId).toBe('a1')
   })
 })
 

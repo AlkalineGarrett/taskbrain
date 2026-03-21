@@ -7,10 +7,12 @@ import * as LP from './LinePrefixes'
 export class LineState {
   text: string
   cursorPosition: number
+  noteIds: string[]
 
-  constructor(text: string, cursorPosition?: number) {
+  constructor(text: string, cursorPosition?: number, noteIds: string[] = []) {
     this.text = text
     this.cursorPosition = clamp(cursorPosition ?? text.length, 0, text.length)
+    this.noteIds = noteIds
   }
 
   get prefix(): string {

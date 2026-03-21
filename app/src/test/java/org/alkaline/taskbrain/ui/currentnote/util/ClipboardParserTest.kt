@@ -235,6 +235,24 @@ class ClipboardParserTest {
     }
 
     @Test
+    fun `parse normalizes CRLF line endings`() {
+        val result = ClipboardParser.parse("a\r\nb\r\nc", null)
+        assertEquals(3, result.size)
+        assertEquals("a", result[0].content)
+        assertEquals("b", result[1].content)
+        assertEquals("c", result[2].content)
+    }
+
+    @Test
+    fun `parse normalizes bare CR line endings`() {
+        val result = ClipboardParser.parse("a\rb\rc", null)
+        assertEquals(3, result.size)
+        assertEquals("a", result[0].content)
+        assertEquals("b", result[1].content)
+        assertEquals("c", result[2].content)
+    }
+
+    @Test
     fun `parse ignores HTML without lists`() {
         assertEquals(
             listOf(ParsedLine(0, "", "plain text")),

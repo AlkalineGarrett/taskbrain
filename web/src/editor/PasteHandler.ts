@@ -45,23 +45,31 @@ export function executePaste(
   focusedLineIndex: number,
   selection: EditorSelection,
   parsed: ParsedLine[],
+  cutLines?: LineState[],
 ): PasteResult {
   if (parsed.length === 0) {
     return { lines: [...lines], cursorLineIndex: focusedLineIndex, cursorPosition: 0 }
   }
 
+  let result: PasteResult
+
   // Rule 5: single-line paste with no prefix = simple text insertion
   if (parsed.length === 1 && !parsedLineHasPrefix(parsed[0]!)) {
-    return applySingleLinePaste(lines, focusedLineIndex, selection, parsed[0]!.content)
+    result = applySingleLinePaste(lines, focusedLineIndex, selection, parsed[0]!.content)
+  } else if (hasSel(selection) && isFullLineSelection(lines, selection)) {
+    // Rule 3: full-line selection = clean replacement
+    result = applyFullLineReplace(lines, selection, parsed)
+  } else {
+    // Rules 1, 2, 4: multi-line or prefixed paste
+    result = applyStructuredPaste(lines, focusedLineIndex, selection, parsed)
   }
 
-  // Rule 3: full-line selection = clean replacement
-  if (hasSel(selection) && isFullLineSelection(lines, selection)) {
-    return applyFullLineReplace(lines, selection, parsed)
+  // Recover noteIds from cut lines for any pasted lines that have none
+  if (cutLines && cutLines.length > 0) {
+    recoverCutNoteIds(result.lines, cutLines)
   }
 
-  // Rules 1, 2, 4: multi-line or prefixed paste
-  return applyStructuredPaste(lines, focusedLineIndex, selection, parsed)
+  return result
 }
 
 // --- Rule 5: Simple single-line text insertion ---
@@ -72,7 +80,7 @@ function applySingleLinePaste(
   selection: EditorSelection,
   text: string,
 ): PasteResult {
-  const newLines = lines.map(l => new LineState(l.text, l.cursorPosition))
+  const newLines = lines.map(l => new LineState(l.text, l.cursorPosition, l.noteIds))
 
   if (hasSel(selection)) {
     // Replace selection with text
@@ -81,7 +89,7 @@ function applySingleLinePaste(
     const sMax = Math.max(0, Math.min(selMax(selection), fullText.length))
     const newText = fullText.substring(0, sMin) + text + fullText.substring(sMax)
     const cursorPos = sMin + text.length
-    const rebuilt = newText.split('\n').map(t => new LineState(t))
+    const rebuilt = rebuildWithNoteIds(newText.split('\n'), lines)
     const [lineIdx, localOff] = getLineAndLocalOffset(rebuilt, cursorPos)
     rebuilt[lineIdx]?.updateFull(rebuilt[lineIdx]!.text, localOff)
     return { lines: rebuilt, cursorLineIndex: lineIdx, cursorPosition: localOff }
@@ -114,7 +122,11 @@ function applyFullLineReplace(
 
   const before = lines.slice(0, startLine)
   const after = lines.slice(endLine + 1)
-  const pastedLines = parsed.map(p => new LineState(buildLineText(p)))
+  const deletedLines = lines.slice(startLine, endLine + 1)
+  const pastedTexts = parsed.map(p => buildLineText(p))
+
+  // Content-match noteIds from deleted lines to pasted lines
+  const pastedLines = rebuildWithNoteIds(pastedTexts, deletedLines)
 
   const newLines = [...before, ...pastedLines, ...after]
   const cursorLineIndex = before.length + pastedLines.length - 1
@@ -199,9 +211,10 @@ function applyStructuredPaste(
   // Trailing half (text after cursor / after selection end)
   const trailingContent = trailingText.substring(extractPrefix(trailingText).length)
   const hasTrailingContent = trailingContent.length > 0
-  // Preserve trailing half if it has content, or if cursor was at the start
-  // of the line (no leading content) — the original line scoots down
-  if (hasTrailingContent || !hasLeadingContent) {
+  // Only preserve trailing half if it has actual content. Lines that are empty
+  // or prefix-only (e.g. bare "☐ ") have nothing worth preserving — the pasted
+  // content replaces them.
+  if (hasTrailingContent) {
     const trailingLine = trailingPrefix + trailingContent
     result.push(new LineState(trailingLine))
   }
@@ -215,4 +228,62 @@ function applyStructuredPaste(
   const cursorPosition = cursorLine?.text.length ?? 0
 
   return { lines: result, cursorLineIndex: lastPastedIndex, cursorPosition }
+}
+
+/**
+ * Recovers noteIds from cut lines onto pasted lines that have no noteIds.
+ * Matches by content (excluding prefix) so indent changes from paste don't prevent recovery.
+ */
+function recoverCutNoteIds(resultLines: LineState[], cutLines: LineState[]): void {
+  // Build a map from content (prefix-stripped) to noteIds from cut lines
+  const contentToNoteIds = new Map<string, string[][]>()
+  for (const cl of cutLines) {
+    if (cl.noteIds.length === 0) continue
+    const content = cl.text.substring(extractPrefix(cl.text).length)
+    const entries = contentToNoteIds.get(content)
+    if (entries) entries.push(cl.noteIds)
+    else contentToNoteIds.set(content, [cl.noteIds])
+  }
+
+  for (const line of resultLines) {
+    if (line.noteIds.length > 0) continue
+    const content = line.text.substring(extractPrefix(line.text).length)
+    const entries = contentToNoteIds.get(content)
+    if (entries && entries.length > 0) {
+      line.noteIds = entries.shift()!
+    }
+  }
+}
+
+/** Rebuilds LineState array from new texts, matching noteIds from old lines via content matching. */
+function rebuildWithNoteIds(newTexts: string[], oldLines: LineState[]): LineState[] {
+  const contentToOldIndices = new Map<string, number[]>()
+  oldLines.forEach((line, index) => {
+    const indices = contentToOldIndices.get(line.text)
+    if (indices) indices.push(index)
+    else contentToOldIndices.set(line.text, [index])
+  })
+
+  const matchedNoteIds: (string[] | null)[] = new Array(newTexts.length).fill(null) as (string[] | null)[]
+  const oldConsumed = new Array(oldLines.length).fill(false) as boolean[]
+
+  // Phase 1: Exact content match
+  newTexts.forEach((text, index) => {
+    const indices = contentToOldIndices.get(text)
+    if (indices && indices.length > 0) {
+      const oldIdx = indices.shift()!
+      matchedNoteIds[index] = oldLines[oldIdx]!.noteIds
+      oldConsumed[oldIdx] = true
+    }
+  })
+
+  // Phase 2: Positional fallback
+  newTexts.forEach((_, index) => {
+    if (matchedNoteIds[index] == null && index < oldLines.length && !oldConsumed[index]) {
+      matchedNoteIds[index] = oldLines[index]!.noteIds
+      oldConsumed[index] = true
+    }
+  })
+
+  return newTexts.map((t, i) => new LineState(t, undefined, matchedNoteIds[i] ?? []))
 }

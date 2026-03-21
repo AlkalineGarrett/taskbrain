@@ -25,6 +25,7 @@ export type DslValue =
   | LambdaVal
   | ButtonVal
   | ScheduleVal
+  | AlarmVal
 
 // ---- Primitive values ----
 
@@ -194,6 +195,15 @@ export function scheduleVal(
   return { kind: 'ScheduleVal', frequency, action, atTime, precise }
 }
 
+export interface AlarmVal {
+  readonly kind: 'AlarmVal'
+  readonly alarmId: string
+}
+
+export function alarmVal(alarmId: string): AlarmVal {
+  return { kind: 'AlarmVal', alarmId }
+}
+
 // ---- Display ----
 
 export function toDisplayString(val: DslValue): string {
@@ -242,6 +252,8 @@ export function toDisplayString(val: DslValue): string {
       const preciseStr = val.precise ? ' (precise)' : ''
       return `[Schedule: ${val.frequency}${timeStr}${preciseStr}]`
     }
+    case 'AlarmVal':
+      return '⏰'
   }
 }
 
@@ -263,6 +275,7 @@ export function typeName(val: DslValue): string {
     case 'LambdaVal': return 'lambda'
     case 'ButtonVal': return 'button'
     case 'ScheduleVal': return 'schedule'
+    case 'AlarmVal': return 'alarm'
   }
 }
 
@@ -312,6 +325,7 @@ function serializeInner(val: DslValue): unknown {
       atTime: val.atTime,
       precise: val.precise,
     }
+    case 'AlarmVal': return { alarmId: val.alarmId }
   }
 }
 
@@ -334,6 +348,7 @@ export function deserializeValue(map: Record<string, unknown>): DslValue {
     case 'view': return deserializeViewVal(value as Record<string, unknown>)
     case 'button': return deserializeButtonVal(value as Record<string, unknown>)
     case 'schedule': return deserializeScheduleVal(value as Record<string, unknown>)
+    case 'alarm': return alarmVal((value as Record<string, unknown>).alarmId as string)
     default: throw new Error(`Unknown DslValue type: ${type}`)
   }
 }

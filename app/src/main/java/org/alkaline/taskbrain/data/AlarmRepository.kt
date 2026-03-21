@@ -397,10 +397,17 @@ class AlarmRepository(
     }.onFailure { Log.e(TAG, "Error reactivating alarm", it) }
 
     /**
-     * Updates the line content for all alarms associated with a note.
-     * Called when a note is saved to keep alarm display text in sync.
-     * Note: Does NOT update updatedAt to preserve completion/cancellation timestamps.
+     * Updates the noteId field for a specific alarm.
+     * Used when a line's noteId changes (e.g., after split/merge resolution).
      */
+    suspend fun updateAlarmNoteId(alarmId: String, newNoteId: String): Result<Unit> = runCatching {
+        withContext(Dispatchers.IO) {
+            val userId = requireUserId()
+            alarmRef(userId, alarmId).update("noteId", newNoteId).await()
+            Unit
+        }
+    }
+
     suspend fun updateLineContentForNote(noteId: String, newContent: String): Result<Unit> = runCatching {
         withContext(Dispatchers.IO) {
             val userId = requireUserId()

@@ -73,6 +73,9 @@ class EditorController(
      */
     val recentlyCheckedIndices: MutableSet<Int> = mutableSetOf()
 
+    /** Lines from the most recent cut, used to recover noteIds on paste. */
+    private var lastCutLines: List<LineState> = emptyList()
+
     // =========================================================================
     // Undo/Redo Operations
     // =========================================================================
@@ -159,8 +162,9 @@ class EditorController(
      */
     private fun restoreFromSnapshot(snapshot: UndoSnapshot) {
         state.lines.clear()
-        snapshot.lineContents.forEach { lineText ->
-            state.lines.add(LineState(lineText))
+        snapshot.lineContents.forEachIndexed { index, lineText ->
+            val noteIds = snapshot.lineNoteIds.getOrElse(index) { emptyList() }
+            state.lines.add(LineState(lineText, lineText.length, noteIds))
         }
         state.focusedLineIndex = snapshot.focusedLineIndex.coerceIn(0, state.lines.lastIndex.coerceAtLeast(0))
         state.lines.getOrNull(state.focusedLineIndex)?.let { line ->
@@ -226,7 +230,10 @@ class EditorController(
             OperationType.CHECKBOX_TOGGLE -> {
                 undoManager.commitAfterCommand(state, commandTypeFor(type))
             }
-            OperationType.PASTE, OperationType.CUT, OperationType.DELETE_SELECTION -> {
+            OperationType.PASTE -> {
+                undoManager.commitPendingUndoState(state)
+            }
+            OperationType.CUT, OperationType.DELETE_SELECTION -> {
                 undoManager.beginEditingLine(state, state.focusedLineIndex)
             }
             OperationType.COMMAND_INDENT, OperationType.ALARM_SYMBOL -> {
@@ -266,13 +273,17 @@ class EditorController(
      * Each press is a separate undo step.
      */
     fun toggleCheckbox() {
-        val lineIndex = state.focusedLineIndex
-        val wasUnchecked = state.lines.getOrNull(lineIndex)?.prefix
-            ?.contains(LinePrefixes.CHECKBOX_UNCHECKED) == true
+        val range = state.getSelectedLineRange()
+        val uncheckedBefore = range.associateWith { i ->
+            state.lines.getOrNull(i)?.prefix
+                ?.contains(LinePrefixes.CHECKBOX_UNCHECKED) == true
+        }
         executeOperation(OperationType.COMMAND_CHECKBOX) {
             state.toggleCheckboxInternal()
         }
-        trackRecentlyChecked(lineIndex, wasUnchecked)
+        for ((lineIndex, wasUnchecked) in uncheckedBefore) {
+            trackRecentlyChecked(lineIndex, wasUnchecked)
+        }
     }
 
     /**
@@ -280,7 +291,7 @@ class EditorController(
      * Consecutive indent/unindent presses are grouped into one undo step.
      */
     fun indent() = executeOperation(OperationType.COMMAND_INDENT) {
-        state.indentInternal()
+        state.indentInternal(hiddenIndices)
     }
 
     /**
@@ -288,7 +299,7 @@ class EditorController(
      * Consecutive indent/unindent presses are grouped into one undo step.
      */
     fun unindent() = executeOperation(OperationType.COMMAND_INDENT) {
-        state.unindentInternal()
+        state.unindentInternal(hiddenIndices)
     }
 
     /**
@@ -297,11 +308,14 @@ class EditorController(
      */
     fun paste(plainText: String, html: String? = null) = executeOperation(OperationType.PASTE) {
         val parsed = ClipboardParser.parse(plainText, html)
+        val cutLines = lastCutLines
+        lastCutLines = emptyList()
         val result = PasteHandler.execute(
             state.lines.toList(),
             state.focusedLineIndex,
             state.selection,
             parsed,
+            cutLines.takeIf { it.isNotEmpty() },
         )
         state.lines.clear()
         state.lines.addAll(result.lines)
@@ -323,6 +337,11 @@ class EditorController(
     fun cutSelection(clipboard: ClipboardManager): String? {
         if (!state.hasSelection) return null
         return executeOperation(OperationType.CUT) {
+            // Capture cut lines (with noteIds) before deletion for paste recovery
+            val range = state.getSelectedLineRange()
+            lastCutLines = state.lines.subList(range.first, range.last + 1)
+                .map { LineState(it.text, noteIds = it.noteIds.toList()) }
+
             val clipText = getSelectedTextWithPrefix()
             if (clipText.isNotEmpty()) {
                 clipboard.setText(AnnotatedString(clipText))
@@ -584,8 +603,12 @@ class EditorController(
                 state.notifyChange()
                 undoManager.markContentChanged()
             } else if (lineIndex > 0) {
-                // Merge with previous line (creates its own undo boundary)
-                mergeToPreviousLine(lineIndex)
+                // Skip hidden lines when merging backward
+                var target = lineIndex - 1
+                while (target >= 0 && target in hiddenIndices) target--
+                if (target >= 0) {
+                    mergeToPreviousLine(lineIndex, target)
+                }
             }
             return
         }
@@ -611,10 +634,12 @@ class EditorController(
         val line = state.lines.getOrNull(lineIndex) ?: return
         val cursor = line.cursorPosition
 
-        // At end of line - merge with next line (creates its own undo boundary)
+        // At end of line - merge with next visible line (creates its own undo boundary)
         if (cursor >= line.text.length) {
-            if (lineIndex < state.lines.lastIndex) {
-                mergeNextLine(lineIndex)
+            var target = lineIndex + 1
+            while (target < state.lines.size && target in hiddenIndices) target++
+            if (target < state.lines.size) {
+                mergeNextLine(lineIndex, target)
             }
             return
         }
@@ -640,17 +665,36 @@ class EditorController(
     }
 
     /**
+     * Combines noteIds from two lines being merged.
+     * The line with more content (excluding prefix) contributes its noteIds first (primary).
+     * Duplicate noteIds are removed.
+     */
+    private fun mergeNoteIds(lineA: LineState, lineB: LineState): List<String> {
+        val allIds = if (lineA.content.length >= lineB.content.length) {
+            lineA.noteIds + lineB.noteIds
+        } else {
+            lineB.noteIds + lineA.noteIds
+        }
+        return allIds.distinct()
+    }
+
+    /**
      * Creates a new line with prefix continuation and adds it after the specified line.
      * @param lineIndex Index of the current line
      * @param newLineContent Content for the new line (without prefix)
      * @param currentPrefix Prefix from the current line
      */
-    private fun createNewLineWithPrefix(lineIndex: Int, newLineContent: String, currentPrefix: String) {
+    private fun createNewLineWithPrefix(
+        lineIndex: Int,
+        newLineContent: String,
+        currentPrefix: String,
+        noteIds: List<String> = emptyList()
+    ) {
         val newLinePrefix = getNewLinePrefix(currentPrefix)
         val newLineText = newLinePrefix + newLineContent
         val newLineCursor = newLinePrefix.length
 
-        state.lines.add(lineIndex + 1, LineState(newLineText, newLineCursor))
+        state.lines.add(lineIndex + 1, LineState(newLineText, newLineCursor, noteIds))
         state.focusedLineIndex = lineIndex + 1
         state.requestFocusUpdate()
         state.notifyChange()
@@ -672,19 +716,21 @@ class EditorController(
         val line = state.lines.getOrNull(lineIndex) ?: return
         val cursor = line.cursorPosition
         val prefix = line.prefix
+        val noteIds = line.noteIds
 
         val beforeCursor = line.text.substring(0, cursor)
         val afterCursor = line.text.substring(cursor)
 
-        // Update current line
+        // Update current line (keeps its noteIds)
         line.updateFull(beforeCursor, beforeCursor.length)
 
         // Create new line with prefix continuation (only if cursor was past the prefix)
         if (cursor >= prefix.length) {
-            createNewLineWithPrefix(lineIndex, afterCursor, prefix)
+            createNewLineWithPrefix(lineIndex, afterCursor, prefix, noteIds)
         } else {
             // Cursor within prefix, don't continue prefix
-            state.lines.add(lineIndex + 1, LineState(afterCursor, 0))
+            val newLine = LineState(afterCursor, 0, noteIds)
+            state.lines.add(lineIndex + 1, newLine)
             state.focusedLineIndex = lineIndex + 1
             state.requestFocusUpdate()
             state.notifyChange()
@@ -698,20 +744,24 @@ class EditorController(
      * Merge current line with previous line.
      * Creates an undo boundary before the merge.
      */
-    fun mergeToPreviousLine(lineIndex: Int) {
-        if (lineIndex <= 0) return
+    fun mergeToPreviousLine(lineIndex: Int, targetIndex: Int = lineIndex - 1) {
+        if (targetIndex < 0) return
 
         // Always capture state before merge - line merge is always undoable
         undoManager.captureStateBeforeChange(state)
 
         state.clearSelection()
         val currentLine = state.lines.getOrNull(lineIndex) ?: return
-        val previousLine = state.lines.getOrNull(lineIndex - 1) ?: return
+        val previousLine = state.lines.getOrNull(targetIndex) ?: return
+
+        // Combine noteIds: longer content's noteIds go first (primary)
+        val mergedNoteIds = mergeNoteIds(previousLine, currentLine)
 
         val previousLength = previousLine.text.length
         previousLine.updateFull(previousLine.text + currentLine.text, previousLength)
+        previousLine.noteIds = mergedNoteIds
         state.lines.removeAt(lineIndex)
-        state.focusedLineIndex = lineIndex - 1
+        state.focusedLineIndex = targetIndex
         state.requestFocusUpdate()
         state.notifyChange()
 
@@ -723,19 +773,23 @@ class EditorController(
      * Merge next line into current line.
      * Creates an undo boundary before the merge.
      */
-    fun mergeNextLine(lineIndex: Int) {
-        if (lineIndex >= state.lines.lastIndex) return
+    fun mergeNextLine(lineIndex: Int, targetIndex: Int = lineIndex + 1) {
+        if (targetIndex >= state.lines.size) return
 
         // Always capture state before merge - line merge is always undoable
         undoManager.captureStateBeforeChange(state)
 
         state.clearSelection()
         val currentLine = state.lines.getOrNull(lineIndex) ?: return
-        val nextLine = state.lines.getOrNull(lineIndex + 1) ?: return
+        val nextLine = state.lines.getOrNull(targetIndex) ?: return
+
+        // Combine noteIds: longer content's noteIds go first (primary)
+        val mergedNoteIds = mergeNoteIds(currentLine, nextLine)
 
         val currentLength = currentLine.text.length
         currentLine.updateFull(currentLine.text + nextLine.text, currentLength)
-        state.lines.removeAt(lineIndex + 1)
+        currentLine.noteIds = mergedNoteIds
+        state.lines.removeAt(targetIndex)
         state.requestFocusUpdate()
         state.notifyChange()
 
@@ -824,8 +878,8 @@ class EditorController(
             // Update current line with content before newline
             line.updateContent(beforeNewline, beforeNewline.length)
 
-            // Create new line with prefix continuation
-            createNewLineWithPrefix(lineIndex, afterNewline, line.prefix)
+            // Create new line with prefix continuation, inheriting noteIds from split
+            createNewLineWithPrefix(lineIndex, afterNewline, line.prefix, line.noteIds)
 
             // Continue pending state on new line (groups Enter + subsequent typing)
             undoManager.continueAfterStructuralChange(state.focusedLineIndex)

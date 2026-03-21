@@ -83,7 +83,8 @@ class UndoManager(private val maxHistorySize: Int = 50) {
         return UndoSnapshot(
             lineContents = state.lines.map { it.text },
             focusedLineIndex = state.focusedLineIndex,
-            cursorPosition = focusedLine?.cursorPosition ?: 0
+            cursorPosition = focusedLine?.cursorPosition ?: 0,
+            lineNoteIds = state.lines.map { it.noteIds }
         )
     }
 

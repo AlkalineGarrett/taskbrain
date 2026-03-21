@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { EditorState } from '../../editor/EditorState'
 import { EditorController } from '../../editor/EditorController'
 import { LineState } from '../../editor/LineState'
-import { BULLET, CHECKBOX_UNCHECKED } from '../../editor/LinePrefixes'
+import { BULLET, CHECKBOX_UNCHECKED, CHECKBOX_CHECKED } from '../../editor/LinePrefixes'
 
 // Mock navigator.clipboard for cut/copy tests
 const mockClipboard = { writeText: vi.fn().mockResolvedValue(undefined) }
@@ -284,5 +284,86 @@ describe('EditorController getMoveState', () => {
     const ctrl = controllerWithLines('a', 'b', 'c')
     ctrl.state.focusedLineIndex = 1
     expect(ctrl.getMoveDownState().isEnabled).toBe(true)
+  })
+})
+
+describe('EditorController deleteBackward/deleteForward with hidden lines', () => {
+  it('deleteBackward skips hidden lines when merging', () => {
+    const ctrl = controllerWithLines('a', 'hidden1', 'hidden2', 'b')
+    ctrl.hiddenIndices = new Set([1, 2])
+    ctrl.state.focusedLineIndex = 3
+    ctrl.state.lines[3]!.updateFull('b', 0)
+    ctrl.deleteBackward(3)
+    expect(ctrl.state.lines[0]!.text).toBe('ab')
+  })
+
+  it('deleteForward skips hidden lines when merging', () => {
+    const ctrl = controllerWithLines('a', 'hidden1', 'hidden2', 'b')
+    ctrl.hiddenIndices = new Set([1, 2])
+    ctrl.state.focusedLineIndex = 0
+    ctrl.state.lines[0]!.updateFull('a', 1)
+    ctrl.deleteForward(0)
+    expect(ctrl.state.lines[0]!.text).toBe('ab')
+  })
+})
+
+describe('EditorController toggleCheckbox tracks recentlyCheckedIndices for all selected lines', () => {
+  it('single line: tracks the toggled line', () => {
+    const ctrl = controllerWithLines(`${CHECKBOX_UNCHECKED}a`, `${CHECKBOX_UNCHECKED}b`)
+    ctrl.state.focusedLineIndex = 0
+    ctrl.toggleCheckbox()
+    expect(ctrl.recentlyCheckedIndices.has(0)).toBe(true)
+    expect(ctrl.recentlyCheckedIndices.has(1)).toBe(false)
+  })
+
+  it('multi-line selection: tracks all toggled lines', () => {
+    const ctrl = controllerWithLines(`${CHECKBOX_UNCHECKED}a`, `${CHECKBOX_UNCHECKED}b`, `${CHECKBOX_UNCHECKED}c`)
+    ctrl.state.setSelection(0, ctrl.state.text.length)
+    ctrl.toggleCheckbox()
+    expect(ctrl.recentlyCheckedIndices.has(0)).toBe(true)
+    expect(ctrl.recentlyCheckedIndices.has(1)).toBe(true)
+    expect(ctrl.recentlyCheckedIndices.has(2)).toBe(true)
+  })
+
+  it('does not track lines that were not unchecked', () => {
+    const ctrl = controllerWithLines(`${CHECKBOX_UNCHECKED}a`, 'plain', `${CHECKBOX_UNCHECKED}c`)
+    ctrl.state.setSelection(0, ctrl.state.text.length)
+    ctrl.toggleCheckbox()
+    // Lines 0 and 2 were unchecked → now checked → tracked
+    expect(ctrl.recentlyCheckedIndices.has(0)).toBe(true)
+    expect(ctrl.recentlyCheckedIndices.has(2)).toBe(true)
+    // Line 1 was plain → now has checkbox unchecked → not tracked as "recently checked"
+    expect(ctrl.recentlyCheckedIndices.has(1)).toBe(false)
+  })
+})
+
+describe('EditorController paste undo boundary', () => {
+  it('typing after paste creates separate undo entry', () => {
+    const ctrl = controllerWithLines('hello')
+    ctrl.state.focusedLineIndex = 0
+    ctrl.state.lines[0]!.updateFull('hello', 5)
+
+    // Paste ' world'
+    ctrl.paste(' world')
+    expect(ctrl.state.lines[0]!.text).toBe('hello world')
+
+    // Simulate typing: focus a different line then come back to trigger beginEditingLine,
+    // then update content which calls markContentChanged
+    ctrl.focusLine(0)
+    // After paste, editingLineIndex is null (committed). Manually begin editing to
+    // simulate what happens when the input element receives focus after paste.
+    ctrl.undoManager.beginEditingLine(
+      ctrl.state.lines, ctrl.state.focusedLineIndex, ctrl.state.focusedLineIndex,
+    )
+    ctrl.updateLineContent(0, 'hello world!', 12)
+    expect(ctrl.state.lines[0]!.text).toBe('hello world!')
+
+    // First undo should undo the typing
+    ctrl.undo()
+    expect(ctrl.state.lines[0]!.text).toBe('hello world')
+
+    // Second undo should undo the paste
+    ctrl.undo()
+    expect(ctrl.state.lines[0]!.text).toBe('hello')
   })
 })

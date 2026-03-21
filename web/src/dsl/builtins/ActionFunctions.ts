@@ -1,4 +1,5 @@
 import {
+  alarmVal,
   buttonVal,
   scheduleVal,
   stringVal,
@@ -12,6 +13,7 @@ import type { BooleanVal } from '../runtime/DslValue'
 
 export function getActionFunctions(): BuiltinFunction[] {
   return [
+    alarmFunction,
     buttonFunction,
     scheduleFunction,
     // Schedule frequency constants
@@ -22,6 +24,14 @@ export function getActionFunctions(): BuiltinFunction[] {
     weeklyAtFunction,
     atFunction,
   ]
+}
+
+const alarmFunction: BuiltinFunction = {
+  name: 'alarm',
+  call: (args) => {
+    const id = args.requireString(0, 'alarm', 'id')
+    return alarmVal(id.value)
+  },
 }
 
 const buttonFunction: BuiltinFunction = {

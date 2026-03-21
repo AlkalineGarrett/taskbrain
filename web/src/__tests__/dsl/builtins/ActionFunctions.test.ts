@@ -114,6 +114,23 @@ describe('ActionFunctions', () => {
     })
   })
 
+  describe('alarm', () => {
+    it('should create alarm with id', () => {
+      const result = execute('[alarm("abc123")]')
+      expect(result.kind).toBe('AlarmVal')
+      expect((result as any).alarmId).toBe('abc123')
+    })
+
+    it('should display alarm as symbol', () => {
+      const result = execute('[alarm("myAlarm")]')
+      expect(toDisplayString(result)).toBe('⏰')
+    })
+
+    it('should throw when id is missing', () => {
+      expect(() => execute('[alarm()]')).toThrow()
+    })
+  })
+
   describe('frequency constants', () => {
     it('should evaluate daily constant', () => {
       const result = execute('[daily]')

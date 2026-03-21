@@ -2,7 +2,6 @@ package org.alkaline.taskbrain.data
 
 private const val MAX_TABS = 5
 private const val MAX_DISPLAY_LENGTH = 12
-private const val ALARM_SYMBOL = "⏰"
 
 /**
  * Pure state functions for tab management.
@@ -70,7 +69,7 @@ object TabState {
      */
     fun extractDisplayText(content: String): String {
         val firstLine = content.lines().firstOrNull() ?: ""
-        val cleaned = firstLine.replace(ALARM_SYMBOL, "").trim()
+        val cleaned = AlarmMarkers.stripAlarmMarkers(firstLine).trim()
         return when {
             cleaned.length > MAX_DISPLAY_LENGTH -> cleaned.take(MAX_DISPLAY_LENGTH - 1) + "…"
             cleaned.isEmpty() -> "New Note"

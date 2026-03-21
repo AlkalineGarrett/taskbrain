@@ -427,6 +427,21 @@ private fun DirectiveOverlayText(
                         textLayoutResult?.let { layout ->
                             val displayPosition = layout.getOffsetForPosition(offset)
                             val sourcePosition = mapDisplayToSourceCursor(displayPosition, displayResult)
+
+                            // Check if tap landed on an alarm directive. Use display position
+                            // since mapDisplayToSourceCursor maps inside-directive taps to
+                            // sourceRange.last + 1. Extend range by 1 because tap positions
+                            // are cursor positions between characters — tapping the right
+                            // half of ⏰ at display index N returns position N+1.
+                            val alarmDirective = displayResult.directiveDisplayRanges.find {
+                                it.isAlarm && displayPosition >= it.displayRange.first
+                                    && displayPosition <= it.displayRange.last + 1
+                            }
+                            if (alarmDirective != null && onSymbolTap != null) {
+                                onSymbolTap(lineIndex, alarmDirective.sourceRange.first)
+                                return@detectTapGestures
+                            }
+
                             val symbolIndex = findTappedSymbol(
                                 content, sourcePosition,
                                 getBoundingBox = { sourceIdx ->
@@ -468,8 +483,9 @@ private fun DirectiveOverlayText(
                         )
                     }
 
-                    // Draw dashed boxes around directive portions
+                    // Draw dashed boxes around directive portions (skip alarm directives)
                     for (range in displayResult.directiveDisplayRanges) {
+                        if (range.isAlarm) continue
                         val boxColor = when {
                             range.hasError -> DirectiveErrorColor
                             range.hasWarning -> DirectiveWarningColor
@@ -538,6 +554,8 @@ private fun DirectiveOverlayText(
             } ?: return@Box
 
             for (range in displayResult.directiveDisplayRanges) {
+                // Alarm directives are handled by the BasicText pointerInput above
+                if (range.isAlarm) continue
                 val startOffset = range.displayRange.first.coerceIn(0, displayResult.displayText.length)
                 val endOffset = (range.displayRange.last + 1).coerceIn(0, displayResult.displayText.length)
                 val padding = DirectiveBoxStyle.padding
@@ -1299,28 +1317,11 @@ private fun InlineEditorLine(
         org.alkaline.taskbrain.ui.currentnote.util.LinePrefixes.hasCheckbox(prefix)
     }
 
-    // Build display text with directive results for this line.
-    // Key adjustment: parseAllDirectiveLocations uses full text (with prefix), so offsets
-    // are relative to full text. We need to adjust keys when looking up results.
+    // Adjust directive result keys: results are keyed by offset in full line text (including
+    // prefix), but buildDisplayText operates on content-only text (prefix stripped).
     val prefixLength = prefix.length
     val adjustedResults = remember(directiveResults, lineIndex, prefixLength) {
-        if (prefixLength == 0) {
-            directiveResults
-        } else {
-            // Adjust keys: if result is at "lineIndex:fullOffset", we need to look it up
-            // when buildDisplayText creates key "lineIndex:contentOffset"
-            // contentOffset = fullOffset - prefixLength
-            directiveResults.mapKeys { (key, _) ->
-                val parts = key.split(":")
-                if (parts.size == 2 && parts[0] == lineIndex.toString()) {
-                    val fullOffset = parts[1].toIntOrNull() ?: return@mapKeys key
-                    val contentOffset = fullOffset - prefixLength
-                    if (contentOffset >= 0) "$lineIndex:$contentOffset" else key
-                } else {
-                    key
-                }
-            }
-        }
+        DirectiveSegmenter.adjustKeysForPrefix(directiveResults, lineIndex, prefixLength)
     }
 
     val displayResult = remember(content, lineIndex, adjustedResults) {
@@ -1506,8 +1507,9 @@ private fun InlineDirectiveOverlayText(
                         )
                     }
 
-                    // Draw dashed boxes around directive portions
+                    // Draw dashed boxes around directive portions (skip alarm directives)
                     for (range in displayResult.directiveDisplayRanges) {
+                        if (range.isAlarm) continue
                         val boxColor = when {
                             range.hasError -> DirectiveErrorColor
                             range.hasWarning -> DirectiveWarningColor

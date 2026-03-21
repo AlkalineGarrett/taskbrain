@@ -200,16 +200,11 @@ object TextLineUtils {
         // Trim leading whitespace
         result = result.trimStart()
 
-        // Remove trailing alarm symbol (and space before it)
-        if (result.endsWith(AlarmSymbolUtils.ALARM_SYMBOL)) {
-            result = result.dropLast(AlarmSymbolUtils.ALARM_SYMBOL.length)
-            if (result.endsWith(" ")) {
-                result = result.dropLast(1)
-            }
-        }
+        // Remove alarm directives and plain alarm symbols
+        result = AlarmSymbolUtils.stripAlarmMarkers(result)
 
-        // Trim any remaining trailing whitespace
-        result = result.trimEnd()
+        // Trim any remaining whitespace
+        result = result.trim()
 
         return result
     }

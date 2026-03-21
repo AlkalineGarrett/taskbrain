@@ -220,6 +220,36 @@ describe('EditorState indent/unindent/toggle on current line', () => {
   })
 })
 
+describe('EditorState toggleBullet/toggleCheckbox with selection', () => {
+  it('toggleBulletInternal applies to all selected lines', () => {
+    const state = stateWithText('abc\ndef\nghi')
+    state.setSelection(0, 11) // select all
+    state.toggleBulletInternal()
+    expect(state.lines[0]!.text).toBe(`${BULLET}abc`)
+    expect(state.lines[1]!.text).toBe(`${BULLET}def`)
+    expect(state.lines[2]!.text).toBe(`${BULLET}ghi`)
+  })
+
+  it('toggleCheckboxInternal applies to all selected lines', () => {
+    const state = stateWithText('abc\ndef\nghi')
+    state.setSelection(0, 11)
+    state.toggleCheckboxInternal()
+    expect(state.lines[0]!.text).toBe(`${CHECKBOX_UNCHECKED}abc`)
+    expect(state.lines[1]!.text).toBe(`${CHECKBOX_UNCHECKED}def`)
+    expect(state.lines[2]!.text).toBe(`${CHECKBOX_UNCHECKED}ghi`)
+  })
+
+  it('toggleBulletInternal preserves selection across multiple lines', () => {
+    const state = stateWithText('abc\ndef')
+    state.setSelection(0, 7)
+    state.toggleBulletInternal()
+    expect(state.hasSelection).toBe(true)
+    // Both lines should have bullets; selection should cover them
+    expect(state.lines[0]!.text).toBe(`${BULLET}abc`)
+    expect(state.lines[1]!.text).toBe(`${BULLET}def`)
+  })
+})
+
 describe('EditorState handleSpaceWithSelection', () => {
   it('returns false when no selection', () => {
     const state = stateWithText('hello')
@@ -246,5 +276,25 @@ describe('EditorState getSelectedText', () => {
     const state = stateWithText('hello world')
     state.setSelection(0, 5)
     expect(state.getSelectedText()).toBe('hello')
+  })
+})
+
+describe('EditorState indent/unindent with hidden lines', () => {
+  it('indentInternal skips hidden lines in selection', () => {
+    const state = stateWithLines('a', '☑ done', 'b')
+    state.setSelection(0, state.text.length)
+    state.indentInternal(new Set([1]))
+    expect(state.lines[0]!.text).toBe('\ta')
+    expect(state.lines[1]!.text).toBe('☑ done')
+    expect(state.lines[2]!.text).toBe('\tb')
+  })
+
+  it('unindentInternal skips hidden lines in selection', () => {
+    const state = stateWithLines('\ta', '☑ done', '\tb')
+    state.setSelection(0, state.text.length)
+    state.unindentInternal(new Set([1]))
+    expect(state.lines[0]!.text).toBe('a')
+    expect(state.lines[1]!.text).toBe('☑ done')
+    expect(state.lines[2]!.text).toBe('b')
   })
 })

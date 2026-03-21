@@ -170,6 +170,9 @@ function extractLiText(li: Element): string {
 // --- Top-level parser ---
 
 export function parseClipboardContent(plainText: string, html: string | null): ParsedLine[] {
+  // Normalize line endings (CRLF → LF, CR → LF)
+  plainText = plainText.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+
   // Try HTML first if it contains lists
   if (html) {
     const htmlLines = parseHtmlLines(html)

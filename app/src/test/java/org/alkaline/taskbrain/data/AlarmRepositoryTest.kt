@@ -548,6 +548,32 @@ class AlarmRepositoryTest {
 
     // endregion
 
+    // region updateAlarmNoteId Tests
+
+    @Test
+    fun `updateAlarmNoteId updates noteId field`() = runTest {
+        val alarmRef = mockk<DocumentReference>()
+        every { mockAlarmsCollection.document("alarm_1") } returns alarmRef
+        every { alarmRef.update("noteId", "new_note_id") } returns Tasks.forResult(null)
+
+        val result = repository.updateAlarmNoteId("alarm_1", "new_note_id")
+
+        assertTrue(result.isSuccess)
+        verify { alarmRef.update("noteId", "new_note_id") }
+    }
+
+    @Test
+    fun `updateAlarmNoteId fails when user is not signed in`() = runTest {
+        signOut()
+
+        val result = repository.updateAlarmNoteId("alarm_1", "new_note_id")
+
+        assertTrue(result.isFailure)
+        assertEquals("User not signed in", result.exceptionOrNull()?.message)
+    }
+
+    // endregion
+
     companion object {
         private const val USER_ID = "test_user_id"
     }

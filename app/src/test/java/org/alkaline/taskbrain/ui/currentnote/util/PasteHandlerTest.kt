@@ -227,8 +227,8 @@ class PasteHandlerTest {
             parsed(0, "☐ ", "one"),
             parsed(0, "☐ ", "two"),
         ))
-        // Empty bullet line scoots down
-        assertEquals(listOf("☐ one", "☐ two", "• "), lineTexts(result.lines))
+        // Prefix-only line is replaced (no content to preserve)
+        assertEquals(listOf("☐ one", "☐ two"), lineTexts(result.lines))
     }
 
     @Test
@@ -238,8 +238,8 @@ class PasteHandlerTest {
             parsed(0, "", "one"),
             parsed(0, "", "two"),
         ))
-        // Empty bullet line scoots down
-        assertEquals(listOf("• one", "• two", "• "), lineTexts(result.lines))
+        // Adopt destination bullet; prefix-only line is replaced
+        assertEquals(listOf("• one", "• two"), lineTexts(result.lines))
     }
 
     @Test
@@ -250,8 +250,8 @@ class PasteHandlerTest {
             parsed(0, "", "two"),
             parsed(0, "", "three"),
         ))
-        // Empty checkbox line scoots down
-        assertEquals(listOf("☐ one", "☐ two", "☐ three", "☐ "), lineTexts(result.lines))
+        // Prefix-only checkbox line is replaced
+        assertEquals(listOf("☐ one", "☐ two", "☐ three"), lineTexts(result.lines))
     }
 
     @Test
@@ -267,13 +267,13 @@ class PasteHandlerTest {
     }
 
     @Test
-    fun `paste onto empty line scoots it down`() {
+    fun `paste onto empty line replaces it`() {
         val ls = withCursor(lines(""), 0, 0)
         val result = PasteHandler.execute(ls, 0, EditorSelection.None, listOf(
             parsed(0, "☐ ", "one"),
             parsed(0, "☐ ", "two"),
         ))
-        // Empty line scoots down
-        assertEquals(listOf("☐ one", "☐ two", ""), lineTexts(result.lines))
+        // Empty line is replaced, not scooted down
+        assertEquals(listOf("☐ one", "☐ two"), lineTexts(result.lines))
     }
 }

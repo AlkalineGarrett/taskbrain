@@ -32,6 +32,8 @@ export class EditorController {
   hiddenIndices: Set<number> = new Set()
   /** Line indices recently toggled from unchecked to checked. Visible at reduced opacity until save. */
   readonly recentlyCheckedIndices: Set<number> = new Set()
+  /** Lines from the most recent cut, used to recover noteIds on paste. */
+  private lastCutLines: LineState[] = []
 
   constructor(state: EditorState, undoManager?: UndoManager) {
     this.state = state
@@ -73,7 +75,9 @@ export class EditorController {
   }
 
   private restoreFromSnapshot(snapshot: UndoSnapshot): void {
-    this.state.lines = snapshot.lineContents.map((t) => new LineState(t))
+    this.state.lines = snapshot.lineContents.map((t, i) =>
+      new LineState(t, undefined, snapshot.lineNoteIds[i] ?? []),
+    )
     this.state.focusedLineIndex = Math.max(0, Math.min(snapshot.focusedLineIndex, this.state.lines.length - 1))
     const line = this.state.lines[this.state.focusedLineIndex]
     if (line) {
@@ -134,12 +138,16 @@ export class EditorController {
       case OperationType.CHECKBOX_TOGGLE:
         um.commitAfterCommand(s.lines, s.focusedLineIndex, this.commandTypeFor(type))
         break
-      case OperationType.PASTE:
       case OperationType.CUT:
       case OperationType.DELETE_SELECTION:
       case OperationType.DIRECTIVE_EDIT:
       case OperationType.SORT_COMPLETED:
         um.beginEditingLine(s.lines, s.focusedLineIndex, s.focusedLineIndex)
+        break
+      case OperationType.PASTE:
+        // Don't begin editing — paste should be its own undo boundary
+        // so the next keystroke creates a separate undo entry
+        um.commitPendingUndoState(s.lines, s.focusedLineIndex)
         break
       case OperationType.COMMAND_INDENT:
       case OperationType.ALARM_SYMBOL:
@@ -167,34 +175,42 @@ export class EditorController {
   }
 
   toggleCheckbox(): void {
-    const lineIndex = this.state.focusedLineIndex
-    const wasUnchecked = this.state.lines[lineIndex]?.prefix.includes(LP.CHECKBOX_UNCHECKED) ?? false
+    const [startLine, endLine] = this.state.getSelectedLineRange()
+    const uncheckedBefore: Map<number, boolean> = new Map()
+    for (let i = startLine; i <= endLine; i++) {
+      uncheckedBefore.set(i, this.state.lines[i]?.prefix.includes(LP.CHECKBOX_UNCHECKED) ?? false)
+    }
     this.executeOperation(OperationType.COMMAND_CHECKBOX, () => {
       this.state.toggleCheckboxInternal()
     })
-    this.trackRecentlyChecked(lineIndex, wasUnchecked)
+    for (const [lineIndex, wasUnchecked] of uncheckedBefore) {
+      this.trackRecentlyChecked(lineIndex, wasUnchecked)
+    }
   }
 
   indent(): void {
     this.executeOperation(OperationType.COMMAND_INDENT, () => {
-      this.state.indentInternal()
+      this.state.indentInternal(this.hiddenIndices)
     })
   }
 
   unindent(): void {
     this.executeOperation(OperationType.COMMAND_INDENT, () => {
-      this.state.unindentInternal()
+      this.state.unindentInternal(this.hiddenIndices)
     })
   }
 
   paste(plainText: string, html?: string | null): void {
     this.executeOperation(OperationType.PASTE, () => {
       const parsed = parseClipboardContent(plainText, html ?? null)
+      const cutLines = this.lastCutLines
+      this.lastCutLines = []
       const result = executePaste(
         this.state.lines,
         this.state.focusedLineIndex,
         this.state.selection,
         parsed,
+        cutLines.length > 0 ? cutLines : undefined,
       )
       this.state.lines = result.lines
       this.state.focusedLineIndex = result.cursorLineIndex
@@ -211,6 +227,11 @@ export class EditorController {
   cutSelection(): string | null {
     if (!this.state.hasSelection) return null
     return this.executeOperation(OperationType.CUT, () => {
+      // Capture cut lines (with noteIds) before deletion for paste recovery
+      const [rangeFirst, rangeLast] = this.state.getSelectedLineRange()
+      this.lastCutLines = this.state.lines.slice(rangeFirst, rangeLast + 1)
+        .map(l => new LineState(l.text, undefined, [...l.noteIds]))
+
       const clipText = this.getSelectedTextWithPrefix()
       if (clipText.length > 0) {
         void navigator.clipboard.writeText(clipText)
@@ -452,7 +473,12 @@ export class EditorController {
         this.state.notifyChange()
         this.undoManager.markContentChanged()
       } else if (lineIndex > 0) {
-        this.mergeToPreviousLine(lineIndex)
+        // Skip hidden lines when merging backward
+        let target = lineIndex - 1
+        while (target >= 0 && this.hiddenIndices.has(target)) target--
+        if (target >= 0) {
+          this.mergeToPreviousLine(lineIndex, target)
+        }
       }
       return
     }
@@ -476,8 +502,11 @@ export class EditorController {
     const cursor = line.cursorPosition
 
     if (cursor >= line.text.length) {
-      if (lineIndex < this.state.lines.length - 1) {
-        this.mergeNextLine(lineIndex)
+      // Skip hidden lines when merging forward
+      let target = lineIndex + 1
+      while (target < this.state.lines.length && this.hiddenIndices.has(target)) target++
+      if (target < this.state.lines.length) {
+        this.mergeNextLine(lineIndex, target)
       }
       return
     }
@@ -495,11 +524,16 @@ export class EditorController {
     return currentPrefix.replace(LP.CHECKBOX_CHECKED, LP.CHECKBOX_UNCHECKED)
   }
 
-  private createNewLineWithPrefix(lineIndex: number, newLineContent: string, currentPrefix: string): void {
+  private createNewLineWithPrefix(
+    lineIndex: number,
+    newLineContent: string,
+    currentPrefix: string,
+    noteIds: string[] = [],
+  ): void {
     const newLinePrefix = this.getNewLinePrefix(currentPrefix)
     const newLineText = newLinePrefix + newLineContent
     const newLineCursor = newLinePrefix.length
-    this.state.lines.splice(lineIndex + 1, 0, new LineState(newLineText, newLineCursor))
+    this.state.lines.splice(lineIndex + 1, 0, new LineState(newLineText, newLineCursor, noteIds))
     this.state.focusedLineIndex = lineIndex + 1
     this.state.requestFocusUpdate()
     this.state.notifyChange()
@@ -514,13 +548,14 @@ export class EditorController {
     const prefix = line.prefix
     const beforeCursor = line.text.substring(0, cursor)
     const afterCursor = line.text.substring(cursor)
+    const noteIds = line.noteIds
 
     line.updateFull(beforeCursor, beforeCursor.length)
 
     if (cursor >= prefix.length) {
-      this.createNewLineWithPrefix(lineIndex, afterCursor, prefix)
+      this.createNewLineWithPrefix(lineIndex, afterCursor, prefix, noteIds)
     } else {
-      this.state.lines.splice(lineIndex + 1, 0, new LineState(afterCursor, 0))
+      this.state.lines.splice(lineIndex + 1, 0, new LineState(afterCursor, 0, noteIds))
       this.state.focusedLineIndex = lineIndex + 1
       this.state.requestFocusUpdate()
       this.state.notifyChange()
@@ -529,18 +564,21 @@ export class EditorController {
     this.undoManager.continueAfterStructuralChange(this.state.focusedLineIndex)
   }
 
-  mergeToPreviousLine(lineIndex: number): void {
-    if (lineIndex <= 0) return
+  mergeToPreviousLine(lineIndex: number, targetIndex?: number): void {
+    const prevIdx = targetIndex ?? lineIndex - 1
+    if (prevIdx < 0) return
     this.undoManager.captureStateBeforeChange(this.state.lines, this.state.focusedLineIndex)
     this.state.clearSelection()
     const currentLine = this.state.lines[lineIndex]
-    const previousLine = this.state.lines[lineIndex - 1]
+    const previousLine = this.state.lines[prevIdx]
     if (!currentLine || !previousLine) return
 
+    const mergedNoteIds = mergeNoteIds(previousLine, currentLine)
     const previousLength = previousLine.text.length
     previousLine.updateFull(previousLine.text + currentLine.text, previousLength)
+    previousLine.noteIds = mergedNoteIds
     this.state.lines.splice(lineIndex, 1)
-    this.state.focusedLineIndex = lineIndex - 1
+    this.state.focusedLineIndex = prevIdx
     this.state.requestFocusUpdate()
     this.state.notifyChange()
 
@@ -549,17 +587,20 @@ export class EditorController {
     )
   }
 
-  mergeNextLine(lineIndex: number): void {
-    if (lineIndex >= this.state.lines.length - 1) return
+  mergeNextLine(lineIndex: number, targetIndex?: number): void {
+    const nextIdx = targetIndex ?? lineIndex + 1
+    if (nextIdx >= this.state.lines.length) return
     this.undoManager.captureStateBeforeChange(this.state.lines, this.state.focusedLineIndex)
     this.state.clearSelection()
     const currentLine = this.state.lines[lineIndex]
-    const nextLine = this.state.lines[lineIndex + 1]
+    const nextLine = this.state.lines[nextIdx]
     if (!currentLine || !nextLine) return
 
+    const mergedNoteIds = mergeNoteIds(currentLine, nextLine)
     const currentLength = currentLine.text.length
     currentLine.updateFull(currentLine.text + nextLine.text, currentLength)
-    this.state.lines.splice(lineIndex + 1, 1)
+    currentLine.noteIds = mergedNoteIds
+    this.state.lines.splice(nextIdx, 1)
     this.state.requestFocusUpdate()
     this.state.notifyChange()
 
@@ -616,7 +657,7 @@ export class EditorController {
       const beforeNewline = newContent.substring(0, nlIndex)
       const afterNewline = newContent.substring(nlIndex + 1)
       line.updateContent(beforeNewline, beforeNewline.length)
-      this.createNewLineWithPrefix(lineIndex, afterNewline, line.prefix)
+      this.createNewLineWithPrefix(lineIndex, afterNewline, line.prefix, line.noteIds)
       this.undoManager.continueAfterStructuralChange(this.state.focusedLineIndex)
       return
     }
@@ -714,4 +755,12 @@ export class EditorController {
   getContentCursor(lineIndex: number): number { return this.state.lines[lineIndex]?.contentCursorPosition ?? 0 }
   getLineCursor(lineIndex: number): number { return this.state.lines[lineIndex]?.cursorPosition ?? 0 }
   isValidLine(lineIndex: number): boolean { return lineIndex >= 0 && lineIndex < this.state.lines.length }
+}
+
+/** Combines noteIds from two lines being merged: longer content's noteIds first, deduplicated. */
+function mergeNoteIds(lineA: LineState, lineB: LineState): string[] {
+  const allIds = lineA.content.length >= lineB.content.length
+    ? [...lineA.noteIds, ...lineB.noteIds]
+    : [...lineB.noteIds, ...lineA.noteIds]
+  return [...new Set(allIds)]
 }
