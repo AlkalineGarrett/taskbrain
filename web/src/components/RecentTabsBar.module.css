@@ -1,7 +1,7 @@
 .bar {
   display: flex;
   gap: 0.25rem;
-  padding: 0.375rem 0.5rem;
+  padding: 0.375rem 0.5rem 0.375rem 10rem;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface-alt);
   overflow-x: auto;

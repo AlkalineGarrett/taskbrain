@@ -556,10 +556,13 @@ export function EditorLine({
   // Show directive chips for unfocused lines that contain directives
   const showDirectiveChips = !isFocused && directiveResults && hasDirectives(content)
 
+  const noteIdText = line.noteIds.join(', ')
+
   return (
     <div
       className={`${styles.line} ${isFocused ? styles.focused : ''}`}
     >
+      <div className={styles.noteIdCell}>{noteIdText || '\u00A0'}</div>
       <div
         className={`${styles.selectionGutter}${isLineSelected ? ` ${styles.selected}` : ''}`}
         onMouseDown={handleGutterMouseDown}

@@ -74,7 +74,19 @@ class RecentTabsViewModel : ViewModel() {
             val result = repository.getOpenTabs()
             result.fold(
                 onSuccess = { tabList ->
-                    _tabs.value = tabList
+                    // Merge: prefer existing optimistic displayText over stale Firestore data.
+                    // This prevents a race where loadTabs() Firestore read completes after
+                    // onNoteOpened() wrote a correct displayText optimistically but before
+                    // the Firestore write from onNoteOpened() is visible to the read.
+                    val optimisticMap = _tabs.value?.associateBy { it.noteId }.orEmpty()
+                    _tabs.value = tabList.map { loaded ->
+                        val existing = optimisticMap[loaded.noteId]
+                        if (existing != null && existing.displayText.isNotEmpty() && loaded.displayText.isEmpty()) {
+                            loaded.copy(displayText = existing.displayText)
+                        } else {
+                            loaded
+                        }
+                    }
                     Log.d(TAG, "Loaded ${tabList.size} tabs")
                 },
                 onFailure = { e ->

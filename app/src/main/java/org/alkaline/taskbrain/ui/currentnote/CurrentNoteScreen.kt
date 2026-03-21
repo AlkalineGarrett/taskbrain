@@ -757,10 +757,15 @@ private fun ContentSyncEffects(
         if (saveStatus is SaveStatus.Success) {
             onSavedChanged(true)
             currentNoteViewModel.markAsSaved()
-            currentNoteId?.let { noteId ->
-                recentTabsViewModel.updateTabDisplayText(noteId, userContent)
-                val trackedLines = currentNoteViewModel.getTrackedLines()
-                recentTabsViewModel.cacheNoteContent(noteId, trackedLines, isNoteDeleted)
+            // Guard: during note switches, userContent is reset to "" before currentNoteId
+            // updates via LiveData. Skip tab/cache updates to avoid writing "New Note" for
+            // the old note using the new note's empty content.
+            if (userContent.isNotEmpty()) {
+                currentNoteId?.let { noteId ->
+                    recentTabsViewModel.updateTabDisplayText(noteId, userContent)
+                    val trackedLines = currentNoteViewModel.getTrackedLines()
+                    recentTabsViewModel.cacheNoteContent(noteId, trackedLines, isNoteDeleted)
+                }
             }
         }
     }

@@ -320,7 +320,6 @@ export function NoteEditorScreen() {
 
   // --- Drag selection across lines ---
   const editorRef = useRef<HTMLDivElement>(null)
-  const noteIdColumnRef = useRef<HTMLDivElement>(null)
   const dropCursorRef = useRef<HTMLDivElement>(null)
   const isDraggingRef = useRef(false)
   const isMoveDraggingRef = useRef(false)
@@ -456,17 +455,6 @@ export function NoteEditorScreen() {
     }
   }, [editorState, controller, getGlobalOffsetFromPoint, positionDropCursor])
 
-  // Sync note ID column scroll with editor scroll
-  useEffect(() => {
-    const scrollEl = editorRef.current
-    const colEl = noteIdColumnRef.current
-    if (!scrollEl || !colEl) return
-    const syncScroll = () => { colEl.scrollTop = scrollEl.scrollTop }
-    syncScroll()
-    scrollEl.addEventListener('scroll', syncScroll, { passive: true })
-    return () => scrollEl.removeEventListener('scroll', syncScroll)
-  })
-
   // Compute display items and hidden indices for show/hide completed lines
   const lineTexts = editorState.lines.map((l) => l.text)
   const lineTextsKey = lineTexts.join('\n')
@@ -549,22 +537,6 @@ export function NoteEditorScreen() {
       />
 
       <div className={styles.editorArea}>
-        <div ref={noteIdColumnRef} className={styles.noteIdColumn}>
-          {displayItems.map((item, i) =>
-            item.type === 'placeholder' ? (
-              <div key={`ph-${i}`}>
-                {Array.from({ length: item.count }, (_, j) => {
-                  const lineIdx = item.startIndex + j
-                  return editorState.lines[lineIdx]?.noteIds ?? []
-                }).flat().join(', ') || '\u00A0'}
-              </div>
-            ) : (
-              <div key={item.realIndex}>
-                {editorState.lines[item.realIndex]?.noteIds.join(', ') || '\u00A0'}
-              </div>
-            )
-          )}
-        </div>
         <div
           ref={editorRef}
           className={`${styles.editor} ${currentNote?.state === 'deleted' ? styles.deletedEditor : ''}`}
@@ -576,6 +548,7 @@ export function NoteEditorScreen() {
               key={`ph-${i}`}
               count={item.count}
               indentLevel={item.indentLevel}
+              noteIdText={Array.from({ length: item.count }, (_, j) => editorState.lines[item.startIndex + j]?.noteIds ?? []).flat().join(', ')}
               isSelected={editorState.hasSelection && (() => {
                 const [selFirst, selLast] = editorState.getSelectedLineRange()
                 return item.startIndex <= selLast && item.endIndex >= selFirst

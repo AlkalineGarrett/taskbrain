@@ -369,11 +369,11 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         // Check cache first for instant tab switching
         val cached = recentTabsViewModel?.getCachedContent(currentNoteId)
         if (cached != null) {
+            val fullContent = cached.noteLines.joinToString("\n") { it.content }
             Log.d(TAG, "loadContent: using RecentTabsViewModel cache for $currentNoteId")
             // Use cached content - instant!
             _isNoteDeleted.value = cached.isDeleted
             lineTracker.setTrackedLines(cached.noteLines)
-            val fullContent = cached.noteLines.joinToString("\n") { it.content }
             _loadStatus.value = LoadStatus.Success(fullContent, noteLinesToNoteIds(cached.noteLines))
             // Still update lastAccessedAt, load showCompleted, and directive results in background
             viewModelScope.launch {
@@ -453,7 +453,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                     loadAlarmStates()
                 },
                 onFailure = { e ->
-                    Log.e("CurrentNoteViewModel", "Error loading note", e)
+                    Log.e(TAG, "Error loading note", e)
                     _loadStatus.value = LoadStatus.Error(e)
                 }
             )

@@ -6,11 +6,12 @@ interface CompletedPlaceholderRowProps {
   count: number
   indentLevel: number
   isSelected: boolean
+  noteIdText: string
   onGutterDragStart: () => void
   onGutterDragUpdate: () => void
 }
 
-export function CompletedPlaceholderRow({ count, indentLevel, isSelected, onGutterDragStart, onGutterDragUpdate }: CompletedPlaceholderRowProps) {
+export function CompletedPlaceholderRow({ count, indentLevel, isSelected, noteIdText, onGutterDragStart, onGutterDragUpdate }: CompletedPlaceholderRowProps) {
   const indentPx = indentLevel * 24
 
   const handleMouseDown = (e: MouseEvent) => {
@@ -26,6 +27,7 @@ export function CompletedPlaceholderRow({ count, indentLevel, isSelected, onGutt
 
   return (
     <div className={styles.placeholder}>
+      <div className={styles.noteIdCell}>{noteIdText || '\u00A0'}</div>
       <div
         className={`${styles.gutter}${isSelected ? ` ${styles.selected}` : ''}`}
         onMouseDown={handleMouseDown}
