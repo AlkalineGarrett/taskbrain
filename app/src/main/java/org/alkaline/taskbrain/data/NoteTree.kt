@@ -1,5 +1,9 @@
 package org.alkaline.taskbrain.data
 
+import android.util.Log
+
+private const val TAG = "NoteTree"
+
 /**
  * Pure tree algorithms for converting between Firestore's tree structure
  * and the editor's flat indented-line format.
@@ -49,6 +53,8 @@ fun flattenTreeToLines(rootNote: Note, descendants: List<Note>): List<NoteLine> 
                 val child = lookup[childId]
                 if (child != null) {
                     dfs(child, depth + 1)
+                } else {
+                    Log.e(TAG, "flattenTreeToLines: child $childId referenced by ${note.id} not found in descendants — line will be missing")
                 }
             }
         }
@@ -65,6 +71,8 @@ fun flattenTreeToLines(rootNote: Note, descendants: List<Note>): List<NoteLine> 
             val child = lookup[childId]
             if (child != null) {
                 dfs(child, 0)
+            } else {
+                Log.e(TAG, "flattenTreeToLines: root child $childId not found in descendants — line will be missing")
             }
         }
     }

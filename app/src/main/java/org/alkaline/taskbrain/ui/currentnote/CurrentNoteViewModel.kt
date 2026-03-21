@@ -237,6 +237,36 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     private var snapshotListener: ListenerRegistration? = null
     private var suppressSnapshotUpdate = false
 
+    /**
+     * Saves the current note to Firestore. ALL saves of the current note's content
+     * MUST go through this method — it sets [suppressSnapshotUpdate] to prevent
+     * the snapshot listener from triggering a spurious reload that overwrites the editor.
+     *
+     * On success, handles common post-save bookkeeping: updating line tracker IDs,
+     * notifying the UI, and syncing alarm line content.
+     */
+    private suspend fun persistCurrentNote(trackedLines: List<NoteLine>): Result<Map<Int, String>> {
+        suppressSnapshotUpdate = true
+        val result = repository.saveNoteWithChildren(currentNoteId, trackedLines)
+        result.fold(
+            onSuccess = { newIdsMap ->
+                for ((index, newId) in newIdsMap) {
+                    lineTracker.updateLineNoteId(index, newId)
+                }
+                if (newIdsMap.isNotEmpty()) _newlyAssignedNoteIds.tryEmit(newIdsMap)
+                syncAlarmLineContent(trackedLines)
+                _saveStatus.value = SaveStatus.Success
+                _saveCompleted.tryEmit(Unit)
+                markAsSaved()
+            },
+            onFailure = { e ->
+                Log.e(TAG, "Error saving note", e)
+                _saveStatus.value = SaveStatus.Error(e)
+            }
+        )
+        return result
+    }
+
     // Current Note ID being edited — initialized from SharedPreferences so that LiveData
     // exposes the correct value immediately, preventing a race where the sync LaunchedEffect
     // in CurrentNoteScreen sets displayedNoteId to a stale default before loadContent runs.
@@ -459,50 +489,25 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             updateTrackedLines(content)
         }
 
-        // Suppress the next snapshot update since it will be from our own save
-        suppressSnapshotUpdate = true
-
         _saveStatus.value = SaveStatus.Saving
 
         viewModelScope.launch {
             val trackedLines = lineTracker.getTrackedLines()
-            val result = repository.saveNoteWithChildren(currentNoteId, trackedLines)
-            
-            result.fold(
-                onSuccess = { newIdsMap ->
-                    // Update trackedLines with the newly created IDs so subsequent saves are correct
-                    for ((index, newId) in newIdsMap) {
-                        lineTracker.updateLineNoteId(index, newId)
-                    }
-                    // Notify UI of newly assigned noteIds so EditorState stays in sync
-                    if (newIdsMap.isNotEmpty()) {
-                        _newlyAssignedNoteIds.tryEmit(newIdsMap)
-                    }
+            val result = persistCurrentNote(trackedLines)
 
-                    // Sync alarm line content and noteId with updated note content
-                    syncAlarmLineContent(trackedLines)
-                    syncAlarmNoteIds(trackedLines)
+            result.onSuccess {
+                syncAlarmNoteIds(trackedLines)
 
-                    // Invalidate notes cache so other notes' view directives get fresh data
-                    // This must happen BEFORE executeAndStoreDirectives to ensure
-                    // ensureNotesLoaded() fetches fresh notes when switching tabs
-                    cachedNotes = null
-                    // Phase 3: Invalidate metadata hash cache when notes change
-                    MetadataHasher.invalidateCache()
+                // Invalidate notes cache so other notes' view directives get fresh data
+                // This must happen BEFORE executeAndStoreDirectives to ensure
+                // ensureNotesLoaded() fetches fresh notes when switching tabs
+                cachedNotes = null
+                // Phase 3: Invalidate metadata hash cache when notes change
+                MetadataHasher.invalidateCache()
 
-                    // Execute directives and store results
-                    executeAndStoreDirectives(content)
-
-                    Log.d("CurrentNoteViewModel", "Note saved successfully with structure.")
-                    _saveStatus.value = SaveStatus.Success
-                    _saveCompleted.tryEmit(Unit)
-                    markAsSaved()
-                },
-                onFailure = { e ->
-                    Log.e("CurrentNoteViewModel", "Error saving note", e)
-                    _saveStatus.value = SaveStatus.Error(e)
-                }
-            )
+                // Execute directives and store results
+                executeAndStoreDirectives(content)
+            }
         }
     }
 
@@ -744,30 +749,13 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         stages: List<AlarmStage> = Alarm.DEFAULT_STAGES
     ) {
         viewModelScope.launch {
-            // First, save the content to ensure line tracker has correct note IDs
             updateTrackedLines(content)
             val trackedLines = lineTracker.getTrackedLines()
-            val saveResult = repository.saveNoteWithChildren(currentNoteId, trackedLines)
+            val saveResult = persistCurrentNote(trackedLines)
 
-            saveResult.fold(
-                onSuccess = { newIdsMap ->
-                    // Update trackedLines with newly created IDs
-                    for ((index, newId) in newIdsMap) {
-                        lineTracker.updateLineNoteId(index, newId)
-                    }
-                    if (newIdsMap.isNotEmpty()) _newlyAssignedNoteIds.tryEmit(newIdsMap)
-                    syncAlarmLineContent(trackedLines)
-                    _saveStatus.value = SaveStatus.Success
-                    _saveCompleted.tryEmit(Unit)
-                    markAsSaved()
-
-                    // Now create the alarm with correct note ID
-                    createAlarmInternal(lineContent, lineIndex, dueTime, stages)
-                },
-                onFailure = { e ->
-                    _saveStatus.value = SaveStatus.Error(e)
-                }
-            )
+            saveResult.onSuccess {
+                createAlarmInternal(lineContent, lineIndex, dueTime, stages)
+            }
         }
     }
 
@@ -783,30 +771,15 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         recurrenceConfig: RecurrenceConfig
     ) {
         viewModelScope.launch {
-            // Save content first to ensure line tracker has correct note IDs
             updateTrackedLines(content)
             val trackedLines = lineTracker.getTrackedLines()
-            val saveResult = repository.saveNoteWithChildren(currentNoteId, trackedLines)
+            val saveResult = persistCurrentNote(trackedLines)
 
-            saveResult.fold(
-                onSuccess = { newIdsMap ->
-                    for ((index, newId) in newIdsMap) {
-                        lineTracker.updateLineNoteId(index, newId)
-                    }
-                    if (newIdsMap.isNotEmpty()) _newlyAssignedNoteIds.tryEmit(newIdsMap)
-                    syncAlarmLineContent(trackedLines)
-                    _saveStatus.value = SaveStatus.Success
-                    _saveCompleted.tryEmit(Unit)
-                    markAsSaved()
-
-                    createRecurringAlarmInternal(
-                        lineContent, lineIndex, dueTime, stages, recurrenceConfig
-                    )
-                },
-                onFailure = { e ->
-                    _saveStatus.value = SaveStatus.Error(e)
-                }
-            )
+            saveResult.onSuccess {
+                createRecurringAlarmInternal(
+                    lineContent, lineIndex, dueTime, stages, recurrenceConfig
+                )
+            }
         }
     }
 
