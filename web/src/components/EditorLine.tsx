@@ -8,6 +8,16 @@ import { DirectiveLineContent } from './DirectiveLineContent'
 import { getCharOffsetFromPoint, getCharOffsetHidingTextarea, getWordBoundsAt, isOnFirstVisualRow, isOnLastVisualRow, mapDisplayOffsetToSource } from '@/editor/TextMeasure'
 import styles from './EditorLine.module.css'
 
+/**
+ * Returns true if a key event that falls through to the default case in handleKeyDown
+ * should trigger a cursor sync. Navigation keys (Home, End, etc.) need syncing;
+ * typing characters do not — they are handled by handleChange, and syncing would
+ * overwrite the new content with stale closure data.
+ */
+export function shouldSyncCursorForKey(key: string): boolean {
+  return key.length !== 1
+}
+
 interface EditorLineProps {
   lineIndex: number
   controller: EditorController
@@ -399,8 +409,9 @@ export function EditorLine({
         }
 
         default:
-          // Any other key the browser handles natively (Home, End, etc.) — sync cursor
-          syncCursorAfterNativeNav()
+          if (shouldSyncCursorForKey(e.key)) {
+            syncCursorAfterNativeNav()
+          }
           break
       }
     },
