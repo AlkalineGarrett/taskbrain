@@ -142,6 +142,25 @@ export function useEditor(noteId: string | undefined) {
       contentCache.delete(noteId)
       setShowLoading(false)
       void repo.updateLastAccessed(noteId)
+
+      // If cached content was dirty, a fire-and-forget save was in flight.
+      // Refresh tracked line IDs from Firestore once the save completes
+      // to avoid creating duplicate children on the next save.
+      if (cached.dirty) {
+        void repo.loadNoteWithChildren(noteId).then((freshLines) => {
+          if (cancelled) return
+          const freshContent = freshLines.map((l) => l.content).join('\n')
+          const currentContent = editorState.lines.map((l) => l.text).join('\n')
+          if (freshContent === currentContent) {
+            trackedLinesRef.current = freshLines
+            editorState.updateNoteIds(
+              freshLines.map((l) => (l.noteId ? [l.noteId] : [])),
+            )
+            setDirty(false)
+          }
+        }).catch(() => { /* cache is still usable */ })
+      }
+
       return () => { cancelled = true }
     }
 
@@ -195,6 +214,12 @@ export function useEditor(noteId: string | undefined) {
       // Reload the full note (parent + children) to pick up external changes
       void (async () => {
         try {
+          // Don't overwrite unsaved local edits — the user's changes take priority
+          if (dirtyRef.current) {
+            console.log('Snapshot listener skipping reload for', noteId, '— editor is dirty')
+            return
+          }
+
           const freshLines = await repo.loadNoteWithChildren(noteId)
           const freshContent = freshLines.map((l) => l.content).join('\n')
           const currentContent = editorState.lines.map((l) => l.text).join('\n')

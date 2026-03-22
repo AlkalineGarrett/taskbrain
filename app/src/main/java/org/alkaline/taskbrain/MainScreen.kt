@@ -108,6 +108,8 @@ fun MainScreen(
 
     LaunchedEffect(isUserSignedIn) {
         if (isUserSignedIn) {
+            // Skip if there's a pending alarm — the alarm LaunchedEffect will handle navigation
+            if (pendingAlarmId != null) return@LaunchedEffect
             navController.navigate(Screen.CurrentNote.route) {
                 popUpTo(Screen.Login.route) { inclusive = true }
             }
