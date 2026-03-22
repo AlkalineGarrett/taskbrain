@@ -550,12 +550,30 @@ export class EditorController {
     const afterCursor = line.text.substring(cursor)
     const noteIds = line.noteIds
 
+    // Determine which side has real content (beyond prefix).
+    // The side with content keeps the original noteIds; the empty side gets a fresh tempId.
+    const beforeHasContent = beforeCursor.length > prefix.length
+    const afterHasContent = afterCursor.length > 0
+    let currentNoteIds: string[]
+    let newNoteIds: string[]
+    if (!beforeHasContent && afterHasContent) {
+      currentNoteIds = []
+      newNoteIds = noteIds
+    } else if (beforeHasContent && !afterHasContent) {
+      currentNoteIds = noteIds
+      newNoteIds = []
+    } else {
+      currentNoteIds = noteIds
+      newNoteIds = noteIds
+    }
+
     line.updateFull(beforeCursor, beforeCursor.length)
+    line.noteIds = currentNoteIds
 
     if (cursor >= prefix.length) {
-      this.createNewLineWithPrefix(lineIndex, afterCursor, prefix, noteIds)
+      this.createNewLineWithPrefix(lineIndex, afterCursor, prefix, newNoteIds)
     } else {
-      this.state.lines.splice(lineIndex + 1, 0, new LineState(afterCursor, 0, noteIds))
+      this.state.lines.splice(lineIndex + 1, 0, new LineState(afterCursor, 0, newNoteIds))
       this.state.focusedLineIndex = lineIndex + 1
       this.state.requestFocusUpdate()
       this.state.notifyChange()
@@ -656,8 +674,27 @@ export class EditorController {
       const nlIndex = newContent.indexOf('\n')
       const beforeNewline = newContent.substring(0, nlIndex)
       const afterNewline = newContent.substring(nlIndex + 1)
+
+      // The side with content keeps the original noteIds; the empty side gets a fresh tempId.
+      const noteIds = line.noteIds
+      const beforeHasContent = beforeNewline.length > 0
+      const afterHasContent = afterNewline.length > 0
+      let currentNoteIds: string[]
+      let newNoteIds: string[]
+      if (!beforeHasContent && afterHasContent) {
+        currentNoteIds = []
+        newNoteIds = noteIds
+      } else if (beforeHasContent && !afterHasContent) {
+        currentNoteIds = noteIds
+        newNoteIds = []
+      } else {
+        currentNoteIds = noteIds
+        newNoteIds = noteIds
+      }
+
       line.updateContent(beforeNewline, beforeNewline.length)
-      this.createNewLineWithPrefix(lineIndex, afterNewline, line.prefix, line.noteIds)
+      line.noteIds = currentNoteIds
+      this.createNewLineWithPrefix(lineIndex, afterNewline, line.prefix, newNoteIds)
       this.undoManager.continueAfterStructuralChange(this.state.focusedLineIndex)
       return
     }

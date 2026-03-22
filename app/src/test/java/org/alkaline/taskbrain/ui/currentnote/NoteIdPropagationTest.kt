@@ -95,7 +95,7 @@ class NoteIdPropagationTest {
     // ==================== Split line propagation ====================
 
     @Test
-    fun `splitLine gives both fragments the same noteIds`() {
+    fun `splitLine gives both fragments the same noteIds when splitting in middle`() {
         val state = EditorState()
         val controller = EditorController(state)
         state.initFromNoteLines(listOf(
@@ -109,6 +109,136 @@ class NoteIdPropagationTest {
 
         assertEquals("Hello", state.lines[0].text)
         assertEquals(" World", state.lines[1].text)
+        assertEquals(listOf("note1"), state.lines[0].noteIds)
+        assertEquals(listOf("note1"), state.lines[1].noteIds)
+    }
+
+    @Test
+    fun `splitLine gives new empty line a fresh id when splitting at end`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.initFromNoteLines(listOf(
+            "Hello" to listOf("note1"),
+            "" to emptyList()
+        ))
+        state.focusedLineIndex = 0
+        state.lines[0].updateFull("Hello", 5) // cursor at end
+
+        controller.splitLine(0)
+
+        assertEquals("Hello", state.lines[0].text)
+        assertEquals(listOf("note1"), state.lines[0].noteIds)
+        // New empty line gets fresh tempId, not the original noteId
+        assertTrue(state.lines[1].noteIds.isEmpty())
+        assertTrue(state.lines[1].effectiveId != "note1")
+    }
+
+    @Test
+    fun `splitLine gives original empty line a fresh id when splitting at beginning`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.initFromNoteLines(listOf(
+            "Hello" to listOf("note1"),
+            "" to emptyList()
+        ))
+        state.focusedLineIndex = 0
+        state.lines[0].updateFull("Hello", 0) // cursor at beginning
+
+        controller.splitLine(0)
+
+        // Original line is now empty, should lose noteIds
+        assertEquals("", state.lines[0].text)
+        assertTrue(state.lines[0].noteIds.isEmpty())
+        // New line has the content, should keep noteIds
+        assertEquals("Hello", state.lines[1].text)
+        assertEquals(listOf("note1"), state.lines[1].noteIds)
+    }
+
+    @Test
+    fun `splitLine gives new empty line a fresh id when splitting prefixed line at end`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.initFromNoteLines(listOf(
+            "• Content" to listOf("note1"),
+            "" to emptyList()
+        ))
+        state.focusedLineIndex = 0
+        state.lines[0].updateFull("• Content", 9) // cursor at end
+
+        controller.splitLine(0)
+
+        assertEquals(listOf("note1"), state.lines[0].noteIds)
+        assertTrue(state.lines[1].noteIds.isEmpty())
+    }
+
+    @Test
+    fun `splitLine gives original line a fresh id when splitting prefixed line at prefix boundary`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.initFromNoteLines(listOf(
+            "• Content" to listOf("note1"),
+            "" to emptyList()
+        ))
+        state.focusedLineIndex = 0
+        state.lines[0].updateFull("• Content", 2) // cursor after prefix
+
+        controller.splitLine(0)
+
+        // Original line has just prefix (no content), should lose noteIds
+        assertTrue(state.lines[0].noteIds.isEmpty())
+        // New line has the content, should keep noteIds
+        assertEquals(listOf("note1"), state.lines[1].noteIds)
+    }
+
+    // ==================== updateLineContent newline (IME path) ====================
+
+    @Test
+    fun `updateLineContent gives new empty line a fresh id when newline at end`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.initFromNoteLines(listOf(
+            "Hello" to listOf("note1"),
+            "" to emptyList()
+        ))
+        state.focusedLineIndex = 0
+
+        controller.updateLineContent(0, "Hello\n", 6)
+
+        assertEquals("Hello", state.lines[0].content)
+        assertEquals(listOf("note1"), state.lines[0].noteIds)
+        assertTrue(state.lines[1].noteIds.isEmpty())
+    }
+
+    @Test
+    fun `updateLineContent gives original line a fresh id when newline at beginning`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.initFromNoteLines(listOf(
+            "Hello" to listOf("note1"),
+            "" to emptyList()
+        ))
+        state.focusedLineIndex = 0
+
+        controller.updateLineContent(0, "\nHello", 0)
+
+        assertEquals("", state.lines[0].content)
+        assertTrue(state.lines[0].noteIds.isEmpty())
+        assertEquals("Hello", state.lines[1].content)
+        assertEquals(listOf("note1"), state.lines[1].noteIds)
+    }
+
+    @Test
+    fun `updateLineContent gives both fragments noteIds when newline in middle`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.initFromNoteLines(listOf(
+            "HelloWorld" to listOf("note1"),
+            "" to emptyList()
+        ))
+        state.focusedLineIndex = 0
+
+        controller.updateLineContent(0, "Hello\nWorld", 5)
+
         assertEquals(listOf("note1"), state.lines[0].noteIds)
         assertEquals(listOf("note1"), state.lines[1].noteIds)
     }

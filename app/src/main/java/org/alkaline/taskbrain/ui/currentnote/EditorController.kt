@@ -721,15 +721,26 @@ class EditorController(
         val beforeCursor = line.text.substring(0, cursor)
         val afterCursor = line.text.substring(cursor)
 
-        // Update current line (keeps its noteIds)
+        // Determine which side has real content (beyond prefix).
+        // The side with content keeps the original noteIds; the empty side gets a fresh tempId.
+        val beforeHasContent = beforeCursor.length > prefix.length
+        val afterHasContent = afterCursor.isNotEmpty()
+        val (currentNoteIds, newNoteIds) = when {
+            !beforeHasContent && afterHasContent -> emptyList<String>() to noteIds
+            beforeHasContent && !afterHasContent -> noteIds to emptyList()
+            else -> noteIds to noteIds
+        }
+
+        // Update current line
         line.updateFull(beforeCursor, beforeCursor.length)
+        line.noteIds = currentNoteIds
 
         // Create new line with prefix continuation (only if cursor was past the prefix)
         if (cursor >= prefix.length) {
-            createNewLineWithPrefix(lineIndex, afterCursor, prefix, noteIds)
+            createNewLineWithPrefix(lineIndex, afterCursor, prefix, newNoteIds)
         } else {
             // Cursor within prefix, don't continue prefix
-            val newLine = LineState(afterCursor, 0, noteIds)
+            val newLine = LineState(afterCursor, 0, newNoteIds)
             state.lines.add(lineIndex + 1, newLine)
             state.focusedLineIndex = lineIndex + 1
             state.requestFocusUpdate()
@@ -875,11 +886,23 @@ class EditorController(
             val beforeNewline = newContent.substring(0, newlineIndex)
             val afterNewline = newContent.substring(newlineIndex + 1)
 
+            // Determine which side has real content.
+            // The side with content keeps the original noteIds; the empty side gets a fresh tempId.
+            val beforeHasContent = beforeNewline.isNotEmpty()
+            val afterHasContent = afterNewline.isNotEmpty()
+            val noteIds = line.noteIds
+            val (currentNoteIds, newNoteIds) = when {
+                !beforeHasContent && afterHasContent -> emptyList<String>() to noteIds
+                beforeHasContent && !afterHasContent -> noteIds to emptyList()
+                else -> noteIds to noteIds
+            }
+
             // Update current line with content before newline
             line.updateContent(beforeNewline, beforeNewline.length)
+            line.noteIds = currentNoteIds
 
-            // Create new line with prefix continuation, inheriting noteIds from split
-            createNewLineWithPrefix(lineIndex, afterNewline, line.prefix, line.noteIds)
+            // Create new line with prefix continuation
+            createNewLineWithPrefix(lineIndex, afterNewline, line.prefix, newNoteIds)
 
             // Continue pending state on new line (groups Enter + subsequent typing)
             undoManager.continueAfterStructuralChange(state.focusedLineIndex)
