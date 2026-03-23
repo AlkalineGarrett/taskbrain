@@ -82,7 +82,9 @@ class ViewModelPureLogicTest {
             NoteLine("Plain text", "note1"),
             NoteLine("No alarms here", "note2")
         )
-        assertTrue(extractAlarmIds(lines).isEmpty())
+        val result = extractAlarmIds(lines)
+        assertTrue(result.alarmIds.isEmpty())
+        assertTrue(result.recurringAlarmIds.isEmpty())
     }
 
     @Test
@@ -90,7 +92,7 @@ class ViewModelPureLogicTest {
         val lines = listOf(
             NoteLine("Task [alarm(\"abc123\")]", "note1")
         )
-        assertEquals(listOf("abc123"), extractAlarmIds(lines))
+        assertEquals(listOf("abc123"), extractAlarmIds(lines).alarmIds)
     }
 
     @Test
@@ -98,7 +100,7 @@ class ViewModelPureLogicTest {
         val lines = listOf(
             NoteLine("Task [alarm(\"a1\")] [alarm(\"a2\")]", "note1")
         )
-        assertEquals(listOf("a1", "a2"), extractAlarmIds(lines))
+        assertEquals(listOf("a1", "a2"), extractAlarmIds(lines).alarmIds)
     }
 
     @Test
@@ -107,7 +109,7 @@ class ViewModelPureLogicTest {
             NoteLine("Line 1 [alarm(\"a1\")]", "note1"),
             NoteLine("Line 2 [alarm(\"a2\")]", "note2")
         )
-        assertEquals(listOf("a1", "a2"), extractAlarmIds(lines))
+        assertEquals(listOf("a1", "a2"), extractAlarmIds(lines).alarmIds)
     }
 
     @Test
@@ -116,7 +118,7 @@ class ViewModelPureLogicTest {
             NoteLine("Line 1 [alarm(\"a1\")]", "note1"),
             NoteLine("Line 2 [alarm(\"a1\")]", "note2")
         )
-        assertEquals(listOf("a1"), extractAlarmIds(lines))
+        assertEquals(listOf("a1"), extractAlarmIds(lines).alarmIds)
     }
 
     @Test
@@ -124,7 +126,131 @@ class ViewModelPureLogicTest {
         val lines = listOf(
             NoteLine("Task ⏰", "note1")
         )
-        assertTrue(extractAlarmIds(lines).isEmpty())
+        val result = extractAlarmIds(lines)
+        assertTrue(result.alarmIds.isEmpty())
+        assertTrue(result.recurringAlarmIds.isEmpty())
+    }
+
+    @Test
+    fun `extractAlarmIds extracts recurring alarm IDs`() {
+        val lines = listOf(
+            NoteLine("Task [recurringAlarm(\"rec1\")]", "note1"),
+            NoteLine("Task [alarm(\"a1\")] [recurringAlarm(\"rec2\")]", "note2")
+        )
+        val result = extractAlarmIds(lines)
+        assertEquals(listOf("a1"), result.alarmIds)
+        assertEquals(listOf("rec1", "rec2"), result.recurringAlarmIds)
+    }
+
+    @Test
+    fun `extractAlarmIds deduplicates recurring IDs`() {
+        val lines = listOf(
+            NoteLine("Line 1 [recurringAlarm(\"rec1\")]", "note1"),
+            NoteLine("Line 2 [recurringAlarm(\"rec1\")]", "note2")
+        )
+        val result = extractAlarmIds(lines)
+        assertEquals(listOf("rec1"), result.recurringAlarmIds)
+    }
+
+    // ==================== selectCurrentInstance ====================
+
+    @Test
+    fun `selectCurrentInstance returns null for empty list`() {
+        assertEquals(null, selectCurrentInstance(emptyList()))
+    }
+
+    @Test
+    fun `selectCurrentInstance prefers today's instance regardless of status`() {
+        val now = Date()
+        val cal = java.util.Calendar.getInstance().apply { time = now }
+        // Today, 1 hour ago (done)
+        cal.add(java.util.Calendar.HOUR_OF_DAY, -1)
+        val todayDone = Alarm(id = "todayDone", status = AlarmStatus.DONE, dueTime = Timestamp(cal.time))
+        // Tomorrow (pending)
+        cal.time = now
+        cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+        val tomorrowPending = Alarm(id = "tomorrow", status = AlarmStatus.PENDING, dueTime = Timestamp(cal.time))
+
+        assertEquals("todayDone", selectCurrentInstance(listOf(tomorrowPending, todayDone), now)?.id)
+    }
+
+    @Test
+    fun `selectCurrentInstance picks most recent past if it is PENDING`() {
+        val now = Date()
+        val cal = java.util.Calendar.getInstance().apply { time = now }
+        // Yesterday (pending — e.g. overdue)
+        cal.add(java.util.Calendar.DAY_OF_YEAR, -1)
+        val yesterdayPending = Alarm(id = "yesterdayPending", status = AlarmStatus.PENDING, dueTime = Timestamp(cal.time))
+        // Tomorrow
+        cal.time = now
+        cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+        val tomorrow = Alarm(id = "tomorrow", status = AlarmStatus.PENDING, dueTime = Timestamp(cal.time))
+
+        assertEquals("yesterdayPending", selectCurrentInstance(listOf(tomorrow, yesterdayPending), now)?.id)
+    }
+
+    @Test
+    fun `selectCurrentInstance picks earliest future when most recent past is not PENDING`() {
+        val now = Date()
+        val cal = java.util.Calendar.getInstance().apply { time = now }
+        // Yesterday (done)
+        cal.add(java.util.Calendar.DAY_OF_YEAR, -1)
+        val yesterdayDone = Alarm(id = "yesterdayDone", status = AlarmStatus.DONE, dueTime = Timestamp(cal.time))
+        // Tomorrow
+        cal.time = now
+        cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+        val tomorrow = Alarm(id = "tomorrow", status = AlarmStatus.PENDING, dueTime = Timestamp(cal.time))
+        // 3 days from now
+        cal.time = now
+        cal.add(java.util.Calendar.DAY_OF_YEAR, 3)
+        val threeDays = Alarm(id = "threeDays", status = AlarmStatus.PENDING, dueTime = Timestamp(cal.time))
+
+        assertEquals("tomorrow", selectCurrentInstance(listOf(threeDays, yesterdayDone, tomorrow), now)?.id)
+    }
+
+    @Test
+    fun `selectCurrentInstance falls back to most recent past when no future exists`() {
+        val now = Date()
+        val cal = java.util.Calendar.getInstance().apply { time = now }
+        // Yesterday (done)
+        cal.add(java.util.Calendar.DAY_OF_YEAR, -1)
+        val yesterdayDone = Alarm(id = "yesterdayDone", status = AlarmStatus.DONE, dueTime = Timestamp(cal.time))
+        // 2 days ago (done)
+        cal.add(java.util.Calendar.DAY_OF_YEAR, -1)
+        val twoDaysAgo = Alarm(id = "twoDaysAgo", status = AlarmStatus.DONE, dueTime = Timestamp(cal.time))
+
+        assertEquals("yesterdayDone", selectCurrentInstance(listOf(twoDaysAgo, yesterdayDone), now)?.id)
+    }
+
+    @Test
+    fun `selectCurrentInstance falls back to nearest future when no past exists`() {
+        val now = Date()
+        val cal = java.util.Calendar.getInstance().apply { time = now }
+        // Tomorrow
+        cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+        val tomorrow = Alarm(id = "tomorrow", status = AlarmStatus.PENDING, dueTime = Timestamp(cal.time))
+        // 3 days from now
+        cal.add(java.util.Calendar.DAY_OF_YEAR, 2)
+        val threeDays = Alarm(id = "threeDays", status = AlarmStatus.PENDING, dueTime = Timestamp(cal.time))
+
+        assertEquals("tomorrow", selectCurrentInstance(listOf(threeDays, tomorrow), now)?.id)
+    }
+
+    @Test
+    fun `selectCurrentInstance picks first today's instance in list order`() {
+        val now = Date()
+        val cal = java.util.Calendar.getInstance().apply { time = now }
+        // Today, 2 hours ago (done)
+        cal.add(java.util.Calendar.HOUR_OF_DAY, -2)
+        val todayEarlier = Alarm(id = "todayEarlier", status = AlarmStatus.DONE, dueTime = Timestamp(cal.time))
+        // Today, 1 hour from now (pending)
+        cal.time = now
+        cal.add(java.util.Calendar.HOUR_OF_DAY, 1)
+        val todayLater = Alarm(id = "todayLater", status = AlarmStatus.PENDING, dueTime = Timestamp(cal.time))
+
+        // find returns first match in list order
+        assertEquals("todayEarlier", selectCurrentInstance(listOf(todayEarlier, todayLater), now)?.id)
+        assertEquals("todayLater", selectCurrentInstance(listOf(todayLater, todayEarlier), now)?.id)
     }
 
     // ==================== computeSymbolOverlays ====================
@@ -137,13 +263,13 @@ class ViewModelPureLogicTest {
 
     @Test
     fun `computeSymbolOverlays returns empty for line without directives`() {
-        assertTrue(computeSymbolOverlays("Plain text", emptyMap(), Timestamp.now()).isEmpty())
+        assertTrue(computeSymbolOverlays("Plain text", emptyMap(), emptyMap(), Timestamp.now()).isEmpty())
     }
 
     @Test
     fun `computeSymbolOverlays returns overlay for cached alarm`() {
         val cache = mapOf("a1" to alarm("a1", AlarmStatus.DONE))
-        val overlays = computeSymbolOverlays("Task [alarm(\"a1\")]", cache, Timestamp.now())
+        val overlays = computeSymbolOverlays("Task [alarm(\"a1\")]", cache, emptyMap(), Timestamp.now())
 
         assertEquals(1, overlays.size)
         assertEquals(AlarmMarkers.ALARM_SYMBOL, overlays[0].symbol)
@@ -152,7 +278,7 @@ class ViewModelPureLogicTest {
 
     @Test
     fun `computeSymbolOverlays returns None badge for missing alarm`() {
-        val overlays = computeSymbolOverlays("Task [alarm(\"missing\")]", emptyMap(), Timestamp.now())
+        val overlays = computeSymbolOverlays("Task [alarm(\"missing\")]", emptyMap(), emptyMap(), Timestamp.now())
 
         assertEquals(1, overlays.size)
         assertEquals(SymbolBadge.None, overlays[0].badge)
@@ -165,7 +291,7 @@ class ViewModelPureLogicTest {
             "a2" to alarm("a2", AlarmStatus.CANCELLED)
         )
         val overlays = computeSymbolOverlays(
-            "Task [alarm(\"a1\")] [alarm(\"a2\")]", cache, Timestamp.now()
+            "Task [alarm(\"a1\")] [alarm(\"a2\")]", cache, emptyMap(), Timestamp.now()
         )
 
         assertEquals(2, overlays.size)
@@ -186,10 +312,62 @@ class ViewModelPureLogicTest {
                 dueTime = pastDue
             )
         )
-        val overlays = computeSymbolOverlays("Task [alarm(\"a1\")]", cache, Timestamp.now())
+        val overlays = computeSymbolOverlays("Task [alarm(\"a1\")]", cache, emptyMap(), Timestamp.now())
 
         assertEquals(1, overlays.size)
         assertTrue(overlays[0].badge is SymbolBadge.Centered) // past due = centered "!"
+    }
+
+    @Test
+    fun `computeSymbolOverlays returns overlay for recurring alarm in cache`() {
+        val recurringCache = mapOf("rec1" to alarm("inst1", AlarmStatus.DONE))
+        val overlays = computeSymbolOverlays(
+            "Task [recurringAlarm(\"rec1\")]", emptyMap(), recurringCache, Timestamp.now()
+        )
+
+        assertEquals(1, overlays.size)
+        assertEquals(AlarmMarkers.ALARM_SYMBOL, overlays[0].symbol)
+        assertTrue(overlays[0].badge is SymbolBadge.Corner) // done = checkmark corner badge
+    }
+
+    @Test
+    fun `computeSymbolOverlays handles mixed alarm and recurringAlarm in left-to-right order`() {
+        val alarmCache = mapOf("a1" to alarm("a1", AlarmStatus.DONE))
+        val recurringCache = mapOf("rec1" to alarm("inst1", AlarmStatus.CANCELLED))
+        val overlays = computeSymbolOverlays(
+            "Task [alarm(\"a1\")] [recurringAlarm(\"rec1\")]", alarmCache, recurringCache, Timestamp.now()
+        )
+
+        assertEquals(2, overlays.size)
+        val firstBadge = overlays[0].badge as SymbolBadge.Corner
+        val secondBadge = overlays[1].badge as SymbolBadge.Corner
+        assertEquals("✓", firstBadge.text) // alarm a1 is DONE
+        assertEquals("✕", secondBadge.text) // recurring rec1's instance is CANCELLED
+    }
+
+    @Test
+    fun `computeSymbolOverlays returns None badge for missing recurring alarm`() {
+        val overlays = computeSymbolOverlays(
+            "Task [recurringAlarm(\"missing\")]", emptyMap(), emptyMap(), Timestamp.now()
+        )
+
+        assertEquals(1, overlays.size)
+        assertEquals(SymbolBadge.None, overlays[0].badge)
+    }
+
+    // ==================== findAlarmNoteIdUpdates with recurring ====================
+
+    @Test
+    fun `findAlarmNoteIdUpdates detects stale noteId on recurringAlarm directive`() = runTest {
+        val lines = listOf(
+            NoteLine("[recurringAlarm(\"rec1\")]", "note-new")
+        )
+        val updates = findAlarmNoteIdUpdates(lines) { alarmId ->
+            if (alarmId == "rec1") "note-old" else null
+        }
+        assertEquals(1, updates.size)
+        assertEquals("rec1", updates[0].alarmId)
+        assertEquals("note-new", updates[0].lineNoteId)
     }
 
     // ==================== mapResultsByPosition ====================

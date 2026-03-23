@@ -124,12 +124,13 @@ fun NoteTextField(
                             val alarmRange = displayResult.directiveDisplayRanges.find {
                                 it.isAlarm && charOffsetInLine in it.sourceRange
                             }
-                            if (alarmRange?.alarmId != null) {
+                            if (alarmRange != null && (alarmRange.alarmId != null || alarmRange.recurringAlarmId != null)) {
                                 callback(SymbolTapInfo(
                                     symbol = TappableSymbol.ALARM,
                                     charOffset = charOffsetInLine,
                                     lineIndex = lineIndex,
-                                    alarmId = alarmRange.alarmId
+                                    alarmId = if (alarmRange.recurringAlarmId == null) alarmRange.alarmId else null,
+                                    recurringAlarmId = alarmRange.recurringAlarmId
                                 ))
                             }
                         }

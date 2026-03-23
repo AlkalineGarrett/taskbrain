@@ -8,6 +8,7 @@ import org.alkaline.taskbrain.data.TabState
 import org.alkaline.taskbrain.ui.currentnote.rendering.ButtonCallbacks
 import org.alkaline.taskbrain.ui.currentnote.util.AlarmSymbolUtils
 import org.alkaline.taskbrain.ui.currentnote.util.TappableSymbol
+import org.alkaline.taskbrain.ui.currentnote.components.AlarmDialogMode
 import org.alkaline.taskbrain.ui.currentnote.util.ClipboardHtmlConverter
 import org.alkaline.taskbrain.ui.currentnote.util.CompletedLineUtils
 import org.alkaline.taskbrain.ui.currentnote.undo.UndoStatePersistence
@@ -180,9 +181,13 @@ fun CurrentNoteScreen(
     var alarmDialogLineContent by remember { mutableStateOf("") }
     var alarmDialogLineIndex by remember { mutableStateOf<Int?>(null) }
     val alarmCacheForOverlay by currentNoteViewModel.alarmCache.observeAsState(emptyMap())
+    val recurringAlarmCacheForOverlay by currentNoteViewModel.recurringAlarmCache.observeAsState(emptyMap())
     // The alarm being viewed/edited in the dialog (set when tapping a directive)
     var alarmDialogAlarm by remember { mutableStateOf<Alarm?>(null) }
     val alarmDialogExistingAlarm = alarmDialogAlarm
+    var alarmDialogInitialMode by remember { mutableStateOf(AlarmDialogMode.INSTANCE) }
+    // The directive text that was tapped to open the dialog (for directive switching after save)
+    var tappedDirectiveText by remember { mutableStateOf<String?>(null) }
     val alarmDialogRecurrenceConfig by currentNoteViewModel.recurrenceConfig.observeAsState()
     val alarmDialogRecurringAlarm by currentNoteViewModel.recurringAlarm.observeAsState()
 
@@ -253,6 +258,20 @@ fun CurrentNoteScreen(
         onMarkUnsaved = { isSaved = false }
     )
 
+    // Switches the directive text in the editor if the directive type changed.
+    // e.g., [alarm("id")] → [recurringAlarm("recId")] or vice versa.
+    fun switchDirectiveIfNeeded(newDirective: String) {
+        val tapped = tappedDirectiveText ?: return
+        if (tapped == newDirective) return
+        val updatedText = editorState.text.replace(tapped, newDirective)
+        if (updatedText != editorState.text) {
+            editorState.updateFromText(updatedText)
+            userContent = editorState.text
+            isSaved = false
+            currentNoteViewModel.saveContent(editorState.text, editorState.lines.map { it.noteIds })
+        }
+    }
+
     // --- Dialogs ---
     NoteScreenDialogs(
         saveStatus = saveStatus,
@@ -274,6 +293,7 @@ fun CurrentNoteScreen(
         showAlarmDialog = showAlarmDialog,
         alarmDialogLineContent = alarmDialogLineContent,
         alarmDialogExistingAlarm = alarmDialogExistingAlarm,
+        alarmDialogInitialMode = alarmDialogInitialMode,
         alarmDialogRecurrenceConfig = alarmDialogRecurrenceConfig,
         alarmDialogRecurringAlarm = alarmDialogRecurringAlarm,
         alarmDialogInstanceCount = alarmDialogSiblings.size,
@@ -281,6 +301,8 @@ fun CurrentNoteScreen(
             val existing = alarmDialogExistingAlarm
             if (existing != null) {
                 currentNoteViewModel.updateAlarm(existing, dueTime, stages)
+                // Non-recurring save: switch [recurringAlarm(...)] → [alarm(...)]
+                switchDirectiveIfNeeded(AlarmSymbolUtils.alarmDirective(existing.id))
             } else {
                 currentNoteViewModel.saveAndCreateAlarm(userContent, alarmDialogLineContent, alarmDialogLineIndex, dueTime, stages)
             }
@@ -289,18 +311,27 @@ fun CurrentNoteScreen(
             val existing = alarmDialogExistingAlarm
             if (existing != null) {
                 currentNoteViewModel.updateRecurringAlarm(existing, dueTime, stages, recurrenceConfig)
+                // Recurring save: switch [alarm(...)] → [recurringAlarm(...)]
+                val recurringId = existing.recurringAlarmId
+                if (recurringId != null) {
+                    switchDirectiveIfNeeded(AlarmSymbolUtils.recurringAlarmDirective(recurringId))
+                }
             } else {
                 currentNoteViewModel.saveAndCreateRecurringAlarm(userContent, alarmDialogLineContent, alarmDialogLineIndex, dueTime, stages, recurrenceConfig)
             }
         },
-        onAlarmSaveInstance = alarmDialogRecurringAlarm?.let { _ ->
+        onAlarmSaveInstance = alarmDialogRecurringAlarm?.let { recurring ->
             { alarm, dueTime, stages, alsoUpdateRecurrence ->
                 currentNoteViewModel.updateInstanceTimes(alarm, dueTime, stages, alsoUpdateRecurrence)
+                // Instance save on recurring: switch [alarm(...)] → [recurringAlarm(...)]
+                switchDirectiveIfNeeded(AlarmSymbolUtils.recurringAlarmDirective(recurring.id))
             }
         },
-        onAlarmSaveRecurrenceTemplate = alarmDialogRecurringAlarm?.let { _ ->
+        onAlarmSaveRecurrenceTemplate = alarmDialogRecurringAlarm?.let { recurring ->
             { recId, dueTime, stages, config, alsoUpdateInstances ->
                 currentNoteViewModel.updateRecurrenceTemplate(recId, dueTime, stages, config, alsoUpdateInstances)
+                // Recurrence template save: switch [alarm(...)] → [recurringAlarm(...)]
+                switchDirectiveIfNeeded(AlarmSymbolUtils.recurringAlarmDirective(recurring.id))
             }
         },
         onAlarmMarkDone = alarmDialogExistingAlarm?.let { alarm -> { currentNoteViewModel.markAlarmDone(alarm.id) } },
@@ -321,6 +352,8 @@ fun CurrentNoteScreen(
             showAlarmDialog = false
             alarmDialogLineIndex = null
             alarmDialogAlarm = null
+            alarmDialogInitialMode = AlarmDialogMode.INSTANCE
+            tappedDirectiveText = null
             currentNoteViewModel.fetchRecurrenceConfig(null)
         },
         onFetchRecurrenceConfig = { currentNoteViewModel.fetchRecurrenceConfig(it) }
@@ -453,7 +486,16 @@ fun CurrentNoteScreen(
                                     alarmDialogLineContent = TextLineUtils.trimLineForAlarm(lineContent)
                                     alarmDialogLineIndex = tapInfo.lineIndex
 
-                                    if (tapInfo.alarmId != null) {
+                                    if (tapInfo.recurringAlarmId != null) {
+                                        tappedDirectiveText = AlarmSymbolUtils.recurringAlarmDirective(tapInfo.recurringAlarmId)
+                                        alarmDialogInitialMode = AlarmDialogMode.RECURRENCE
+                                        currentNoteViewModel.fetchRecurringAlarmInstance(tapInfo.recurringAlarmId) { alarm ->
+                                            alarmDialogAlarm = alarm
+                                            showAlarmDialog = true
+                                        }
+                                    } else if (tapInfo.alarmId != null) {
+                                        tappedDirectiveText = AlarmSymbolUtils.alarmDirective(tapInfo.alarmId)
+                                        alarmDialogInitialMode = AlarmDialogMode.INSTANCE
                                         currentNoteViewModel.fetchAlarmById(tapInfo.alarmId) { alarm ->
                                             alarmDialogAlarm = alarm
                                             showAlarmDialog = true
@@ -469,7 +511,7 @@ fun CurrentNoteScreen(
                         showCompleted = showCompleted,
                         symbolOverlaysProvider = { lineIndex ->
                             val lineContent = editorState.lines.getOrNull(lineIndex)?.content ?: ""
-                            currentNoteViewModel.getSymbolOverlays(lineIndex, lineContent, alarmCacheForOverlay)
+                            currentNoteViewModel.getSymbolOverlays(lineIndex, lineContent, alarmCacheForOverlay, recurringAlarmCacheForOverlay)
                         },
                         modifier = Modifier.weight(1f)
                     )
@@ -512,6 +554,8 @@ fun CurrentNoteScreen(
                     alarmDialogLineContent = TextLineUtils.trimLineForAlarm(lineContent)
                     alarmDialogLineIndex = editorState.focusedLineIndex
                     alarmDialogAlarm = null
+                    alarmDialogInitialMode = AlarmDialogMode.INSTANCE
+                    tappedDirectiveText = null
                     showAlarmDialog = true
                 }
             },
@@ -749,7 +793,12 @@ private fun ContentSyncEffects(
     // Handle alarm creation - insert alarm directive, record for undo, and save
     LaunchedEffect(alarmCreated) {
         alarmCreated?.let { event ->
-            controller.insertAtEndOfCurrentLine(AlarmSymbolUtils.alarmDirective(event.alarmId))
+            val directive = if (event.recurringAlarmId != null) {
+                AlarmSymbolUtils.recurringAlarmDirective(event.recurringAlarmId)
+            } else {
+                AlarmSymbolUtils.alarmDirective(event.alarmId)
+            }
+            controller.insertAtEndOfCurrentLine(directive)
             onContentChanged(editorState.text)
             event.alarmSnapshot?.let { snapshot ->
                 controller.recordAlarmCreation(snapshot)

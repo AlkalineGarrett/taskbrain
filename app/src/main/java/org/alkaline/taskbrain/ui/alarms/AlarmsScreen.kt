@@ -41,6 +41,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,7 +63,9 @@ import org.alkaline.taskbrain.data.RecurringAlarm
 import org.alkaline.taskbrain.service.RecurrenceConfigMapper
 import org.alkaline.taskbrain.ui.components.ErrorDialog
 import org.alkaline.taskbrain.ui.currentnote.components.AlarmConfigDialog
+import kotlinx.coroutines.launch
 import org.alkaline.taskbrain.ui.currentnote.components.AlarmDialogMode
+import org.alkaline.taskbrain.ui.currentnote.selectCurrentInstance
 import org.alkaline.taskbrain.ui.currentnote.components.RecurrenceConfig
 import org.alkaline.taskbrain.util.PermissionHelper
 import java.text.SimpleDateFormat
@@ -83,6 +86,8 @@ fun AlarmsScreen(
     val recurringAlarms by alarmsViewModel.recurringAlarms.observeAsState(emptyMap())
     val isLoading by alarmsViewModel.isLoading.observeAsState(false)
     val error by alarmsViewModel.error.observeAsState()
+
+    val coroutineScope = rememberCoroutineScope()
 
     // Instance edit dialog state
     var selectedAlarm by remember { mutableStateOf<Alarm?>(null) }
@@ -282,9 +287,16 @@ fun AlarmsScreen(
                         }
                     }
 
-                    fun openRecurrenceEditor(alarm: Alarm, @Suppress("UNUSED_PARAMETER") recurring: RecurringAlarm) {
+                    fun openRecurrenceEditor(alarm: Alarm, recurring: RecurringAlarm) {
                         dialogInitialMode = AlarmDialogMode.RECURRENCE
-                        selectedAlarm = alarm
+                        // Resolve the current instance (today's) rather than using whatever
+                        // instance was tapped — the tapped one may be a past or future instance.
+                        // Pre-populate siblingInstances so the LaunchedEffect doesn't re-fetch.
+                        coroutineScope.launch {
+                            val instances = alarmsViewModel.getInstancesForRecurring(recurring.id)
+                            siblingInstances = instances
+                            selectedAlarm = selectCurrentInstance(instances) ?: alarm
+                        }
                     }
 
                     // Past Due section

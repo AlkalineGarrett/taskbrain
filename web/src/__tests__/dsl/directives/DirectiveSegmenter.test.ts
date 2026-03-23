@@ -262,6 +262,51 @@ describe('buildDisplayText alarm directives', () => {
   })
 })
 
+describe('buildDisplayText recurringAlarm directives', () => {
+  it('marks recurringAlarm directive with isAlarm and recurringAlarmId', () => {
+    const key = directiveKey('test-line', 0)
+    const dr = directiveResultSuccess(alarmVal('rec-123'))
+    const result = buildDisplayText('[recurringAlarm("rec-123")]', 'test-line', resultsMap([[key, dr]]))
+
+    expect(result.directiveDisplayRanges).toHaveLength(1)
+    const range = result.directiveDisplayRanges[0]!
+    expect(range.isAlarm).toBe(true)
+    expect(range.recurringAlarmId).toBe('rec-123')
+    // alarmId is also set from the AlarmVal result value
+    expect(range.alarmId).toBe('rec-123')
+  })
+
+  it('recurringAlarm directive displays as clock emoji', () => {
+    const key = directiveKey('test-line', 0)
+    const dr = directiveResultSuccess(alarmVal('rec1'))
+    const result = buildDisplayText('[recurringAlarm("rec1")]', 'test-line', resultsMap([[key, dr]]))
+    expect(result.displayText).toBe('\u23F0')
+  })
+
+  it('renders recurringAlarm as clock emoji even without computed result', () => {
+    const result = buildDisplayText('[recurringAlarm("rec1")]', 'test-line', new Map())
+    expect(result.displayText).toBe('\u23F0')
+    expect(result.directiveDisplayRanges[0]!.isAlarm).toBe(true)
+    expect(result.directiveDisplayRanges[0]!.recurringAlarmId).toBe('rec1')
+  })
+
+  it('mixed alarm and recurringAlarm on same line', () => {
+    const key1 = directiveKey('test-line', 0)
+    const key2 = directiveKey('test-line', 13)
+    const dr1 = directiveResultSuccess(alarmVal('a1'))
+    const dr2 = directiveResultSuccess(alarmVal('rec1'))
+    const result = buildDisplayText(
+      '[alarm("a1")] [recurringAlarm("rec1")]', 'test-line',
+      resultsMap([[key1, dr1], [key2, dr2]])
+    )
+
+    expect(result.directiveDisplayRanges).toHaveLength(2)
+    expect(result.directiveDisplayRanges[0]!.alarmId).toBe('a1')
+    expect(result.directiveDisplayRanges[0]!.recurringAlarmId).toBeUndefined()
+    expect(result.directiveDisplayRanges[1]!.recurringAlarmId).toBe('rec1')
+  })
+})
+
 describe('hasDirectives', () => {
   it('returns true for content with brackets', () => {
     expect(hasDirectives('[test]')).toBe(true)

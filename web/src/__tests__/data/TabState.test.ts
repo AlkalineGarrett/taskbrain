@@ -190,4 +190,20 @@ describe('extractDisplayText', () => {
   it('removes both alarm symbol and alarm directive', () => {
     expect(extractDisplayText('⏰ Task [alarm("id1")]')).toBe('Task')
   })
+
+  it('removes recurring alarm directive from display text', () => {
+    expect(extractDisplayText('Task [recurringAlarm("rec123")]')).toBe('Task')
+  })
+
+  it('removes multiple recurring alarm directives', () => {
+    expect(extractDisplayText('[recurringAlarm("r1")] Task [recurringAlarm("r2")]')).toBe('Task')
+  })
+
+  it('returns (empty) for recurringAlarm-directive-only content', () => {
+    expect(extractDisplayText('[recurringAlarm("abc")]')).toBe('(empty)')
+  })
+
+  it('removes mixed alarm and recurringAlarm directives', () => {
+    expect(extractDisplayText('[alarm("a1")] Task [recurringAlarm("r1")]')).toBe('Task')
+  })
 })

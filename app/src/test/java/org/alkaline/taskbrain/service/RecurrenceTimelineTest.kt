@@ -1074,8 +1074,10 @@ class RecurrenceTimelineTest {
 
         // 2 alarms total (one per recurring)
         coVerify(exactly = 2) { mockAlarmRepo.createAlarm(any()) }
-        coVerify(exactly = 1) { mockRecurringRepo.updateCurrentAlarmId("rec1", "a2", any()) }
-        coVerify(exactly = 1) { mockRecurringRepo.updateCurrentAlarmId("rec2", "b2", any()) }
+        // onFixedInstanceTriggered does NOT update currentAlarmId — the triggering alarm
+        // is still pending and should remain current until completed/cancelled
+        coVerify(exactly = 0) { mockRecurringRepo.updateCurrentAlarmId("rec1", "a2", any()) }
+        coVerify(exactly = 0) { mockRecurringRepo.updateCurrentAlarmId("rec2", "b2", any()) }
 
         // Neither a1 nor b1 cancelled
         coVerify(exactly = 0) { mockAlarmRepo.markCancelled("a1") }

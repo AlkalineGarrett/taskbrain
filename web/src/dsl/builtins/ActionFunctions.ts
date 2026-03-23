@@ -14,6 +14,7 @@ import type { BooleanVal } from '../runtime/DslValue'
 export function getActionFunctions(): BuiltinFunction[] {
   return [
     alarmFunction,
+    recurringAlarmFunction,
     buttonFunction,
     scheduleFunction,
     // Schedule frequency constants
@@ -30,6 +31,14 @@ const alarmFunction: BuiltinFunction = {
   name: 'alarm',
   call: (args) => {
     const id = args.requireString(0, 'alarm', 'id')
+    return alarmVal(id.value)
+  },
+}
+
+const recurringAlarmFunction: BuiltinFunction = {
+  name: 'recurringAlarm',
+  call: (args) => {
+    const id = args.requireString(0, 'recurringAlarm', 'id')
     return alarmVal(id.value)
   },
 }

@@ -26,6 +26,7 @@ import org.alkaline.taskbrain.service.UrgentStateManager
 import org.alkaline.taskbrain.service.RecurrenceConfigMapper
 import org.alkaline.taskbrain.service.RecurrenceTemplateManager
 import org.alkaline.taskbrain.ui.currentnote.components.RecurrenceConfig
+import org.alkaline.taskbrain.ui.currentnote.resolveCurrentInstance
 
 class AlarmsViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -257,8 +258,8 @@ class AlarmsViewModel(application: Application) : AndroidViewModel(application) 
                 IllegalStateException("Recurring alarm not found: $recurringAlarmId")
             )
 
-        // Use the existing alarm's current instance to get threshold times for offset calculation
-        val currentAlarm = existing.currentAlarmId?.let { repository.getAlarm(it).getOrNull() }
+        // Resolve today's instance for threshold times used in offset calculation
+        val currentAlarm = repository.resolveCurrentInstance(recurringAlarmId)
 
         val updated = RecurrenceTemplateManager.mergeTemplate(
             existing,

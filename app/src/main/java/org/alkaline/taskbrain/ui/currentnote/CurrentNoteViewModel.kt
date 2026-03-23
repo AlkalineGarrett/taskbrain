@@ -9,6 +9,9 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -633,26 +636,64 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     private val _alarmCache = MutableLiveData<Map<String, Alarm>>(emptyMap())
     val alarmCache: LiveData<Map<String, Alarm>> = _alarmCache
 
+    // Recurring alarm cache: maps recurrence ID → current instance alarm
+    private val _recurringAlarmCache = MutableLiveData<Map<String, Alarm>>(emptyMap())
+    val recurringAlarmCache: LiveData<Map<String, Alarm>> = _recurringAlarmCache
+
     /**
      * Loads all alarms referenced by alarm directives in the current note's lines.
-     * Extracts alarm IDs from [alarm("id")] directives in line content.
+     * Handles both [alarm("id")] and [recurringAlarm("id")] directives.
+     * For recurring directives, fetches the RecurringAlarm → currentAlarmId → alarm instance.
      */
     fun loadAlarmStates() {
-        val alarmIds = extractAlarmIds(lineTracker.getTrackedLines())
-        if (alarmIds.isEmpty()) {
+        val extracted = extractAlarmIds(lineTracker.getTrackedLines())
+        if (extracted.alarmIds.isEmpty() && extracted.recurringAlarmIds.isEmpty()) {
             _alarmCache.value = emptyMap()
+            _recurringAlarmCache.value = emptyMap()
             return
         }
         viewModelScope.launch {
-            alarmRepository.getAlarmsByIds(alarmIds).fold(
-                onSuccess = { alarmsById ->
-                    _alarmCache.value = alarmsById
-                },
-                onFailure = { e ->
-                    Log.e("CurrentNoteViewModel", "Error loading alarm states", e)
-                    _alarmCache.value = emptyMap()
+            coroutineScope {
+                // Load direct alarm references and recurring alarm references in parallel
+                val directDeferred = async {
+                    if (extracted.alarmIds.isNotEmpty()) {
+                        alarmRepository.getAlarmsByIds(extracted.alarmIds).fold(
+                            onSuccess = { it },
+                            onFailure = { e ->
+                                Log.e(TAG, "Error loading alarm states", e)
+                                emptyMap()
+                            }
+                        )
+                    } else {
+                        emptyMap()
+                    }
                 }
-            )
+
+                val recurringDeferred = async {
+                    if (extracted.recurringAlarmIds.isNotEmpty()) {
+                        // Resolve each recurring alarm in parallel
+                        val entries = extracted.recurringAlarmIds.map { recId ->
+                            async { recId to alarmRepository.resolveCurrentInstance(recId) }
+                        }.awaitAll()
+                        entries.filter { it.second != null }.associate { it.first to it.second!! }
+                    } else {
+                        emptyMap()
+                    }
+                }
+
+                _alarmCache.value = directDeferred.await()
+                _recurringAlarmCache.value = recurringDeferred.await()
+            }
+        }
+    }
+
+    /**
+     * Fetches the current alarm instance for a recurring alarm ID.
+     * Used when tapping a [recurringAlarm("id")] directive.
+     */
+    fun fetchRecurringAlarmInstance(recurringAlarmId: String, onComplete: (Alarm?) -> Unit) {
+        viewModelScope.launch {
+            onComplete(alarmRepository.resolveCurrentInstance(recurringAlarmId))
         }
     }
 
@@ -660,8 +701,13 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      * Returns [SymbolOverlay] list for each alarm directive on the given line.
      * Delegates to pure [computeSymbolOverlays] in ViewModelPureLogic.
      */
-    fun getSymbolOverlays(lineIndex: Int, lineContent: String, alarmCache: Map<String, Alarm>): List<SymbolOverlay> =
-        computeSymbolOverlays(lineContent, alarmCache, Timestamp.now())
+    fun getSymbolOverlays(
+        lineIndex: Int,
+        lineContent: String,
+        alarmCache: Map<String, Alarm>,
+        recurringAlarmCache: Map<String, Alarm>
+    ): List<SymbolOverlay> =
+        computeSymbolOverlays(lineContent, alarmCache, recurringAlarmCache, Timestamp.now())
 
     // Scheduling failure warning
     private val _schedulingWarning = MutableLiveData<String?>()
@@ -780,7 +826,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                     stages = firstAlarm.stages
                 )
 
-                _alarmCreated.value = AlarmCreatedEvent(alarmId, lineContent, alarmSnapshot)
+                _alarmCreated.value = AlarmCreatedEvent(alarmId, lineContent, alarmSnapshot, recurringAlarmId = recurringId)
                 loadAlarmStates()
             },
             onFailure = { e ->
@@ -1264,10 +1310,14 @@ class CurrentNoteViewModel @JvmOverloads constructor(
 
         val uuidResults = mutableMapOf<String, DirectiveResult>()
         for (instance in newInstances) {
-            val match = AlarmMarkers.ALARM_DIRECTIVE_REGEX.matchEntire(instance.sourceText)
-            if (match != null) {
-                val alarmId = match.groupValues[1]
+            val alarmMatch = AlarmMarkers.ALARM_DIRECTIVE_REGEX.matchEntire(instance.sourceText)
+            val recurringMatch = AlarmMarkers.RECURRING_ALARM_DIRECTIVE_REGEX.matchEntire(instance.sourceText)
+            if (alarmMatch != null) {
+                val alarmId = alarmMatch.groupValues[1]
                 uuidResults[instance.uuid] = DirectiveResult.success(AlarmVal(alarmId))
+            } else if (recurringMatch != null) {
+                val recurringId = recurringMatch.groupValues[1]
+                uuidResults[instance.uuid] = DirectiveResult.success(AlarmVal(recurringId))
             }
         }
 
@@ -2218,7 +2268,8 @@ sealed class LoadStatus {
 data class AlarmCreatedEvent(
     val alarmId: String,
     val lineContent: String,
-    val alarmSnapshot: AlarmSnapshot? = null
+    val alarmSnapshot: AlarmSnapshot? = null,
+    val recurringAlarmId: String? = null
 )
 
 /**

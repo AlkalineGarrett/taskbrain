@@ -112,8 +112,10 @@ class RecurrenceScheduler(
         val baseTime = alarm.dueTime?.toDate() ?: return
 
         // Pass triggering alarm ID so cleanup doesn't cancel it — it's still active
-        // (a pre-due stage like notification may have triggered this)
-        createNextInstance(recurring, baseTime, triggeringAlarmId = alarm.id)
+        // (a pre-due stage like notification may have triggered this).
+        // Don't update currentAlarmId: the triggering alarm is still pending and should
+        // remain the "current" instance until it completes or is cancelled.
+        createNextInstance(recurring, baseTime, triggeringAlarmId = alarm.id, updateCurrentAlarmId = false)
     }
 
     /**
@@ -142,11 +144,15 @@ class RecurrenceScheduler(
      * @param afterDate The reference date to compute the next occurrence from
      * @param triggeringAlarmId Optional ID of the alarm that triggered this creation
      *   (e.g., when a pre-due stage fires). This alarm won't be cleaned up as orphaned.
+     * @param updateCurrentAlarmId Whether to update [RecurringAlarm.currentAlarmId] to the
+     *   new instance. Set to false when the triggering alarm is still pending (e.g.,
+     *   a pre-due stage fired) so currentAlarmId continues pointing to the active instance.
      */
     private suspend fun createNextInstance(
         recurring: RecurringAlarm,
         afterDate: Date,
-        triggeringAlarmId: String? = null
+        triggeringAlarmId: String? = null,
+        updateCurrentAlarmId: Boolean = true
     ) {
         val nextBaseTime = computeNextBaseTime(recurring, afterDate) ?: return
 
@@ -156,13 +162,15 @@ class RecurrenceScheduler(
             .onFailure { showError("Failed to create next instance for recurring alarm ${recurring.id}: ${it.message}") }
             .getOrNull() ?: return
 
-        // Only set anchorTimeOfDay if not already set (backfill for old recurring alarms).
-        // Once set, it's the source of truth and should only change via explicit user edits.
-        val anchorTime = if (recurring.anchorTimeOfDay == null) {
-            Timestamp(nextBaseTime).toTimeOfDay()
-        } else null
-        recurringRepo.updateCurrentAlarmId(recurring.id, alarmId, anchorTime)
-            .onFailure { showError("Failed to update currentAlarmId for recurring alarm ${recurring.id}: ${it.message}") }
+        if (updateCurrentAlarmId) {
+            // Only set anchorTimeOfDay if not already set (backfill for old recurring alarms).
+            // Once set, it's the source of truth and should only change via explicit user edits.
+            val anchorTime = if (recurring.anchorTimeOfDay == null) {
+                Timestamp(nextBaseTime).toTimeOfDay()
+            } else null
+            recurringRepo.updateCurrentAlarmId(recurring.id, alarmId, anchorTime)
+                .onFailure { showError("Failed to update currentAlarmId for recurring alarm ${recurring.id}: ${it.message}") }
+        }
 
         val createdAlarm = alarmRepo.getAlarm(alarmId)
             .onFailure { showError("Created alarm $alarmId but failed to fetch it for scheduling: ${it.message}") }

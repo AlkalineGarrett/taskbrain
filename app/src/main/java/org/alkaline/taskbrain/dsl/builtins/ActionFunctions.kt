@@ -25,6 +25,7 @@ object ActionFunctions {
         registry.register(buttonFunction)
         registry.register(scheduleFunction)
         registry.register(alarmFunction)
+        registry.register(recurringAlarmFunction)
 
         // Register schedule frequency constants
         ScheduleConstants.register(registry)
@@ -59,6 +60,21 @@ object ActionFunctions {
      */
     private val alarmFunction = BuiltinFunction(name = "alarm") { args, _ ->
         val id = args.requireString(0, "alarm", "id")
+        AlarmVal(id.value)
+    }
+
+    /**
+     * recurringAlarm(id) - Creates a recurring alarm reference that renders as ⏰ in the editor.
+     *
+     * Like alarm(), but encodes the recurring alarm template ID instead of a specific
+     * instance ID. At display time, resolves to the current instance's status.
+     *
+     * Usage: [recurringAlarm("recId123")]
+     *
+     * @param id The Firestore recurring alarm document ID
+     */
+    private val recurringAlarmFunction = BuiltinFunction(name = "recurringAlarm") { args, _ ->
+        val id = args.requireString(0, "recurringAlarm", "id")
         AlarmVal(id.value)
     }
 

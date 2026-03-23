@@ -1,5 +1,6 @@
 package org.alkaline.taskbrain.dsl.directives
 
+import org.alkaline.taskbrain.data.AlarmMarkers
 import org.alkaline.taskbrain.dsl.runtime.values.AlarmVal
 import org.alkaline.taskbrain.dsl.runtime.values.ButtonVal
 import org.alkaline.taskbrain.dsl.runtime.values.ViewVal
@@ -39,26 +40,36 @@ sealed class DirectiveSegment {
                 }
                 // Alarm directives are trivial pure functions — render the icon
                 // even without a computed result to avoid flicker from key mismatches
-                return alarmIdFromSource(sourceText)?.let { ALARM_SYMBOL } ?: sourceText
+                if (isAlarmDirective(sourceText)) return ALARM_SYMBOL
+                return sourceText
             }
 
         /** Whether this directive has been computed */
         val isComputed: Boolean
-            get() = result?.isComputed ?: false || alarmIdFromSource(sourceText) != null
+            get() = result?.isComputed ?: false || isAlarmDirective(sourceText)
 
         /** The synthesized result for alarm directives (key-mismatch-proof) */
         val effectiveResult: DirectiveResult?
-            get() = result ?: alarmIdFromSource(sourceText)?.let {
-                DirectiveResult.success(AlarmVal(it))
+            get() = result ?: run {
+                alarmIdFromSource(sourceText)?.let { return DirectiveResult.success(AlarmVal(it)) }
+                recurringAlarmIdFromSource(sourceText)?.let { return DirectiveResult.success(AlarmVal(it)) }
+                null
             }
 
         companion object {
             private const val ALARM_SYMBOL = "⏰"
-            private val ALARM_PATTERN = Regex("""\[alarm\("([^"]+)"\)]""")
 
             /** Extracts the alarm ID if this is an alarm directive, null otherwise. */
             fun alarmIdFromSource(sourceText: String): String? =
-                ALARM_PATTERN.matchEntire(sourceText)?.groupValues?.get(1)
+                AlarmMarkers.ALARM_DIRECTIVE_REGEX.matchEntire(sourceText)?.groupValues?.get(1)
+
+            /** Extracts the recurring alarm ID if this is a recurringAlarm directive, null otherwise. */
+            fun recurringAlarmIdFromSource(sourceText: String): String? =
+                AlarmMarkers.RECURRING_ALARM_DIRECTIVE_REGEX.matchEntire(sourceText)?.groupValues?.get(1)
+
+            /** Returns true if this is any alarm-type directive (alarm or recurringAlarm). */
+            fun isAlarmDirective(sourceText: String): Boolean =
+                alarmIdFromSource(sourceText) != null || recurringAlarmIdFromSource(sourceText) != null
         }
     }
 }
@@ -220,6 +231,7 @@ object DirectiveSegmenter {
                     val isButtonResult = resultValue is ButtonVal
                     val isAlarmResult = resultValue is AlarmVal
                     val alarmId = (resultValue as? AlarmVal)?.alarmId
+                    val recurringAlarmId = DirectiveSegment.Directive.recurringAlarmIdFromSource(segment.sourceText)
 
                     directiveRanges.add(
                         DirectiveDisplayRange(
@@ -234,7 +246,8 @@ object DirectiveSegmenter {
                             isView = isViewResult,
                             isButton = isButtonResult,
                             isAlarm = isAlarmResult,
-                            alarmId = alarmId
+                            alarmId = alarmId,
+                            recurringAlarmId = recurringAlarmId
                         )
                     )
                 }
@@ -278,5 +291,6 @@ data class DirectiveDisplayRange(
     val isView: Boolean = false,   // True if result is a ViewVal
     val isButton: Boolean = false, // True if result is a ButtonVal
     val isAlarm: Boolean = false,  // True if result is an AlarmVal
-    val alarmId: String? = null    // Alarm document ID (when isAlarm is true)
+    val alarmId: String? = null,   // Alarm document ID (when isAlarm is true)
+    val recurringAlarmId: String? = null // Recurring alarm ID (when directive is [recurringAlarm(...)])
 )

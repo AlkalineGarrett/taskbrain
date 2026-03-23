@@ -28,5 +28,7 @@ data class SymbolTapInfo(
     val charOffset: Int,
     val lineIndex: Int,
     /** The alarm document ID from the [alarm("id")] directive. */
-    val alarmId: String? = null
+    val alarmId: String? = null,
+    /** The recurring alarm ID from the [recurringAlarm("id")] directive. */
+    val recurringAlarmId: String? = null
 )

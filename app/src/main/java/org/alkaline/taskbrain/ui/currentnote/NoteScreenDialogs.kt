@@ -11,6 +11,7 @@ import org.alkaline.taskbrain.data.RecurringAlarm
 import org.alkaline.taskbrain.ui.components.ErrorDialog
 import org.alkaline.taskbrain.ui.components.WarningDialog
 import org.alkaline.taskbrain.ui.currentnote.components.AlarmConfigDialog
+import org.alkaline.taskbrain.ui.currentnote.components.AlarmDialogMode
 import org.alkaline.taskbrain.ui.currentnote.components.RecurrenceConfig
 
 /**
@@ -38,6 +39,7 @@ fun NoteScreenDialogs(
     showAlarmDialog: Boolean,
     alarmDialogLineContent: String,
     alarmDialogExistingAlarm: Alarm?,
+    alarmDialogInitialMode: AlarmDialogMode = AlarmDialogMode.INSTANCE,
     alarmDialogRecurrenceConfig: RecurrenceConfig?,
     alarmDialogRecurringAlarm: RecurringAlarm? = null,
     alarmDialogInstanceCount: Int = 0,
@@ -145,6 +147,7 @@ fun NoteScreenDialogs(
         AlarmConfigDialog(
             lineContent = alarmDialogLineContent,
             existingAlarm = alarmDialogExistingAlarm,
+            initialMode = alarmDialogInitialMode,
             existingRecurrenceConfig = alarmDialogRecurrenceConfig,
             recurringAlarm = alarmDialogRecurringAlarm,
             recurringInstanceCount = alarmDialogInstanceCount,

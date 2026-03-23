@@ -4,11 +4,22 @@ import { directiveResultToValue, isComputed } from './DirectiveResult'
 import { toDisplayString } from '../runtime/DslValue'
 
 const ALARM_PATTERN = /^\[alarm\("([^"]+)"\)]$/
+const RECURRING_ALARM_PATTERN = /^\[recurringAlarm\("([^"]+)"\)]$/
 const ALARM_SYMBOL = '⏰'
 
 /** Extracts alarm ID if source text is an alarm directive, undefined otherwise. */
 function alarmIdFromSource(sourceText: string): string | undefined {
   return ALARM_PATTERN.exec(sourceText)?.[1]
+}
+
+/** Extracts recurring alarm ID if source text is a recurringAlarm directive, undefined otherwise. */
+function recurringAlarmIdFromSource(sourceText: string): string | undefined {
+  return RECURRING_ALARM_PATTERN.exec(sourceText)?.[1]
+}
+
+/** Returns true if this is any alarm-type directive (alarm or recurringAlarm). */
+function isAlarmDirective(sourceText: string): boolean {
+  return alarmIdFromSource(sourceText) != null || recurringAlarmIdFromSource(sourceText) != null
 }
 
 // ---- Segment types ----
@@ -48,6 +59,7 @@ export interface DirectiveDisplayRange {
   isButton: boolean
   isAlarm: boolean
   alarmId?: string
+  recurringAlarmId?: string
 }
 
 export interface DisplayTextResult {
@@ -93,7 +105,7 @@ export function segmentLine(
     } else {
       // Alarm directives are trivial pure functions — render the icon
       // even without a computed result to avoid flicker from key mismatches
-      if (alarmIdFromSource(directive.sourceText)) displayText = ALARM_SYMBOL
+      if (isAlarmDirective(directive.sourceText)) displayText = ALARM_SYMBOL
     }
 
     segments.push({
@@ -104,7 +116,7 @@ export function segmentLine(
       rangeStart: directive.startOffset,
       rangeEnd: directive.endOffset,
       displayText,
-      isComputed: computed || alarmIdFromSource(directive.sourceText) != null,
+      isComputed: computed || isAlarmDirective(directive.sourceText),
     })
 
     lastEnd = directive.endOffset
@@ -144,6 +156,7 @@ export function buildDisplayText(
 
       const resultValue = segment.result ? directiveResultToValue(segment.result) : null
       const synthesizedAlarmId = alarmIdFromSource(segment.sourceText)
+      const synthesizedRecurringId = recurringAlarmIdFromSource(segment.sourceText)
       directiveDisplayRanges.push({
         key: segment.key,
         sourceRangeStart: segment.rangeStart,
@@ -157,8 +170,9 @@ export function buildDisplayText(
         hasWarning: segment.result?.warning != null,
         isView: resultValue?.kind === 'ViewVal',
         isButton: resultValue?.kind === 'ButtonVal',
-        isAlarm: resultValue?.kind === 'AlarmVal' || synthesizedAlarmId != null,
+        isAlarm: resultValue?.kind === 'AlarmVal' || synthesizedAlarmId != null || synthesizedRecurringId != null,
         alarmId: resultValue?.kind === 'AlarmVal' ? resultValue.alarmId : synthesizedAlarmId,
+        recurringAlarmId: synthesizedRecurringId,
       })
     }
   }
