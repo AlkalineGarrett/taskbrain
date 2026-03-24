@@ -1,9 +1,33 @@
 .viewContainer {
   display: block;
-  width: 100%;
+  flex: 1 1 100%;
   border-left: 3px solid var(--color-view-border);
   padding-left: 12px;
+  padding-right: 28px;
   margin: 4px 0;
+  position: relative;
+}
+
+.editButton {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-view-border);
+  font-size: 16px;
+  line-height: 24px;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+  z-index: 1;
+}
+
+.editButton:hover {
+  opacity: 1;
 }
 
 .emptyView {
@@ -33,4 +57,23 @@
   min-height: 1.4em;
   line-height: 1.4;
   font-size: var(--font-size-editor);
+}
+
+.noteSectionEditing {
+  padding: 4px 0;
+}
+
+.inlineTextarea {
+  width: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  font-family: inherit;
+  font-size: var(--font-size-editor);
+  line-height: 1.4;
+  padding: 4px 0;
+  background: var(--color-surface-focus);
+  border-radius: 4px;
+  box-sizing: border-box;
 }

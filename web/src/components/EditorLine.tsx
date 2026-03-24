@@ -4,6 +4,7 @@ import type { EditorState } from '@/editor/EditorState'
 import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
 import { hasCheckbox } from '@/editor/LinePrefixes'
 import { hasDirectives, segmentLine } from '@/dsl/directives/DirectiveSegmenter'
+import { directiveResultToValue } from '@/dsl/directives/DirectiveResult'
 import { DirectiveLineContent } from './DirectiveLineContent'
 import { getCharOffsetFromPoint, getCharOffsetHidingTextarea, getWordBoundsAt, isOnFirstVisualRow, isOnLastVisualRow, mapDisplayOffsetToSource, mapSourceOffsetToDisplay } from '@/editor/TextMeasure'
 import styles from './EditorLine.module.css'
@@ -26,7 +27,7 @@ interface EditorLineProps {
   onDirectiveEdit?: (key: string, newSourceText: string) => void
   onDirectiveRefresh?: (key: string, sourceText: string) => void
   onButtonClick?: (key: string) => void
-  onViewNoteClick?: (noteId: string) => void
+  onViewNoteSave?: (noteId: string, newContent: string) => Promise<void>
   onDragStart?: (anchorGlobalOffset: number) => void
   onGutterDragStart?: (lineIndex: number) => void
   onGutterDragUpdate?: (lineIndex: number) => void
@@ -41,7 +42,7 @@ export function EditorLine({
   onDirectiveEdit,
   onDirectiveRefresh,
   onButtonClick,
-  onViewNoteClick,
+  onViewNoteSave,
   onDragStart,
   onGutterDragStart,
   onGutterDragUpdate,
@@ -560,8 +561,14 @@ export function EditorLine({
     [lineIndex, onGutterDragUpdate],
   )
 
-  // Show directive chips for unfocused lines that contain directives
-  const showDirectiveChips = !isFocused && directiveResults && hasDirectives(content)
+  // Check if any directive on this line is a view — views stay rendered even when focused
+  const lineHasDirectives = directiveResults && hasDirectives(content)
+  const hasViewDirective = lineHasDirectives && segmentLine(content, line.effectiveId, directiveResults).some(
+    (s) => s.kind === 'Directive' && s.result?.result != null && directiveResultToValue(s.result)?.kind === 'ViewVal',
+  )
+
+  // Show directive chips for unfocused lines, or always for lines with view directives
+  const showDirectiveChips = lineHasDirectives && (!isFocused || hasViewDirective)
 
   const noteIdText = line.noteIds.join(', ')
 
@@ -582,7 +589,7 @@ export function EditorLine({
         </div>
       ) : null}
       {showDirectiveChips ? (
-        <div ref={directiveContentRef} className={`${styles.directiveContent}${hasContentSelection ? ` ${styles.grabbable}` : ''}`} data-directive-content onMouseDown={handleMouseDown} onContextMenu={handleContextMenu}>
+        <div ref={directiveContentRef} className={`${styles.directiveContent}${hasContentSelection ? ` ${styles.grabbable}` : ''}`} data-directive-content onMouseDown={hasViewDirective ? undefined : handleMouseDown} onContextMenu={hasViewDirective ? undefined : handleContextMenu}>
           {selectionRects.length > 0 && (
             <div className={styles.highlightLayer} aria-hidden>
               {selectionRects.map((r, i) => (
@@ -601,7 +608,7 @@ export function EditorLine({
             onDirectiveEdit={onDirectiveEdit}
             onDirectiveRefresh={onDirectiveRefresh}
             onButtonClick={onButtonClick}
-            onViewNoteClick={onViewNoteClick}
+            onViewNoteSave={onViewNoteSave}
           />
         </div>
       ) : (

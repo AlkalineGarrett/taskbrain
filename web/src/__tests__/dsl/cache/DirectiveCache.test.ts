@@ -21,14 +21,16 @@ describe('DirectiveCacheManager', () => {
       expect(cache.get('missing', 'note1', false)).toBeUndefined()
     })
 
-    it('global cache is shared across notes', () => {
+    it('cache is per-note even for non-self-access directives', () => {
       const cache = new DirectiveCacheManager()
       const result = cachedResultSuccess(numberVal(1), EMPTY_DEPENDENCIES)
       cache.put('key1', 'noteA', false, result)
 
-      // Same key, different note should find it since it's global
+      // Same key, different note should NOT find it — cache is always per-note
       const retrieved = cache.get('key1', 'noteB', false)
-      expect(retrieved).toBeDefined()
+      expect(retrieved).toBeUndefined()
+      // Same note should find it
+      expect(cache.get('key1', 'noteA', false)).toBeDefined()
     })
   })
 

@@ -15,6 +15,8 @@ import { computeMetadataHashes } from './MetadataHasher'
 import { Lexer } from '../language/Lexer'
 import { Parser } from '../language/Parser'
 import { executeDirective } from '../directives/DirectiveExecutor'
+import { directiveHash } from '../directives/DirectiveFinder'
+import { deserializeValue } from '../runtime/DslValue'
 
 const GLOBAL_CACHE_PLACEHOLDER = '__global__'
 
@@ -94,20 +96,12 @@ export class CachedDirectiveExecutor {
       const tokens = new Lexer(sourceText).tokenize()
       const directive = new Parser(tokens, sourceText).parseDirective()
       // Use source text hash as cache key (same as DirectiveFinder)
-      const cacheKey = this.hashSourceText(sourceText)
+      const cacheKey = directiveHash(sourceText)
       const analysis = analyze(directive.expression)
       return { cacheKey, analysis }
     } catch {
       return null
     }
-  }
-
-  private hashSourceText(sourceText: string): string {
-    let hash = 0
-    for (let i = 0; i < sourceText.length; i++) {
-      hash = ((hash << 5) - hash + sourceText.charCodeAt(i)) | 0
-    }
-    return (hash >>> 0).toString(16).padStart(8, '0')
   }
 
   private executeFresh(
@@ -137,7 +131,7 @@ export class CachedDirectiveExecutor {
     // Enrich dependencies with viewed note IDs
     let finalDependencies = baseDependencies
     if (result.result) {
-      const { deserializeValue } = require('../runtime/DslValue')
+      // deserializeValue imported at top level
       try {
         const val = deserializeValue(result.result)
         if (val?.kind === 'ViewVal') {
@@ -188,7 +182,7 @@ export class CachedDirectiveExecutor {
     const metadataHashes = computeMetadataHashes(notes, dependencies)
 
     if (result.result !== null && result.error === null) {
-      const { deserializeValue } = require('../runtime/DslValue')
+      // deserializeValue imported at top level
       try {
         const val = deserializeValue(result.result)
         if (val) return cachedResultSuccess(val, dependencies, contentHashes, metadataHashes)

@@ -139,8 +139,7 @@ class DirectiveSegmenterTest {
     @Test
     fun `hasComputedDirectives returns false when result has error`() {
         val content = "[42]"
-        // Use lineId-based key for offset 0
-        val key = DirectiveFinder.directiveKey(TEST_LINE_ID, 0)
+        val key = DirectiveResult.hashDirective("[42]")
         val errorResult = mapOf(key to DirectiveResult.failure("Error"))
         assertFalse(DirectiveSegmenter.hasComputedDirectives(content, TEST_LINE_ID, errorResult))
     }
@@ -328,13 +327,10 @@ class DirectiveSegmenterTest {
     fun `buildDisplayText alarm with prefix adjustment has correct ranges`() {
         // End-to-end: checkbox prefix "☐ " (2 chars) + content with alarm
         val content = "[alarm(\"z\")]"
-        val prefixLength = 2
-        val fullOffset = prefixLength // directive starts right after prefix
-        val key = DirectiveFinder.directiveKey(TEST_LINE_ID, fullOffset)
+        val key = DirectiveResult.hashDirective("[alarm(\"z\")]")
         val results = mapOf(key to DirectiveFinder.executeDirective("[alarm(\"z\")]").result)
 
-        val adjusted = DirectiveSegmenter.adjustKeysForPrefix(results, TEST_LINE_ID, prefixLength)
-        val result = DirectiveSegmenter.buildDisplayText(content, TEST_LINE_ID, adjusted)
+        val result = DirectiveSegmenter.buildDisplayText(content, TEST_LINE_ID, results)
 
         assertEquals("⏰", result.displayText)
         val range = result.directiveDisplayRanges[0]
@@ -420,17 +416,10 @@ class DirectiveSegmenterTest {
         // parseAllDirectiveLocations would find directive at offset 2 in full text
         // But buildDisplayText receives content "[alarm("x")]" and looks up at offset 0
         val content = "[alarm(\"x\")]"
-        val fullLineOffset = 2 // "☐ " prefix length
-        val key = DirectiveFinder.directiveKey(TEST_LINE_ID, fullLineOffset)
+        val key = DirectiveResult.hashDirective("[alarm(\"x\")]")
         val results = mapOf(key to DirectiveFinder.executeDirective("[alarm(\"x\")]").result)
 
-        // Without adjustment: lookup fails, but alarm directives render as icon anyway
-        val unadjusted = DirectiveSegmenter.buildDisplayText(content, TEST_LINE_ID, results)
-        assertEquals("⏰", unadjusted.displayText) // Alarm short-circuit renders icon
-
-        // With adjustment: lookup succeeds
-        val adjusted = DirectiveSegmenter.adjustKeysForPrefix(results, TEST_LINE_ID, fullLineOffset)
-        val result = DirectiveSegmenter.buildDisplayText(content, TEST_LINE_ID, adjusted)
+        val result = DirectiveSegmenter.buildDisplayText(content, TEST_LINE_ID, results)
         assertEquals("⏰", result.displayText)
         assertTrue(result.directiveDisplayRanges[0].isAlarm)
     }
@@ -438,27 +427,21 @@ class DirectiveSegmenterTest {
     @Test
     fun `buildDisplayText finds result when keys adjusted for bullet prefix`() {
         val content = "Buy milk [alarm(\"y\")]"
-        val prefixLength = 2 // "• " prefix
         val lineId = "line-5"
-        val fullOffset = 9 + prefixLength // "Buy milk " = 9 chars + 2 prefix
-        val key = DirectiveFinder.directiveKey(lineId, fullOffset)
+        val key = DirectiveResult.hashDirective("[alarm(\"y\")]")
         val results = mapOf(key to DirectiveFinder.executeDirective("[alarm(\"y\")]").result)
 
-        val adjusted = DirectiveSegmenter.adjustKeysForPrefix(results, lineId, prefixLength)
-        val result = DirectiveSegmenter.buildDisplayText(content, lineId, adjusted)
+        val result = DirectiveSegmenter.buildDisplayText(content, lineId, results)
         assertEquals("Buy milk ⏰", result.displayText)
     }
 
     @Test
     fun `buildDisplayText finds result when keys adjusted for tab prefix`() {
         val content = "[42]"
-        val prefixLength = 1 // single tab
-        val fullOffset = prefixLength // directive starts right after tab
-        val key = DirectiveFinder.directiveKey(TEST_LINE_ID, fullOffset)
+        val key = DirectiveResult.hashDirective("[42]")
         val results = mapOf(key to DirectiveFinder.executeDirective("[42]").result)
 
-        val adjusted = DirectiveSegmenter.adjustKeysForPrefix(results, TEST_LINE_ID, prefixLength)
-        val result = DirectiveSegmenter.buildDisplayText(content, TEST_LINE_ID, adjusted)
+        val result = DirectiveSegmenter.buildDisplayText(content, TEST_LINE_ID, results)
         assertEquals("42", result.displayText)
     }
 
@@ -466,17 +449,38 @@ class DirectiveSegmenterTest {
     fun `buildDisplayText finds result when keys adjusted for tab plus checkbox prefix`() {
         // "\t☐ [alarm("z")]" — prefix is "\t☐ " = 3 chars
         val content = "[alarm(\"z\")]"
-        val prefixLength = 3
-        val fullOffset = prefixLength
         val noteId = "testNote"
-        val key = DirectiveFinder.directiveKey(noteId, fullOffset)
+        val key = DirectiveResult.hashDirective("[alarm(\"z\")]")
         val results = mapOf(key to DirectiveFinder.executeDirective("[alarm(\"z\")]").result)
 
-        val adjusted = DirectiveSegmenter.adjustKeysForPrefix(results, noteId, prefixLength)
-        val result = DirectiveSegmenter.buildDisplayText(content, noteId, adjusted)
+        val result = DirectiveSegmenter.buildDisplayText(content, noteId, results)
         assertEquals("⏰", result.displayText)
         assertTrue(result.directiveDisplayRanges[0].isAlarm)
         assertEquals("z", result.directiveDisplayRanges[0].alarmId)
+    }
+
+    // endregion
+
+    // region executeAllDirectives key format tests
+
+    @Test
+    fun `executeAllDirectives produces position-independent keys`() {
+        // Two identical directives at different positions produce the same key
+        val content = "[42] and [42]"
+        val results = DirectiveFinder.executeAllDirectives(content, TEST_LINE_ID)
+        // Both [42] directives share the same hash key, so only 1 entry
+        assertEquals(1, results.size)
+        val key = results.keys.first()
+        assertEquals(DirectiveResult.hashDirective("[42]"), key)
+    }
+
+    @Test
+    fun `executeAllDirectives produces different keys for different directives`() {
+        val content = "[42] and [43]"
+        val results = DirectiveFinder.executeAllDirectives(content, TEST_LINE_ID)
+        assertEquals(2, results.size)
+        assertTrue(results.containsKey(DirectiveResult.hashDirective("[42]")))
+        assertTrue(results.containsKey(DirectiveResult.hashDirective("[43]")))
     }
 
     // endregion

@@ -105,10 +105,10 @@ export class DirectiveCacheManager {
     this.perNoteCache = new PerNoteDirectiveCache()
   }
 
-  get(directiveKey: string, noteId: string, usesSelfAccess: boolean): CachedDirectiveResult | undefined {
-    return usesSelfAccess
-      ? this.perNoteCache.get(noteId, directiveKey)
-      : this.globalCache.get(directiveKey)
+  get(directiveKey: string, noteId: string, _usesSelfAccess: boolean): CachedDirectiveResult | undefined {
+    // Always use per-note cache: directive results are scoped to the parent note
+    // that contains them, even for directives that don't reference the current note.
+    return this.perNoteCache.get(noteId, directiveKey)
   }
 
   getIfValid(
@@ -124,12 +124,8 @@ export class DirectiveCacheManager {
     return cached
   }
 
-  put(directiveKey: string, noteId: string, usesSelfAccess: boolean, result: CachedDirectiveResult): void {
-    if (usesSelfAccess) {
-      this.perNoteCache.put(noteId, directiveKey, result)
-    } else {
-      this.globalCache.put(directiveKey, result)
-    }
+  put(directiveKey: string, noteId: string, _usesSelfAccess: boolean, result: CachedDirectiveResult): void {
+    this.perNoteCache.put(noteId, directiveKey, result)
   }
 
   clearNote(noteId: string): void {

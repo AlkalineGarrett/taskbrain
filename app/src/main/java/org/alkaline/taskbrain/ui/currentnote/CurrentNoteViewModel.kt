@@ -181,6 +181,11 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     private val _directiveResults = MutableLiveData<Map<String, DirectiveResult>>(emptyMap())
     val directiveResults: LiveData<Map<String, DirectiveResult>> = _directiveResults
 
+    // Bumped after async directive execution completes, triggering recomposition
+    // so the synchronous computeDirectiveResults() picks up newly cached results.
+    private val _directiveCacheGeneration = MutableLiveData(0)
+    val directiveCacheGeneration: LiveData<Int> = _directiveCacheGeneration
+
     // Button execution states - maps directive key to execution state
     private val _buttonExecutionStates = MutableLiveData<Map<String, ButtonExecutionState>>(emptyMap())
     val buttonExecutionStates: LiveData<Map<String, ButtonExecutionState>> = _buttonExecutionStates
@@ -383,6 +388,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
 
         currentNoteId = resolvedId
         _currentNoteIdLiveData.value = currentNoteId
+        // (generation bumped after async load completes)
         Log.d(TAG, "loadContent: switching to noteId=$currentNoteId, cachedNotes=${cachedNotes?.size}, cachedNotesNull=${cachedNotes == null}")
 
         // Save the current note as the last viewed note
@@ -1152,6 +1158,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             }
 
             _directiveResults.value = latestResults
+            _directiveCacheGeneration.value = (_directiveCacheGeneration.value ?: 0) + 1
             Log.d(TAG, "Live executed ${executedResults.size} directives")
         }
     }
@@ -1377,6 +1384,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         if (!DirectiveFinder.containsDirectives(content)) {
             directiveInstances = emptyList()
             _directiveResults.postValue(emptyMap())
+            _directiveCacheGeneration.postValue((_directiveCacheGeneration.value ?: 0) + 1)
             return
         }
 
@@ -1434,6 +1442,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         if (missingInstances.isEmpty()) {
             // All directives have cached results
             _directiveResults.postValue(uuidResults)
+            _directiveCacheGeneration.postValue((_directiveCacheGeneration.value ?: 0) + 1)
             return
         }
 
@@ -1469,6 +1478,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         processMutations(allMutations, skipEditorCallback = true)
 
         _directiveResults.postValue(uuidResults)
+        _directiveCacheGeneration.postValue((_directiveCacheGeneration.value ?: 0) + 1)
     }
 
     /**
@@ -1672,6 +1682,30 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     fun getResultsByPosition(effectiveIds: List<String>): Map<String, DirectiveResult> {
         val uuidResults = _directiveResults.value ?: return emptyMap()
         return mapResultsByPosition(directiveInstances, uuidResults, effectiveIds)
+    }
+
+    /**
+     * Compute directive results synchronously using the CachedDirectiveExecutor.
+     * Results are keyed by directiveHash(sourceText) — same key the rendering layer uses.
+     * Cache hits return instantly; misses execute and cache for next call.
+     * Returns empty map if notes haven't loaded yet.
+     */
+    fun computeDirectiveResults(content: String): Map<String, DirectiveResult> {
+        val notes = cachedNotes ?: return emptyMap()
+        val currentNote = cachedCurrentNote
+
+        val hashResults = mutableMapOf<String, DirectiveResult>()
+        for (line in content.lines()) {
+            for (directive in DirectiveFinder.findDirectives(line)) {
+                val hash = DirectiveResult.hashDirective(directive.sourceText)
+                if (hashResults.containsKey(hash)) continue
+                val result = cachedDirectiveExecutor.execute(
+                    directive.sourceText, notes, currentNote, noteOperations
+                )
+                hashResults[hash] = result.result
+            }
+        }
+        return hashResults
     }
 
     /**

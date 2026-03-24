@@ -183,13 +183,11 @@ class DirectiveCacheManager(
     fun get(
         directiveKey: String,
         noteId: String,
-        usesSelfAccess: Boolean
+        @Suppress("UNUSED_PARAMETER") usesSelfAccess: Boolean
     ): CachedDirectiveResult? {
-        return if (usesSelfAccess) {
-            perNoteCache.get(noteId, directiveKey)
-        } else {
-            globalCache.get(directiveKey)
-        }
+        // Always use per-note cache: directive results are scoped to the parent note
+        // that contains them, even for directives that don't reference the current note.
+        return perNoteCache.get(noteId, directiveKey)
     }
 
     /**
@@ -215,11 +213,7 @@ class DirectiveCacheManager(
         // Check L2 if available
         val l2 = l2Cache ?: return null
 
-        val l2Result = if (usesSelfAccess) {
-            l2.getPerNote(noteId, directiveKey)
-        } else {
-            l2.getGlobal(directiveKey)
-        }
+        val l2Result = l2.getPerNote(noteId, directiveKey)
 
         // If L2 hit, populate L1
         if (l2Result != null) {
@@ -296,14 +290,10 @@ class DirectiveCacheManager(
     fun put(
         directiveKey: String,
         noteId: String,
-        usesSelfAccess: Boolean,
+        @Suppress("UNUSED_PARAMETER") usesSelfAccess: Boolean,
         result: CachedDirectiveResult
     ) {
-        if (usesSelfAccess) {
-            perNoteCache.put(noteId, directiveKey, result)
-        } else {
-            globalCache.put(directiveKey, result)
-        }
+        perNoteCache.put(noteId, directiveKey, result)
     }
 
     /**
@@ -327,12 +317,7 @@ class DirectiveCacheManager(
 
         // Store in L2 if available
         val l2 = l2Cache ?: return
-
-        if (usesSelfAccess) {
-            l2.putPerNote(noteId, directiveKey, result)
-        } else {
-            l2.putGlobal(directiveKey, result)
-        }
+        l2.putPerNote(noteId, directiveKey, result)
     }
 
     /**

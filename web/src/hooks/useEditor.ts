@@ -25,6 +25,7 @@ export function useEditor(noteId: string | undefined) {
   const [controller] = useState(() => new EditorController(editorState, undoManager))
 
   const [loading, setLoading] = useState(true)
+  const [loadedNoteId, setLoadedNoteId] = useState<string | null>(null)
   const [showLoading, setShowLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -133,6 +134,7 @@ export function useEditor(noteId: string | undefined) {
 
       setDirty(wasCached ? cachedDirty : false)
       setLoading(false)
+      setLoadedNoteId(noteId)
     }
 
     // Try cache first for instant display
@@ -336,6 +338,7 @@ export function useEditor(noteId: string | undefined) {
     controller,
     editorState,
     loading,
+    loadedNoteId,
     showLoading,
     saving,
     error,

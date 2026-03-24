@@ -24,6 +24,7 @@ const findFunction: BuiltinFunction = {
     const currentNoteId = env.getCurrentNoteRaw()?.id
 
     const filtered = notes.filter((note) => {
+      if (note.state === 'deleted') return false
       if (currentNoteId && note.id === currentNoteId) return false
       return (
         matchesFilter(pathArg, note.path, 'path') &&
@@ -114,6 +115,7 @@ const viewFunction: BuiltinFunction = {
 
     // Render each note's content with directives evaluated
     const renderedContents = notes.map((note) => renderNoteContent(note, env))
+
     return viewVal(notes, renderedContents)
   },
 }

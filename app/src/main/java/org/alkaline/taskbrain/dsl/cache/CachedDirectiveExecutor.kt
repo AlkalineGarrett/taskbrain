@@ -125,7 +125,6 @@ class CachedDirectiveExecutor(
         }
 
         if (cachedResult != null) {
-            // Cache hit - convert to DirectiveResult and return
             val directiveResult = cachedResultToDirectiveResult(cachedResult)
             return CachedExecutionResult(
                 result = directiveResult,

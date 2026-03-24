@@ -1,145 +1,84 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import type { Note } from '@/data/Note'
-import type { NoteMutation } from '@/dsl/runtime/NoteMutation'
 import type { NoteOperations } from '@/dsl/runtime/NoteOperations'
+import type { EditorState } from '@/editor/EditorState'
 import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
-import { executeAllDirectives, executeDirective } from '@/dsl/directives/DirectiveExecutor'
-import { hashDirective, findDirectives, directiveKey } from '@/dsl/directives/DirectiveFinder'
-import { getDirectiveResults, saveDirectiveResult } from '@/dsl/directives/DirectiveResultRepository'
+import { findDirectives, directiveHash } from '@/dsl/directives/DirectiveFinder'
+import { CachedDirectiveExecutor } from '@/dsl/cache/CachedDirectiveExecutor'
 
 interface UseDirectivesOptions {
+  /** The noteId of the currently loaded note (null until loaded). */
   noteId: string | null
+  /** The editor state — content is read via editorState.text. */
+  editorState: EditorState
   notes: Note[]
   currentNote: Note | null
   noteOperations?: NoteOperations
-  onMutations?: (mutations: NoteMutation[]) => void
 }
 
-export function useDirectives({ noteId, notes, currentNote, noteOperations, onMutations }: UseDirectivesOptions) {
-  const [results, setResults] = useState<Map<string, DirectiveResult>>(new Map())
-  const [isExecuting, setIsExecuting] = useState(false)
-  const resultsRef = useRef(results)
-  resultsRef.current = results
+/**
+ * Directive results computed synchronously as a derived value of the current state.
+ * No effects, no races — results update in the same render as their inputs.
+ *
+ * Results are keyed by directiveHash(sourceText). The same directive appearing
+ * multiple times in one note shares a single result entry.
+ */
+export function useDirectives({ noteId, editorState, notes, currentNote, noteOperations }: UseDirectivesOptions) {
+  // Bump this to force recomputation (e.g., after clearing the cache).
+  const [generation, setGeneration] = useState(0)
 
-  /**
-   * Load cached results from Firestore and execute any missing directives.
-   */
-  const loadAndExecute = useCallback(
-    async (content: string, lineIds: string[] = []) => {
-      if (!noteId) return
+  const cachedExecutor = useMemo(() => new CachedDirectiveExecutor(), [])
 
-      setIsExecuting(true)
-      try {
-        // Load cached results from Firestore (keyed by hash)
-        const cachedByHash = await getDirectiveResults(noteId)
+  // Compute directive results synchronously during render.
+  // Cache hits return instantly; misses execute and cache for next time.
+  // noteId here is loadedNoteId — it only changes after the editor has been populated,
+  // guaranteeing editorState.text reflects the correct note.
+  const results = useMemo(() => {
+    if (!noteId || notes.length === 0) return new Map<string, DirectiveResult>()
 
-        // Parse directives and map hash-based results to position-based keys
-        const positionResults = new Map<string, DirectiveResult>()
-        const lines = content.split('\n')
+    const content = editorState.text
+    if (!content) return new Map<string, DirectiveResult>()
 
-        for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-          const directives = findDirectives(lines[lineIndex]!)
-          const lineId = lineIds[lineIndex] ?? `tmp:${lineIndex}`
-          for (const directive of directives) {
-            const posKey = directiveKey(lineId, directive.startOffset)
-            const hash = await hashDirective(directive.sourceText)
-            const cached = cachedByHash.get(hash)
+    const hashResults = new Map<string, DirectiveResult>()
+    const lines = content.split('\n')
 
-            if (cached && cached.result !== null && cached.error === null) {
-              // Use cached result (skip stale view results)
-              positionResults.set(posKey, cached)
-            } else {
-              // Execute fresh
-              const result = executeDirective(directive.sourceText, notes, currentNote, noteOperations)
-              positionResults.set(posKey, result)
-            }
-          }
-        }
-
-        setResults(positionResults)
-      } catch (e) {
-        console.error('Error loading directives:', e)
-      } finally {
-        setIsExecuting(false)
-      }
-    },
-    [noteId, notes, currentNote, noteOperations],
-  )
-
-  /**
-   * Execute all directives fresh and save results to Firestore.
-   */
-  const executeAndSave = useCallback(
-    async (content: string, lineIds: string[] = []) => {
-      if (!noteId) return
-
-      setIsExecuting(true)
-      try {
-        // Execute all directives
-        const { results: newResults, mutations } = executeAllDirectives(
-          content, notes, currentNote, noteOperations, lineIds,
+    for (const line of lines) {
+      for (const directive of findDirectives(line)) {
+        const hash = directiveHash(directive.sourceText)
+        if (hashResults.has(hash)) continue
+        const { result } = cachedExecutor.execute(
+          directive.sourceText, notes, currentNote, noteOperations,
         )
-
-        // Propagate mutations to caller
-        if (mutations.length > 0 && onMutations) {
-          onMutations(mutations)
-        }
-
-        // Preserve collapsed state from existing results
-        const mergedResults = new Map<string, DirectiveResult>()
-        for (const [key, result] of newResults) {
-          const existing = resultsRef.current.get(key)
-          mergedResults.set(key, {
-            ...result,
-            collapsed: existing?.collapsed ?? result.collapsed,
-          })
-        }
-
-        setResults(mergedResults)
-
-        // Save to Firestore (keyed by hash)
-        const lines = content.split('\n')
-        for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-          const directives = findDirectives(lines[lineIndex]!)
-          const lineId = lineIds[lineIndex] ?? `tmp:${lineIndex}`
-          for (const directive of directives) {
-            const posKey = directiveKey(lineId, directive.startOffset)
-            const result = mergedResults.get(posKey)
-            if (result) {
-              const hash = await hashDirective(directive.sourceText)
-              await saveDirectiveResult(noteId, hash, result)
-            }
-          }
-        }
-      } catch (e) {
-        console.error('Error executing directives:', e)
-      } finally {
-        setIsExecuting(false)
+        hashResults.set(hash, result)
       }
-    },
-    [noteId, notes, currentNote, noteOperations, onMutations],
-  )
+    }
+
+    return hashResults
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [noteId, notes, currentNote, noteOperations, cachedExecutor, generation])
 
   /**
-   * Refresh a single directive by its position key.
+   * Invalidate the cache and recompute all directives on next render.
+   * Call after saves, edits, or any operation that changes directive inputs.
+   */
+  const invalidateAndRecompute = useCallback(() => {
+    cachedExecutor.clearAll()
+    setGeneration((g) => g + 1)
+  }, [cachedExecutor])
+
+  /**
+   * Refresh a single directive (clears its cache entry and recomputes).
    */
   const refreshDirective = useCallback(
-    (key: string, sourceText: string) => {
-      const result = executeDirective(sourceText, notes, currentNote, noteOperations)
-      setResults((prev) => {
-        const next = new Map(prev)
-        next.set(key, result)
-        return next
-      })
+    (_key: string, _sourceText: string) => {
+      invalidateAndRecompute()
     },
-    [notes, currentNote, noteOperations],
+    [invalidateAndRecompute],
   )
 
   return {
     results,
-    isExecuting,
-    loadAndExecute,
-    executeAndSave,
+    invalidateAndRecompute,
     refreshDirective,
   }
 }

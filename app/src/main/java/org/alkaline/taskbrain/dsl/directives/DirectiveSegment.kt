@@ -118,7 +118,7 @@ object DirectiveSegmenter {
                 )
             }
 
-            val key = DirectiveFinder.directiveKey(lineId, directive.startOffset)
+            val key = DirectiveResult.hashDirective(directive.sourceText)
             val lookupResult = results[key]
             segments.add(
                 DirectiveSegment.Directive(
@@ -158,7 +158,7 @@ object DirectiveSegmenter {
     fun hasComputedDirectives(content: String, lineId: String, results: Map<String, DirectiveResult>): Boolean {
         val directives = DirectiveFinder.findDirectives(content)
         return directives.any { directive ->
-            val key = DirectiveFinder.directiveKey(lineId, directive.startOffset)
+            val key = DirectiveResult.hashDirective(directive.sourceText)
             results[key]?.isComputed ?: false
         }
     }

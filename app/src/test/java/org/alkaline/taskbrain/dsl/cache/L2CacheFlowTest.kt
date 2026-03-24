@@ -49,22 +49,22 @@ class L2CacheFlowTest {
     fun `getWithL2Fallback falls back to L2 on L1 miss`() = runBlocking {
         val result = createResult(42)
 
-        // Put directly in L2
-        l2Cache.putGlobal("hash1", result)
+        // Put directly in L2 per-note cache
+        l2Cache.putPerNote("note1", "hash1", result)
 
         // L1 miss should trigger L2 lookup
         val retrieved = manager.getWithL2Fallback("hash1", "note1", usesSelfAccess = false)
 
         assertEquals(result, retrieved)
-        assertEquals(1, l2Cache.globalGetCount)
+        assertEquals(1, l2Cache.perNoteGetCount)
     }
 
     @Test
     fun `getWithL2Fallback populates L1 from L2 hit`() = runBlocking {
         val result = createResult(42)
 
-        // Put directly in L2
-        l2Cache.putGlobal("hash1", result)
+        // Put directly in L2 per-note cache
+        l2Cache.putPerNote("note1", "hash1", result)
 
         // First call - L2 hit, should populate L1
         manager.getWithL2Fallback("hash1", "note1", usesSelfAccess = false)
@@ -72,7 +72,7 @@ class L2CacheFlowTest {
         // Second call - should hit L1, not L2
         manager.getWithL2Fallback("hash1", "note1", usesSelfAccess = false)
 
-        assertEquals(1, l2Cache.globalGetCount)  // Only one L2 access
+        assertEquals(1, l2Cache.perNoteGetCount)  // Only one L2 access
     }
 
     @Test
@@ -80,7 +80,7 @@ class L2CacheFlowTest {
         val retrieved = manager.getWithL2Fallback("missing", "note1", usesSelfAccess = false)
 
         assertNull(retrieved)
-        assertEquals(1, l2Cache.globalGetCount)
+        assertEquals(1, l2Cache.perNoteGetCount)
     }
 
     @Test
@@ -124,8 +124,8 @@ class L2CacheFlowTest {
         val l1Result = manager.get("hash1", "note1", usesSelfAccess = false)
         assertEquals(result, l1Result)
 
-        // Verify L2
-        val l2Result = l2Cache.getGlobal("hash1")
+        // Verify L2 (always per-note now)
+        val l2Result = l2Cache.getPerNote("note1", "hash1")
         assertEquals(result, l2Result)
     }
 
@@ -158,7 +158,7 @@ class L2CacheFlowTest {
         )
 
         // Put stale result in L2
-        l2Cache.putGlobal("hash1", result)
+        l2Cache.putPerNote("note1", "hash1", result)
 
         // Should return null because stale
         val retrieved = manager.getIfValidWithL2Fallback(
@@ -182,7 +182,7 @@ class L2CacheFlowTest {
         )
 
         // Put fresh result in L2
-        l2Cache.putGlobal("hash1", result)
+        l2Cache.putPerNote("note1", "hash1", result)
 
         // Should return result
         val retrieved = manager.getIfValidWithL2Fallback(
@@ -200,7 +200,7 @@ class L2CacheFlowTest {
         val result = CachedDirectiveResult.error(NetworkError("Connection failed"))
 
         // Put non-deterministic error in L2
-        l2Cache.putGlobal("hash1", result)
+        l2Cache.putPerNote("note1", "hash1", result)
 
         // Should return null (retry)
         val retrieved = manager.getIfValidWithL2Fallback(

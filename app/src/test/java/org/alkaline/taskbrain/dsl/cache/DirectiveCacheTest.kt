@@ -236,13 +236,15 @@ class DirectiveCacheTest {
     }
 
     @Test
-    fun `manager global cache is shared across notes`() {
+    fun `manager cache is per-note even for non-self-access`() {
         val result = createSuccessResult(42)
 
         manager.put("hash1", "note1", usesSelfAccess = false, result)
         val retrievedFromNote2 = manager.get("hash1", "note2", usesSelfAccess = false)
 
-        assertEquals(result, retrievedFromNote2)
+        assertNull(retrievedFromNote2)
+        // Same note finds it
+        assertEquals(result, manager.get("hash1", "note1", usesSelfAccess = false))
     }
 
     @Test
@@ -373,9 +375,10 @@ class DirectiveCacheTest {
 
         val stats = manager.stats()
 
-        assertEquals(1, stats.global.size)
+        // All entries go to per-note cache (global cache not used)
+        assertEquals(0, stats.global.size)
         assertEquals(2, stats.perNote.noteCount)
-        assertEquals(2, stats.perNote.totalEntries)
+        assertEquals(3, stats.perNote.totalEntries)
     }
 
     // endregion

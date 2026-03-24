@@ -254,7 +254,7 @@ object DirectiveFinder {
         currentNote: Note? = null
     ): Map<String, DirectiveResult> {
         return findDirectives(content).associate { found ->
-            directiveKey(lineId, found.startOffset) to
+            DirectiveResult.hashDirective(found.sourceText) to
                 executeDirective(found.sourceText, notes, currentNote).result
         }
     }

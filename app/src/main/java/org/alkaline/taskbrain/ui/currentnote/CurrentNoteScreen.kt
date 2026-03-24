@@ -55,6 +55,9 @@ import org.alkaline.taskbrain.ui.currentnote.components.CommandBar
 import org.alkaline.taskbrain.ui.currentnote.components.NoteTextField
 import org.alkaline.taskbrain.ui.currentnote.components.StatusBar
 import androidx.compose.runtime.rememberUpdatedState
+import android.util.Log
+import org.alkaline.taskbrain.dsl.directives.DirectiveFinder
+import org.alkaline.taskbrain.dsl.directives.DirectiveResult
 
 /**
  * Main screen for viewing and editing a note.
@@ -85,7 +88,8 @@ fun CurrentNoteScreen(
     val redoRollbackWarning by currentNoteViewModel.redoRollbackWarning.observeAsState()
     val isNoteDeletedFromVm by currentNoteViewModel.isNoteDeleted.observeAsState(false)
     val showCompleted by currentNoteViewModel.showCompleted.observeAsState(true)
-    val directiveResultsRaw by currentNoteViewModel.directiveResults.observeAsState(emptyMap())
+    // Generation counter bumps after async cache fills, triggering recomposition
+    val directiveCacheGeneration by currentNoteViewModel.directiveCacheGeneration.observeAsState(0)
     val buttonExecutionStates by currentNoteViewModel.buttonExecutionStates.observeAsState(emptyMap())
     val buttonErrors by currentNoteViewModel.buttonErrors.observeAsState(emptyMap())
     val recentTabs by recentTabsViewModel.tabs.observeAsState(emptyList())
@@ -128,10 +132,12 @@ fun CurrentNoteScreen(
 
     // Sync tracker noteIds into editor state, then map directive results using
     // the editor's effective IDs so key generation matches key lookup in rendering
-    val directiveResults = remember(directiveResultsRaw) {
-        editorState.syncNoteIds(currentNoteViewModel.getLineNoteIds())
-        val effectiveIds = editorState.lines.map { it.effectiveId }
-        currentNoteViewModel.getResultsByPosition(effectiveIds)
+    // Keep previous directive results until new ones are ready to avoid flash of raw source
+    // Compute directive results synchronously — no async races.
+    // The CachedDirectiveExecutor's L1 cache makes cache hits instant.
+    // directiveCacheGeneration triggers recomposition after async cache fills (cold start).
+    val directiveResults = remember(userContent, directiveCacheGeneration) {
+        currentNoteViewModel.computeDirectiveResults(userContent)
     }
 
     // Update hidden indices for move system when showCompleted or lines change

@@ -3,7 +3,6 @@ package org.alkaline.taskbrain.dsl.directives
 import android.util.Log
 import com.google.firebase.Timestamp
 import org.alkaline.taskbrain.dsl.runtime.DslValue
-import java.security.MessageDigest
 
 /**
  * Types of warnings that can occur during directive execution.
@@ -118,13 +117,20 @@ data class DirectiveResult(
         }
 
         /**
-         * Compute the hash of a directive's source text.
-         * Used as the document ID in Firestore.
+         * FNV-1a 64-bit hash of directive source text.
+         * Used as the cache key component (combined with noteId).
+         * Identical algorithm on Android (Kotlin) and Web (TypeScript) for cross-platform consistency.
          */
+        private const val FNV_OFFSET: Long = -3750763034362895579L // 0xcbf29ce484222325
+        private const val FNV_PRIME: Long = 1099511628211L          // 0x00000100000001b3
+
         fun hashDirective(sourceText: String): String {
-            val digest = MessageDigest.getInstance("SHA-256")
-            val hashBytes = digest.digest(sourceText.toByteArray(Charsets.UTF_8))
-            return hashBytes.joinToString("") { "%02x".format(it) }
+            var hash = FNV_OFFSET
+            for (ch in sourceText) {
+                hash = hash xor ch.code.toLong()
+                hash *= FNV_PRIME
+            }
+            return hash.toULong().toString(16).padStart(16, '0')
         }
     }
 }

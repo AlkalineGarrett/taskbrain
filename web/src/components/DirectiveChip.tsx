@@ -11,8 +11,10 @@ interface DirectiveChipProps {
   allResults?: Map<string, DirectiveResult>
   onClick?: () => void
   onButtonClick?: () => void
-  onViewNoteClick?: (noteId: string) => void
+  onViewNoteSave?: (noteId: string, newContent: string) => Promise<void>
   onDirectiveRefresh?: (key: string, sourceText: string) => void
+  /** Called when the gear icon on a view directive is clicked */
+  onEditDirective?: () => void
 }
 
 export function DirectiveChip({
@@ -21,8 +23,9 @@ export function DirectiveChip({
   allResults,
   onClick,
   onButtonClick,
-  onViewNoteClick,
+  onViewNoteSave,
   onDirectiveRefresh,
+  onEditDirective,
 }: DirectiveChipProps) {
   const [buttonState, setButtonState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
 
@@ -72,8 +75,9 @@ export function DirectiveChip({
       <ViewDirectiveRenderer
         viewVal={value}
         directiveResults={allResults ?? new Map()}
-        onNoteClick={onViewNoteClick}
+        onNoteSave={onViewNoteSave}
         onDirectiveRefresh={onDirectiveRefresh}
+        onEditDirective={onEditDirective}
       />
     )
   }

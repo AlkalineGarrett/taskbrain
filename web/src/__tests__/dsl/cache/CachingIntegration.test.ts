@@ -85,13 +85,13 @@ describe('CachingIntegration', () => {
       expect(cacheManager.get('key1', 'note2', true)).toBeUndefined()
     })
 
-    it('global cache entries are accessible from any note context', () => {
+    it('cache entries are scoped per note even for non-self-access', () => {
       const cached = cachedResultSuccess(stringVal('global'), EMPTY_DEPENDENCIES)
       cacheManager.put('key1', 'note1', false, cached)
 
-      // Should find from any note context
+      // Should only find from same note context
       expect(cacheManager.get('key1', 'note1', false)).toBeDefined()
-      expect(cacheManager.get('key1', 'note2', false)).toBeDefined()
+      expect(cacheManager.get('key1', 'note2', false)).toBeUndefined()
     })
   })
 

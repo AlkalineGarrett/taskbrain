@@ -122,23 +122,30 @@ class DirectiveResultTest {
     }
 
     @Test
-    fun `hashDirective produces 64 character hex string`() {
+    fun `hashDirective produces 16 character hex string`() {
         val hash = DirectiveResult.hashDirective("[42]")
 
-        assertEquals(64, hash.length)
+        assertEquals(16, hash.length)
         assertTrue(hash.all { it in '0'..'9' || it in 'a'..'f' })
     }
 
     @Test
     fun `hashDirective handles empty string`() {
         val hash = DirectiveResult.hashDirective("")
-        assertEquals(64, hash.length)
+        assertEquals(16, hash.length)
     }
 
     @Test
     fun `hashDirective handles unicode`() {
         val hash = DirectiveResult.hashDirective("[\"日本語\"]")
-        assertEquals(64, hash.length)
+        assertEquals(16, hash.length)
+    }
+
+    @Test
+    fun `hashDirective matches web implementation`() {
+        // Known FNV-1a 64-bit values verified against TypeScript implementation
+        assertEquals("a430d84680aabd0b", DirectiveResult.hashDirective("hello"))
+        assertEquals("11cfc5a73ae59ce5", DirectiveResult.hashDirective("[test]"))
     }
 
     // endregion

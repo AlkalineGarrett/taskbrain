@@ -19,6 +19,24 @@ export function directiveKey(lineId: string, startOffset: number): string {
 }
 
 /**
+ * FNV-1a 64-bit hash of directive source text for use as cache key component.
+ * Combined with noteId to form the full cache key: `noteId:hash`.
+ * Identical algorithm on Android (Kotlin) and Web (TypeScript) for cross-platform consistency.
+ */
+const FNV_OFFSET = BigInt('0xcbf29ce484222325')
+const FNV_PRIME = BigInt('0x00000100000001b3')
+const MASK_64 = BigInt('0xffffffffffffffff')
+
+export function directiveHash(sourceText: string): string {
+  let hash = FNV_OFFSET
+  for (let i = 0; i < sourceText.length; i++) {
+    hash = (hash ^ BigInt(sourceText.charCodeAt(i))) & MASK_64
+    hash = (hash * FNV_PRIME) & MASK_64
+  }
+  return hash.toString(16).padStart(16, '0')
+}
+
+/**
  * Extracts the startOffset from a directive key regardless of format.
  */
 export function startOffsetFromKey(key: string): number | undefined {

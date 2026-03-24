@@ -9,7 +9,6 @@ import { useDirectives } from '@/hooks/useDirectives'
 import { CommandBar } from '@/components/CommandBar'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { EditorLine } from '@/components/EditorLine'
-import { InlineEditor } from '@/components/InlineEditor'
 import { CompletedPlaceholderRow } from '@/components/CompletedPlaceholderRow'
 import { RecentTabsBar, addOrUpdateTab, updateTabDisplayText, removeTab } from '@/components/RecentTabsBar'
 import { extractDisplayText } from '@/data/TabState'
@@ -17,7 +16,7 @@ import { LOADING_NOTE, DELETE_NOTE, DELETE_NOTE_CONFIRM_TITLE, DELETE_NOTE_CONFI
 import { db, auth } from '@/firebase/config'
 import { LineState } from '@/editor/LineState'
 import { computeHiddenIndices, computeDisplayItemsFromHidden, computeEffectiveHidden, computeFadedIndices, nearestVisibleLine } from '@/editor/CompletedLineUtils'
-import { findDirectives, startOffsetFromKey } from '@/dsl/directives/DirectiveFinder'
+import { findDirectives } from '@/dsl/directives/DirectiveFinder'
 import { getCharOffsetFromPoint, getCharOffsetHidingTextarea, getCharRectInElement } from '@/editor/TextMeasure'
 import styles from './NoteEditorScreen.module.css'
 
@@ -32,37 +31,33 @@ interface HitResult {
 }
 
 export function NoteEditorScreen() {
-  const { noteId } = useParams<{ noteId: string }>()
+  const { noteId: urlNoteId } = useParams<{ noteId: string }>()
   const navigate = useNavigate()
-  const { controller, editorState, loading, showLoading, saving, error, dirty, save, showCompleted, toggleShowCompleted } = useEditor(noteId)
+  const { controller, editorState, loading, loadedNoteId, showLoading, saving, error, dirty, save, showCompleted, toggleShowCompleted } = useEditor(urlNoteId)
+  // Use loadedNoteId for all rendering — keeps showing the old note until
+  // the new one is fully loaded, preventing transition flashes.
+  const noteId = loadedNoteId ?? urlNoteId
 
-  /** Returns per-line effective IDs from editor state for directive key generation. */
-  const getLineIds = useCallback(
-    () => editorState.lines.map((l) => l.effectiveId),
-    [editorState],
-  )
-
-  // Load all notes for DSL context
+  // Load all notes with full content for DSL context (e.g., view() directive)
   const [allNotes, setAllNotes] = useState<Note[]>([])
-  const [currentNote, setCurrentNote] = useState<Note | null>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
+  // Load all notes once on mount. Reloaded explicitly after saves/edits.
   useEffect(() => {
-    if (!noteId) return
     let cancelled = false
     const load = async () => {
-      const [notes, note] = await Promise.all([
-        noteRepo.loadAllUserNotes(),
-        noteRepo.loadNoteById(noteId),
-      ])
-      if (!cancelled) {
-        setAllNotes(notes)
-        setCurrentNote(note)
-      }
+      const notes = await noteRepo.loadNotesWithFullContent()
+      if (!cancelled) setAllNotes(notes)
     }
     void load()
     return () => { cancelled = true }
-  }, [noteId])
+  }, [])
+
+  // Derive currentNote from allNotes — no separate async load, no race.
+  const currentNote = useMemo(
+    () => allNotes.find((n) => n.id === noteId) ?? null,
+    [allNotes, noteId],
+  )
 
   // Create NoteOperations for DSL mutations
   const noteOperations = useMemo(() => {
@@ -78,11 +73,6 @@ export function NoteEditorScreen() {
       setAllNotes((prev) =>
         prev.map((n) => (n.id === mutation.noteId ? mutation.updatedNote : n)),
       )
-
-      // Update current note cache if affected
-      if (mutation.noteId === noteId) {
-        setCurrentNote(mutation.updatedNote)
-      }
 
       // Update editor content if the currently-edited note was mutated
       if (mutation.noteId === noteId) {
@@ -117,50 +107,28 @@ export function NoteEditorScreen() {
     }
   }, [noteId, editorState, controller])
 
-  const { results: directiveResults, loadAndExecute, executeAndSave, refreshDirective } =
+  const activeNotes = useMemo(
+    () => allNotes.filter((n) => n.state !== 'deleted'),
+    [allNotes],
+  )
+
+  const { results: directiveResults, invalidateAndRecompute, refreshDirective } =
     useDirectives({
-      noteId: noteId ?? null,
-      notes: allNotes,
+      noteId: loadedNoteId,
+      editorState,
+      notes: activeNotes,
       currentNote,
       noteOperations,
-      onMutations: handleMutations,
     })
 
-  // Inline editing state for viewed notes
-  const [inlineEditNoteId, setInlineEditNoteId] = useState<string | null>(null)
-  const [inlineEditContent, setInlineEditContent] = useState<string>('')
-
-  const handleViewNoteClick = useCallback((viewedNoteId: string) => {
-    const note = allNotes.find((n) => n.id === viewedNoteId)
-    if (note) {
-      setInlineEditNoteId(viewedNoteId)
-      setInlineEditContent(note.content)
-    }
-  }, [allNotes])
-
-  const handleInlineEditClose = useCallback(() => {
-    setInlineEditNoteId(null)
-    setInlineEditContent('')
-  }, [])
-
-  const handleInlineEditSaved = useCallback(async () => {
-    // Refresh notes and re-execute directives after inline save
-    const [notes, note] = await Promise.all([
-      noteRepo.loadAllUserNotes(),
-      noteId ? noteRepo.loadNoteById(noteId) : Promise.resolve(null),
-    ])
+  // Save an inline-edited viewed note and refresh directives
+  const handleViewNoteSave = useCallback(async (viewedNoteId: string, newContent: string) => {
+    await noteRepo.saveNoteWithFullContent(viewedNoteId, newContent)
+    // Refresh notes and re-execute directives
+    const notes = await noteRepo.loadNotesWithFullContent()
     setAllNotes(notes)
-    setCurrentNote(note)
-    const content = editorState.text
-    void executeAndSave(content, getLineIds())
-  }, [noteId, editorState, executeAndSave])
-
-  // Execute directives when note finishes loading and notes context is available
-  useEffect(() => {
-    if (loading || !noteId || allNotes.length === 0) return
-    const content = editorState.text
-    void loadAndExecute(content, getLineIds())
-  }, [loading, noteId, allNotes.length])
+    invalidateAndRecompute()
+  }, [noteId, editorState, invalidateAndRecompute])
 
   // Add/move tab to front when note first opens, and remember for nav
   useEffect(() => {
@@ -181,41 +149,35 @@ export function NoteEditorScreen() {
   // Save with directive execution
   const saveWithDirectives = useCallback(async () => {
     await save()
-    const content = editorState.text
-    void executeAndSave(content, getLineIds())
-  }, [save, editorState, executeAndSave])
+    invalidateAndRecompute()
+  }, [save, editorState, invalidateAndRecompute])
 
   // Directive edit callback
-  const handleDirectiveEdit = useCallback((key: string, newSourceText: string) => {
-    const offset = startOffsetFromKey(key)
-    if (offset == null) return
-
-    // Find the line index from the lineId (noteId or tempId) in the key
-    const lineId = key.substring(0, key.lastIndexOf(':'))
-    let lineIndex = editorState.lines.findIndex((l) => l.effectiveId === lineId)
-    if (lineIndex < 0) return
-
-    const lineContent = editorState.lines[lineIndex]?.text ?? ''
-    const directives = findDirectives(lineContent)
-    const directive = directives.find((d) => d.startOffset === offset)
-    if (!directive) return
-    controller.confirmDirectiveEdit(lineIndex, offset, directive.endOffset, newSourceText)
-    const content = editorState.text
-    void executeAndSave(content, getLineIds())
-  }, [editorState, controller, executeAndSave, getLineIds])
+  const handleDirectiveEdit = useCallback((oldSourceText: string, newSourceText: string) => {
+    // Find the directive in the editor by matching its source text
+    for (let lineIndex = 0; lineIndex < editorState.lines.length; lineIndex++) {
+      const lineContent = editorState.lines[lineIndex]?.text ?? ''
+      const directives = findDirectives(lineContent)
+      const directive = directives.find((d) => d.sourceText === oldSourceText)
+      if (directive) {
+        controller.confirmDirectiveEdit(lineIndex, directive.startOffset, directive.endOffset, newSourceText)
+        const content = editorState.text
+        invalidateAndRecompute()
+        return
+      }
+    }
+  }, [editorState, controller, invalidateAndRecompute])
 
   // Undo/redo with directive re-execution
   const handleUndo = useCallback(() => {
     controller.undo()
-    const content = editorState.text
-    void executeAndSave(content, getLineIds())
-  }, [controller, editorState, executeAndSave])
+    invalidateAndRecompute()
+  }, [controller, editorState, invalidateAndRecompute])
 
   const handleRedo = useCallback(() => {
     controller.redo()
-    const content = editorState.text
-    void executeAndSave(content, getLineIds())
-  }, [controller, editorState, executeAndSave])
+    invalidateAndRecompute()
+  }, [controller, editorState, invalidateAndRecompute])
 
   const handleDeleteNote = useCallback(async () => {
     if (!noteId) return
@@ -232,7 +194,7 @@ export function NoteEditorScreen() {
     if (!noteId) return
     try {
       await noteRepo.undeleteNote(noteId)
-      setCurrentNote((prev) => prev ? { ...prev, state: null } : null)
+      setAllNotes((prev) => prev.map((n) => n.id === noteId ? { ...n, state: null } : n))
     } catch (e) {
       console.error('Failed to restore note:', e)
     }
@@ -586,7 +548,7 @@ export function NoteEditorScreen() {
                 directiveResults={directiveResults}
                 onDirectiveEdit={handleDirectiveEdit}
                 onDirectiveRefresh={refreshDirective}
-                onViewNoteClick={handleViewNoteClick}
+                onViewNoteSave={handleViewNoteSave}
                 onDragStart={handleDragStart}
                 onGutterDragStart={handleGutterDragStart}
                 onGutterDragUpdate={handleGutterDragUpdate}
@@ -598,14 +560,6 @@ export function NoteEditorScreen() {
       </div>
       </div>
 
-      {inlineEditNoteId && (
-        <InlineEditor
-          noteId={inlineEditNoteId}
-          initialContent={inlineEditContent}
-          onClose={handleInlineEditClose}
-          onSaved={() => void handleInlineEditSaved()}
-        />
-      )}
     </div>
   )
 }

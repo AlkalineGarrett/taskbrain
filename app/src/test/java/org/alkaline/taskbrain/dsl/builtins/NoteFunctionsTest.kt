@@ -206,6 +206,46 @@ class NoteFunctionsTest {
 
     // endregion
 
+    // region Find excludes soft-deleted notes
+
+    @Test
+    fun `find excludes soft-deleted notes`() {
+        val notes = listOf(
+            Note(id = "active1", userId = "user1", path = "a", content = "Active Note", createdAt = Timestamp(Date())),
+            Note(id = "deleted1", userId = "user1", path = "b", content = "Deleted Note", state = "deleted", createdAt = Timestamp(Date())),
+            Note(id = "active2", userId = "user1", path = "c", content = "Another Active", createdAt = Timestamp(Date()))
+        )
+        val result = execute("[find()]", notes = notes)
+
+        assertTrue(result is ListVal)
+        val list = result as ListVal
+        assertEquals(2, list.size)
+
+        val ids = list.items.map { (it as NoteVal).note.id }.toSet()
+        assertTrue(ids.contains("active1"))
+        assertTrue(ids.contains("active2"))
+        assertFalse(ids.contains("deleted1"))
+    }
+
+    @Test
+    fun `find excludes soft-deleted notes even when matching by name pattern`() {
+        val notes = listOf(
+            Note(id = "n1", userId = "user1", path = "a", content = "examples of things", createdAt = Timestamp(Date())),
+            Note(id = "n2", userId = "user1", path = "b", content = "examples deleted", state = "deleted", createdAt = Timestamp(Date()))
+        )
+        val result = execute(
+            "[find(name: pattern(\"examples\" any*any))]",
+            notes = notes
+        )
+
+        assertTrue(result is ListVal)
+        val list = result as ListVal
+        assertEquals(1, list.size)
+        assertEquals("n1", (list[0] as NoteVal).note.id)
+    }
+
+    // endregion
+
     // region Find with name filter
 
     @Test

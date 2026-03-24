@@ -108,6 +108,30 @@ describe('NoteFunctions', () => {
       expect(result.items).toHaveLength(2)
     })
 
+    it('should exclude soft-deleted notes from results', () => {
+      const note1 = makeNote({ id: 'n1', path: 'a', content: 'Active Note' })
+      const note2 = makeNote({ id: 'n2', path: 'b', content: 'Deleted Note', state: 'deleted' })
+      const note3 = makeNote({ id: 'n3', path: 'c', content: 'Another Active' })
+      const env = Environment.withNotes([note1, note2, note3])
+      const result = execute('[find()]', env) as ListVal
+      expect(result.kind).toBe('ListVal')
+      expect(result.items).toHaveLength(2)
+      const ids = result.items.map((item) => (item as NoteVal).note.id)
+      expect(ids).toContain('n1')
+      expect(ids).toContain('n3')
+      expect(ids).not.toContain('n2')
+    })
+
+    it('should exclude soft-deleted notes even when matching by name pattern', () => {
+      const note1 = makeNote({ id: 'n1', path: 'a', content: 'examples of things' })
+      const note2 = makeNote({ id: 'n2', path: 'b', content: 'examples deleted', state: 'deleted' })
+      const env = Environment.withNotes([note1, note2])
+      const result = execute('[find(name: pattern("examples" any*any))]', env) as ListVal
+      expect(result.kind).toBe('ListVal')
+      expect(result.items).toHaveLength(1)
+      expect((result.items[0] as NoteVal).note.id).toBe('n1')
+    })
+
     it('should exclude current note from results', () => {
       const note1 = makeNote({ id: 'n1', path: 'a', content: 'One' })
       const note2 = makeNote({ id: 'n2', path: 'b', content: 'Two' })

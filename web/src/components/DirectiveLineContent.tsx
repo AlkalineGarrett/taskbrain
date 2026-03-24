@@ -9,10 +9,10 @@ interface DirectiveLineContentProps {
   content: string
   lineId: string
   results: Map<string, DirectiveResult>
-  onDirectiveEdit?: (key: string, newSourceText: string) => void
+  onDirectiveEdit?: (oldSourceText: string, newSourceText: string) => void
   onDirectiveRefresh?: (key: string, sourceText: string) => void
   onButtonClick?: (key: string) => void
-  onViewNoteClick?: (noteId: string) => void
+  onViewNoteSave?: (noteId: string, newContent: string) => Promise<void>
 }
 
 /**
@@ -26,7 +26,7 @@ export function DirectiveLineContent({
   onDirectiveEdit,
   onDirectiveRefresh,
   onButtonClick,
-  onViewNoteClick,
+  onViewNoteSave,
 }: DirectiveLineContentProps) {
   const [editingKey, setEditingKey] = useState<string | null>(null)
 
@@ -37,8 +37,8 @@ export function DirectiveLineContent({
   }, [])
 
   const handleConfirm = useCallback(
-    (key: string, newSourceText: string) => {
-      onDirectiveEdit?.(key, newSourceText)
+    (oldSourceText: string, newSourceText: string) => {
+      onDirectiveEdit?.(oldSourceText, newSourceText)
       setEditingKey(null)
     },
     [onDirectiveEdit],
@@ -56,7 +56,7 @@ export function DirectiveLineContent({
   }, [])
 
   return (
-    <div>
+    <div style={{ width: '100%' }}>
       <div className={styles.lineContent}>
         {segments.map((segment, i) => {
           if (segment.kind === 'Text') {
@@ -75,8 +75,9 @@ export function DirectiveLineContent({
               allResults={results}
               onClick={() => handleChipClick(segment.key)}
               onButtonClick={onButtonClick ? () => onButtonClick(segment.key) : undefined}
-              onViewNoteClick={onViewNoteClick}
+              onViewNoteSave={onViewNoteSave}
               onDirectiveRefresh={onDirectiveRefresh}
+              onEditDirective={() => handleChipClick(segment.key)}
             />
           )
         })}
@@ -89,7 +90,7 @@ export function DirectiveLineContent({
           <DirectiveEditRow
             initialSourceText={editSegment.sourceText}
             errorMessage={editSegment.result?.error}
-            onConfirm={(newText) => handleConfirm(editingKey, newText)}
+            onConfirm={(newText) => handleConfirm(editSegment.sourceText, newText)}
             onCancel={handleCancel}
             onRefresh={(text) => handleRefresh(editingKey, text)}
           />

@@ -3,7 +3,7 @@ import type { NoteOperations } from '../runtime/NoteOperations'
 import type { NoteMutation } from '../runtime/NoteMutation'
 import type { DirectiveResult } from './DirectiveResult'
 import { directiveResultSuccess, directiveResultFailure, directiveResultWarning, DirectiveWarningType } from './DirectiveResult'
-import { findDirectives, directiveKey, hashDirective } from './DirectiveFinder'
+import { findDirectives, directiveKey } from './DirectiveFinder'
 import { Lexer } from '../language/Lexer'
 import { Parser } from '../language/Parser'
 import { Executor } from '../runtime/Executor'
@@ -115,26 +115,3 @@ export function executeAllDirectives(
   return { results, mutations: allMutations }
 }
 
-/**
- * Execute all directives and return results keyed by source text hash (for Firestore storage).
- */
-export async function executeAndHashDirectives(
-  content: string,
-  notes: Note[],
-  currentNote: Note | null,
-  noteOperations?: NoteOperations,
-): Promise<Map<string, DirectiveResult>> {
-  const results = new Map<string, DirectiveResult>()
-  const lines = content.split('\n')
-
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-    const directives = findDirectives(lines[lineIndex]!)
-    for (const directive of directives) {
-      const hash = await hashDirective(directive.sourceText)
-      const result = executeDirective(directive.sourceText, notes, currentNote, noteOperations)
-      results.set(hash, result)
-    }
-  }
-
-  return results
-}

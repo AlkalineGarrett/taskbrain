@@ -79,6 +79,8 @@ object NoteFunctions {
         // Filter notes based on path, name, and where arguments (AND logic)
         // Also exclude the current note to prevent self-reference
         val filtered = notes.filter { note ->
+            // Exclude soft-deleted notes from results
+            if (note.state == "deleted") return@filter false
             // Exclude current note from results
             if (currentNoteId != null && note.id == currentNoteId) {
                 return@filter false

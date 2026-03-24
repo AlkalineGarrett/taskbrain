@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { segmentLine, buildDisplayText, hasDirectives } from '../../../dsl/directives/DirectiveSegmenter'
 import type { DirectiveResult } from '../../../dsl/directives/DirectiveResult'
 import { directiveResultSuccess, directiveResultFailure } from '../../../dsl/directives/DirectiveResult'
-import { directiveKey } from '../../../dsl/directives/DirectiveFinder'
+import { directiveHash } from '../../../dsl/directives/DirectiveFinder'
 import { numberVal, stringVal, alarmVal } from '../../../dsl/runtime/DslValue'
 
 function resultsMap(entries: [string, DirectiveResult][]): Map<string, DirectiveResult> {
@@ -32,7 +32,7 @@ describe('segmentLine', () => {
     expect(segments[0]!.kind).toBe('Directive')
     if (segments[0]!.kind === 'Directive') {
       expect(segments[0]!.sourceText).toBe('[test]')
-      expect(segments[0]!.key).toBe('test-line:0')
+      expect(segments[0]!.key).toBe(directiveHash('[test]'))
       expect(segments[0]!.result).toBeNull()
       expect(segments[0]!.isComputed).toBe(false)
     }
@@ -50,16 +50,16 @@ describe('segmentLine', () => {
     if (segments[2]!.kind === 'Text') expect(segments[2]!.content).toBe(' after')
   })
 
-  it('uses lineId for directive key', () => {
+  it('uses directive hash for key', () => {
     const segments = segmentLine('[test]', 'note-abc', new Map())
     expect(segments).toHaveLength(1)
     if (segments[0]!.kind === 'Directive') {
-      expect(segments[0]!.key).toBe('note-abc:0')
+      expect(segments[0]!.key).toBe(directiveHash('[test]'))
     }
   })
 
   it('attaches result when available', () => {
-    const key = directiveKey('test-line', 0)
+    const key = directiveHash('[calc]')
     const result = directiveResultSuccess(numberVal(42))
     const segments = segmentLine('[calc]', 'test-line', resultsMap([[key, result]]))
     expect(segments).toHaveLength(1)
@@ -80,7 +80,7 @@ describe('segmentLine', () => {
   })
 
   it('shows source text for error result', () => {
-    const key = directiveKey('test-line', 0)
+    const key = directiveHash('[calc]')
     const result = directiveResultFailure('bad')
     const segments = segmentLine('[calc]', 'test-line', resultsMap([[key, result]]))
     expect(segments).toHaveLength(1)
@@ -135,7 +135,7 @@ describe('buildDisplayText', () => {
   })
 
   it('replaces directive source with computed result', () => {
-    const key = directiveKey('test-line', 0)
+    const key = directiveHash('[calc]')
     const dr = directiveResultSuccess(numberVal(42))
     const result = buildDisplayText('[calc]', 'test-line', resultsMap([[key, dr]]))
     expect(result.displayText).toBe('42')
@@ -147,14 +147,14 @@ describe('buildDisplayText', () => {
   })
 
   it('builds display text with mixed text and directives', () => {
-    const key = directiveKey('test-line', 4)
+    const key = directiveHash('[greet]')
     const dr = directiveResultSuccess(stringVal('world'))
     const result = buildDisplayText('say [greet]!', 'test-line', resultsMap([[key, dr]]))
     expect(result.displayText).toBe('say world!')
   })
 
   it('populates directive display ranges', () => {
-    const key = directiveKey('test-line', 0)
+    const key = directiveHash('[x]')
     const dr = directiveResultSuccess(numberVal(7))
     const result = buildDisplayText('[x] end', 'test-line', resultsMap([[key, dr]]))
     expect(result.directiveDisplayRanges).toHaveLength(1)
@@ -173,7 +173,7 @@ describe('buildDisplayText', () => {
   })
 
   it('marks error in display range', () => {
-    const key = directiveKey('test-line', 0)
+    const key = directiveHash('[x]')
     const dr = directiveResultFailure('bad')
     const result = buildDisplayText('[x]', 'test-line', resultsMap([[key, dr]]))
     expect(result.directiveDisplayRanges).toHaveLength(1)
@@ -182,8 +182,8 @@ describe('buildDisplayText', () => {
   })
 
   it('handles multiple directives with different display lengths', () => {
-    const key1 = directiveKey('test-line', 0)
-    const key2 = directiveKey('test-line', 6)
+    const key1 = directiveHash('[xxx]')
+    const key2 = directiveHash('[yyy]')
     const dr1 = directiveResultSuccess(stringVal('AB'))
     const dr2 = directiveResultSuccess(stringVal('CDEF'))
     const result = buildDisplayText('[xxx] [yyy]', 'test-line', resultsMap([[key1, dr1], [key2, dr2]]))
@@ -202,7 +202,7 @@ describe('buildDisplayText', () => {
 
 describe('buildDisplayText alarm directives', () => {
   it('marks alarm directive with isAlarm and alarmId', () => {
-    const key = directiveKey('test-line', 0)
+    const key = directiveHash('[alarm("alarm-123")]')
     const dr = directiveResultSuccess(alarmVal('alarm-123'))
     const result = buildDisplayText('[alarm("alarm-123")]', 'test-line', resultsMap([[key, dr]]))
 
@@ -215,7 +215,7 @@ describe('buildDisplayText alarm directives', () => {
   })
 
   it('non-alarm directive has isAlarm false and no alarmId', () => {
-    const key = directiveKey('test-line', 0)
+    const key = directiveHash('[calc]')
     const dr = directiveResultSuccess(numberVal(42))
     const result = buildDisplayText('[calc]', 'test-line', resultsMap([[key, dr]]))
 
@@ -225,7 +225,7 @@ describe('buildDisplayText alarm directives', () => {
   })
 
   it('alarm directive mixed with text preserves display ranges', () => {
-    const key = directiveKey('test-line', 5)
+    const key = directiveHash('[alarm("a1")]')
     const dr = directiveResultSuccess(alarmVal('a1'))
     const result = buildDisplayText('Task [alarm("a1")] done', 'test-line', resultsMap([[key, dr]]))
 
@@ -236,14 +236,14 @@ describe('buildDisplayText alarm directives', () => {
   })
 
   it('alarm directive displays as clock emoji', () => {
-    const key = directiveKey('test-line', 0)
+    const key = directiveHash('[alarm("a1")]')
     const dr = directiveResultSuccess(alarmVal('a1'))
     const result = buildDisplayText('[alarm("a1")]', 'test-line', resultsMap([[key, dr]]))
     expect(result.displayText).toBe('\u23F0')
   })
 
   it('alarm sourceRange covers entire directive text', () => {
-    const key = directiveKey('test-line', 5)
+    const key = directiveHash('[alarm("a1")]')
     const dr = directiveResultSuccess(alarmVal('a1'))
     const result = buildDisplayText('Task [alarm("a1")] done', 'test-line', resultsMap([[key, dr]]))
 
@@ -253,7 +253,7 @@ describe('buildDisplayText alarm directives', () => {
   })
 
   it('alarm displayRange is single emoji width', () => {
-    const key = directiveKey('test-line', 0)
+    const key = directiveHash('[alarm("a1")]')
     const dr = directiveResultSuccess(alarmVal('a1'))
     const result = buildDisplayText('[alarm("a1")]', 'test-line', resultsMap([[key, dr]]))
 
@@ -264,7 +264,7 @@ describe('buildDisplayText alarm directives', () => {
 
 describe('buildDisplayText recurringAlarm directives', () => {
   it('marks recurringAlarm directive with isAlarm and recurringAlarmId', () => {
-    const key = directiveKey('test-line', 0)
+    const key = directiveHash('[recurringAlarm("rec-123")]')
     const dr = directiveResultSuccess(alarmVal('rec-123'))
     const result = buildDisplayText('[recurringAlarm("rec-123")]', 'test-line', resultsMap([[key, dr]]))
 
@@ -277,7 +277,7 @@ describe('buildDisplayText recurringAlarm directives', () => {
   })
 
   it('recurringAlarm directive displays as clock emoji', () => {
-    const key = directiveKey('test-line', 0)
+    const key = directiveHash('[recurringAlarm("rec1")]')
     const dr = directiveResultSuccess(alarmVal('rec1'))
     const result = buildDisplayText('[recurringAlarm("rec1")]', 'test-line', resultsMap([[key, dr]]))
     expect(result.displayText).toBe('\u23F0')
@@ -291,8 +291,8 @@ describe('buildDisplayText recurringAlarm directives', () => {
   })
 
   it('mixed alarm and recurringAlarm on same line', () => {
-    const key1 = directiveKey('test-line', 0)
-    const key2 = directiveKey('test-line', 13)
+    const key1 = directiveHash('[alarm("a1")]')
+    const key2 = directiveHash('[recurringAlarm("rec1")]')
     const dr1 = directiveResultSuccess(alarmVal('a1'))
     const dr2 = directiveResultSuccess(alarmVal('rec1'))
     const result = buildDisplayText(
