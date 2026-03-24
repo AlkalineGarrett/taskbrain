@@ -4,9 +4,14 @@ service cloud.firestore {
 
     // ==================== Helper Functions ====================
 
-    // Check if user is authenticated
+    // Allowlist of permitted user IDs
+    function isAllowedUser() {
+      return request.auth.uid in ['USER_ID_1', 'USER_ID_2'];
+    }
+
+    // Check if user is authenticated and allowed
     function isAuthenticated() {
-      return request.auth != null;
+      return request.auth != null && isAllowedUser();
     }
 
     // Get the current user's UID
