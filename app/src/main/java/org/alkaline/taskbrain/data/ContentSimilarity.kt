@@ -94,22 +94,69 @@ fun performSimilarityMatching(
 /**
  * Determines which half of a split line should keep the noteIds.
  *
- * @param noteIds the original line's noteIds
+ * When [noteIdContentLengths] is available (from a prior merge), each noteId is assigned
+ * to the half that contains more of its original content. This correctly distributes
+ * noteIds back to their original lines after a merge–split round-trip.
+ *
+ * When content lengths aren't available (single noteId or loaded from server),
+ * all noteIds go to the longer half.
+ *
+ * @param noteIds the line's noteIds (in text order when from a merge)
  * @param beforeContentLen length of content before the split point (excluding prefix)
  * @param afterContentLen length of content after the split point
  * @param beforeHasContent whether the before half has any content
  * @param afterHasContent whether the after half has any content
- * @return pair of (currentLineNoteIds, newLineNoteIds)
+ * @param noteIdContentLengths per-noteId content lengths in text order (from merge metadata)
+ * @return pair of (beforeNoteIds, afterNoteIds)
  */
 fun splitNoteIds(
     noteIds: List<String>,
     beforeContentLen: Int,
     afterContentLen: Int,
     beforeHasContent: Boolean,
-    afterHasContent: Boolean
-): Pair<List<String>, List<String>> = when {
-    !beforeHasContent && afterHasContent -> emptyList<String>() to noteIds
-    beforeHasContent && !afterHasContent -> noteIds to emptyList()
-    else -> if (beforeContentLen >= afterContentLen) noteIds to emptyList()
+    afterHasContent: Boolean,
+    noteIdContentLengths: List<Int> = emptyList()
+): Pair<List<String>, List<String>> {
+    // One or no content side — all noteIds go to the side with content
+    if (!beforeHasContent && afterHasContent) return emptyList<String>() to noteIds
+    if (beforeHasContent && !afterHasContent) return noteIds to emptyList()
+
+    // Multiple noteIds with content-length metadata — distribute by overlap
+    if (noteIds.size > 1 && noteIdContentLengths.size == noteIds.size) {
+        return distributeNoteIdsByOverlap(noteIds, beforeContentLen, noteIdContentLengths)
+    }
+
+    // Fallback: all noteIds go to the longer half
+    return if (beforeContentLen >= afterContentLen) noteIds to emptyList()
     else emptyList<String>() to noteIds
+}
+
+/**
+ * Distributes noteIds to before/after halves based on how much of each noteId's
+ * original content falls on each side of the split point.
+ */
+private fun distributeNoteIdsByOverlap(
+    noteIds: List<String>,
+    splitPos: Int,
+    contentLengths: List<Int>
+): Pair<List<String>, List<String>> {
+    val beforeIds = mutableListOf<String>()
+    val afterIds = mutableListOf<String>()
+    var offset = 0
+
+    for (i in noteIds.indices) {
+        val len = contentLengths[i]
+        val end = offset + len
+        val overlapBefore = (minOf(end, splitPos) - offset).coerceAtLeast(0)
+        val overlapAfter = (end - maxOf(offset, splitPos)).coerceAtLeast(0)
+
+        if (overlapBefore >= overlapAfter) {
+            beforeIds.add(noteIds[i])
+        } else {
+            afterIds.add(noteIds[i])
+        }
+        offset = end
+    }
+
+    return beforeIds to afterIds
 }

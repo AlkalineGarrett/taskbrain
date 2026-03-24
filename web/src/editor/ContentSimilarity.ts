@@ -92,7 +92,11 @@ export function performSimilarityMatching(
 /**
  * Determines which half of a split line should keep the noteIds.
  *
- * @returns [currentLineNoteIds, newLineNoteIds]
+ * When noteIdContentLengths is available (from a prior merge), each noteId is assigned
+ * to the half that contains more of its original content. This correctly distributes
+ * noteIds back to their original lines after a merge–split round-trip.
+ *
+ * @returns [beforeNoteIds, afterNoteIds]
  */
 export function splitNoteIds(
   noteIds: string[],
@@ -100,8 +104,41 @@ export function splitNoteIds(
   afterContentLen: number,
   beforeHasContent: boolean,
   afterHasContent: boolean,
+  noteIdContentLengths: number[] = [],
 ): [string[], string[]] {
   if (!beforeHasContent && afterHasContent) return [[], noteIds]
   if (beforeHasContent && !afterHasContent) return [noteIds, []]
+
+  // Multiple noteIds with content-length metadata — distribute by overlap
+  if (noteIds.length > 1 && noteIdContentLengths.length === noteIds.length) {
+    return distributeNoteIdsByOverlap(noteIds, beforeContentLen, noteIdContentLengths)
+  }
+
   return beforeContentLen >= afterContentLen ? [noteIds, []] : [[], noteIds]
+}
+
+function distributeNoteIdsByOverlap(
+  noteIds: string[],
+  splitPos: number,
+  contentLengths: number[],
+): [string[], string[]] {
+  const beforeIds: string[] = []
+  const afterIds: string[] = []
+  let offset = 0
+
+  for (let i = 0; i < noteIds.length; i++) {
+    const len = contentLengths[i]!
+    const end = offset + len
+    const overlapBefore = Math.max(0, Math.min(end, splitPos) - offset)
+    const overlapAfter = Math.max(0, end - Math.max(offset, splitPos))
+
+    if (overlapBefore >= overlapAfter) {
+      beforeIds.push(noteIds[i]!)
+    } else {
+      afterIds.push(noteIds[i]!)
+    }
+    offset = end
+  }
+
+  return [beforeIds, afterIds]
 }

@@ -566,6 +566,7 @@ export class EditorController {
       afterCursor.length,
       beforeHasContent,
       afterHasContent,
+      line.noteIdContentLengths,
     )
 
     line.updateFull(beforeCursor, beforeCursor.length)
@@ -593,7 +594,9 @@ export class EditorController {
   ): void {
     this.undoManager.captureStateBeforeChange(this.state.lines, this.state.focusedLineIndex)
     this.state.clearSelection()
-    survivor.noteIds = mergeNoteIds(survivor, other)
+    const merged = mergeNoteIds(survivor, other)
+    survivor.noteIds = merged.noteIds
+    survivor.noteIdContentLengths = merged.contentLengths
     this.state.lines.splice(removeIndex, 1)
     this.state.focusedLineIndex = focusIndex
     this.state.requestFocusUpdate()
@@ -612,10 +615,11 @@ export class EditorController {
     const previousLine = this.state.lines[prevIdx]
     if (!currentLine || !previousLine) return
 
-    const mergedNoteIds = mergeNoteIds(previousLine, currentLine)
+    const merged = mergeNoteIds(previousLine, currentLine)
     const previousLength = previousLine.text.length
     previousLine.updateFull(previousLine.text + currentLine.content, previousLength)
-    previousLine.noteIds = mergedNoteIds
+    previousLine.noteIds = merged.noteIds
+    previousLine.noteIdContentLengths = merged.contentLengths
     this.state.lines.splice(lineIndex, 1)
     this.state.focusedLineIndex = prevIdx
     this.state.requestFocusUpdate()
@@ -635,10 +639,11 @@ export class EditorController {
     const nextLine = this.state.lines[nextIdx]
     if (!currentLine || !nextLine) return
 
-    const mergedNoteIds = mergeNoteIds(currentLine, nextLine)
+    const merged = mergeNoteIds(currentLine, nextLine)
     const currentLength = currentLine.text.length
     currentLine.updateFull(currentLine.text + nextLine.content, currentLength)
-    currentLine.noteIds = mergedNoteIds
+    currentLine.noteIds = merged.noteIds
+    currentLine.noteIdContentLengths = merged.contentLengths
     this.state.lines.splice(nextIdx, 1)
     this.state.requestFocusUpdate()
     this.state.notifyChange()
@@ -703,6 +708,7 @@ export class EditorController {
         afterNewline.length,
         beforeNewline.length > 0,
         afterNewline.length > 0,
+        line.noteIdContentLengths,
       )
 
       line.updateContent(beforeNewline, beforeNewline.length)
@@ -807,10 +813,29 @@ export class EditorController {
   isValidLine(lineIndex: number): boolean { return lineIndex >= 0 && lineIndex < this.state.lines.length }
 }
 
-/** Combines noteIds from two lines being merged: longer content's noteIds first, deduplicated. */
-function mergeNoteIds(lineA: LineState, lineB: LineState): string[] {
-  const allIds = lineA.content.length >= lineB.content.length
-    ? [...lineA.noteIds, ...lineB.noteIds]
-    : [...lineB.noteIds, ...lineA.noteIds]
-  return [...new Set(allIds)]
+interface MergedNoteIds {
+  noteIds: string[]
+  contentLengths: number[]
+}
+
+/**
+ * Combines noteIds from two lines being merged, in text order (lineA first),
+ * and records per-noteId content lengths for correct distribution on re-split.
+ */
+function mergeNoteIds(lineA: LineState, lineB: LineState): MergedNoteIds {
+  const allIds = [...new Set([...lineA.noteIds, ...lineB.noteIds])]
+  const contentLengths = [...buildMergedContentLengths(lineA), ...buildMergedContentLengths(lineB)]
+  return { noteIds: allIds, contentLengths }
+}
+
+/**
+ * Extracts per-noteId content lengths from a line.
+ * If the line already has content-length metadata (from a prior merge), uses that.
+ * Otherwise creates a single entry spanning the full content.
+ */
+function buildMergedContentLengths(line: LineState): number[] {
+  if (line.noteIdContentLengths.length > 0 && line.noteIdContentLengths.length === line.noteIds.length) {
+    return line.noteIdContentLengths
+  }
+  return line.noteIds.length > 0 ? [line.content.length] : []
 }

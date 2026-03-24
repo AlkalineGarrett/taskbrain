@@ -271,7 +271,7 @@ describe('updateLineContent newline assigns noteIds correctly', () => {
 // ==================== Merge line propagation ====================
 
 describe('mergeToPreviousLine combines noteIds', () => {
-  it('longer content noteIds come first', () => {
+  it('noteIds follow text order (previous line first)', () => {
     const controller = controllerWithNoteLines(
       { text: 'Short', noteIds: ['noteA'] },
       { text: 'Much longer content', noteIds: ['noteB'] },
@@ -283,8 +283,8 @@ describe('mergeToPreviousLine combines noteIds', () => {
     controller.mergeToPreviousLine(1)
 
     expect(controller.state.lines[0]!.text).toBe('ShortMuch longer content')
-    // noteB had longer content, so it should be first (primary)
-    expect(controller.state.lines[0]!.noteIds).toEqual(['noteB', 'noteA'])
+    // noteIds follow text order: previous line (noteA) first
+    expect(controller.state.lines[0]!.noteIds).toEqual(['noteA', 'noteB'])
   })
 })
 
@@ -315,8 +315,78 @@ describe('mergeNextLine combines noteIds', () => {
 
     controller.mergeNextLine(0)
 
-    // noteB's line was longer, its noteIds come first; 'shared' appears once
-    expect(controller.state.lines[0]!.noteIds).toEqual(['shared', 'noteB', 'noteA'])
+    // lineA's noteIds come first (text order); 'shared' appears once
+    expect(controller.state.lines[0]!.noteIds).toEqual(['shared', 'noteA', 'noteB'])
+  })
+})
+
+// ==================== Merge→split round-trip (noteId distribution) ====================
+
+describe('merge then split distributes noteIds by content overlap', () => {
+  it('backspace merge then enter restores original noteIds', () => {
+    const controller = controllerWithNoteLines(
+      { text: 'Hello', noteIds: ['noteA'] },
+      { text: 'World', noteIds: ['noteB'] },
+      { text: '', noteIds: [] },
+    )
+    controller.state.focusedLineIndex = 1
+    controller.state.lines[1]!.updateFull('World', 0) // cursor at start
+
+    // Merge: backspace at start of line 1 → merges into line 0
+    controller.mergeToPreviousLine(1)
+    expect(controller.state.lines[0]!.text).toBe('HelloWorld')
+    expect(controller.state.lines[0]!.noteIds).toEqual(['noteA', 'noteB'])
+
+    // Split: enter at the original boundary (after "Hello")
+    controller.state.lines[0]!.cursorPosition = 5
+    controller.splitLine(0)
+
+    // noteA should stay with "Hello", noteB with "World"
+    expect(controller.state.lines[0]!.noteIds).toEqual(['noteA'])
+    expect(controller.state.lines[1]!.noteIds).toEqual(['noteB'])
+  })
+
+  it('merge then split with uneven content distributes correctly', () => {
+    const controller = controllerWithNoteLines(
+      { text: 'AB', noteIds: ['noteA'] },
+      { text: 'CDEFGH', noteIds: ['noteB'] },
+      { text: '', noteIds: [] },
+    )
+    controller.state.focusedLineIndex = 1
+    controller.state.lines[1]!.updateFull('CDEFGH', 0)
+
+    controller.mergeToPreviousLine(1)
+    expect(controller.state.lines[0]!.text).toBe('ABCDEFGH')
+
+    // Split at position 3 — noteA's content (2 chars) ends at offset 2,
+    // so noteA has 2 chars before split (all of it), noteB has 1 before + 5 after
+    controller.state.lines[0]!.cursorPosition = 3
+    controller.splitLine(0)
+
+    // noteA (2 chars, all before split) → before; noteB (6 chars, 1 before + 5 after) → after
+    expect(controller.state.lines[0]!.noteIds).toEqual(['noteA'])
+    expect(controller.state.lines[1]!.noteIds).toEqual(['noteB'])
+  })
+
+  it('merge then split at original boundary with prefixed lines', () => {
+    const controller = controllerWithNoteLines(
+      { text: '\t\u2022 First', noteIds: ['noteA'] },
+      { text: '\t\u2022 Second', noteIds: ['noteB'] },
+      { text: '', noteIds: [] },
+    )
+    controller.state.focusedLineIndex = 1
+    controller.state.lines[1]!.updateFull('\t\u2022 Second', 0)
+
+    controller.mergeToPreviousLine(1)
+    // After merge: "\t• FirstSecond" (content of line 1 appended without its prefix)
+    expect(controller.state.lines[0]!.text).toBe('\t\u2022 FirstSecond')
+
+    // Split after "First": prefix is "\t• " (3 chars), so "First" ends at position 8
+    controller.state.lines[0]!.cursorPosition = 8
+    controller.splitLine(0)
+
+    expect(controller.state.lines[0]!.noteIds).toEqual(['noteA'])
+    expect(controller.state.lines[1]!.noteIds).toEqual(['noteB'])
   })
 })
 

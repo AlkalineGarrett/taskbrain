@@ -674,18 +674,33 @@ class EditorController(
     }
 
     /**
-     * Combines noteIds from two lines being merged.
-     * The line with more content (excluding prefix) contributes its noteIds first (primary).
-     * Duplicate noteIds are removed.
+     * Combines noteIds and content-length metadata from two lines being merged.
+     * Preserves text order (lineA first, lineB second) so that splitNoteIds can
+     * later distribute noteIds back to the correct halves.
+     *
+     * @param lineA the line whose content appears first in the merged text
+     * @param lineB the line whose content appears second in the merged text
      */
-    private fun mergeNoteIds(lineA: LineState, lineB: LineState): List<String> {
-        val allIds = if (lineA.content.length >= lineB.content.length) {
-            lineA.noteIds + lineB.noteIds
-        } else {
-            lineB.noteIds + lineA.noteIds
-        }
-        return allIds.distinct()
+    private fun mergeNoteIds(lineA: LineState, lineB: LineState): MergedNoteIds {
+        val allIds = (lineA.noteIds + lineB.noteIds).distinct()
+        val contentLengths = buildMergedContentLengths(lineA) + buildMergedContentLengths(lineB)
+        return MergedNoteIds(allIds, contentLengths)
     }
+
+    /**
+     * Extracts per-noteId content lengths from a line.
+     * If the line already has content-length metadata (from a prior merge), uses that.
+     * Otherwise creates a single entry spanning the full content.
+     */
+    private fun buildMergedContentLengths(line: LineState): List<Int> {
+        if (line.noteIdContentLengths.isNotEmpty() && line.noteIdContentLengths.size == line.noteIds.size) {
+            return line.noteIdContentLengths
+        }
+        // Single noteId (or no metadata) — entire content belongs to this line's noteIds
+        return if (line.noteIds.isNotEmpty()) listOf(line.content.length) else emptyList()
+    }
+
+    private data class MergedNoteIds(val noteIds: List<String>, val contentLengths: List<Int>)
 
     /**
      * Creates a new line with prefix continuation and adds it after the specified line.
@@ -734,7 +749,7 @@ class EditorController(
         val afterHasContent = afterCursor.isNotEmpty()
         val (currentNoteIds, newNoteIds) = org.alkaline.taskbrain.data.splitNoteIds(
             noteIds, beforeCursor.length - prefix.length, afterCursor.length,
-            beforeHasContent, afterHasContent
+            beforeHasContent, afterHasContent, line.noteIdContentLengths
         )
 
         // Update current line
@@ -767,7 +782,9 @@ class EditorController(
     ) {
         undoManager.captureStateBeforeChange(state)
         state.clearSelection()
-        survivor.noteIds = mergeNoteIds(survivor, other)
+        val merged = mergeNoteIds(survivor, other)
+        survivor.noteIds = merged.noteIds
+        survivor.noteIdContentLengths = merged.contentLengths
         state.lines.removeAt(removeIndex)
         state.focusedLineIndex = focusIndex
         state.requestFocusUpdate()
@@ -789,12 +806,12 @@ class EditorController(
         val currentLine = state.lines.getOrNull(lineIndex) ?: return
         val previousLine = state.lines.getOrNull(targetIndex) ?: return
 
-        // Combine noteIds: longer content's noteIds go first (primary)
-        val mergedNoteIds = mergeNoteIds(previousLine, currentLine)
+        val merged = mergeNoteIds(previousLine, currentLine)
 
         val previousLength = previousLine.text.length
         previousLine.updateFull(previousLine.text + currentLine.content, previousLength)
-        previousLine.noteIds = mergedNoteIds
+        previousLine.noteIds = merged.noteIds
+        previousLine.noteIdContentLengths = merged.contentLengths
         state.lines.removeAt(lineIndex)
         state.focusedLineIndex = targetIndex
         state.requestFocusUpdate()
@@ -818,12 +835,12 @@ class EditorController(
         val currentLine = state.lines.getOrNull(lineIndex) ?: return
         val nextLine = state.lines.getOrNull(targetIndex) ?: return
 
-        // Combine noteIds: longer content's noteIds go first (primary)
-        val mergedNoteIds = mergeNoteIds(currentLine, nextLine)
+        val merged = mergeNoteIds(currentLine, nextLine)
 
         val currentLength = currentLine.text.length
         currentLine.updateFull(currentLine.text + nextLine.content, currentLength)
-        currentLine.noteIds = mergedNoteIds
+        currentLine.noteIds = merged.noteIds
+        currentLine.noteIdContentLengths = merged.contentLengths
         state.lines.removeAt(targetIndex)
         state.requestFocusUpdate()
         state.notifyChange()
@@ -913,7 +930,7 @@ class EditorController(
             val noteIds = line.noteIds
             val (currentNoteIds, newNoteIds) = org.alkaline.taskbrain.data.splitNoteIds(
                 noteIds, beforeNewline.length, afterNewline.length,
-                beforeNewline.isNotEmpty(), afterNewline.isNotEmpty()
+                beforeNewline.isNotEmpty(), afterNewline.isNotEmpty(), line.noteIdContentLengths
             )
 
             // Update current line with content before newline

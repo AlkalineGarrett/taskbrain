@@ -27,7 +27,26 @@ class NoteIdPropagationTest {
         assertTrue(line.noteIds.isEmpty())
     }
 
+    @Test
+    fun `LineState preserves multiple noteIds`() {
+        val line = LineState("Hello", noteIds = listOf("note1", "note2"))
+        assertEquals(listOf("note1", "note2"), line.noteIds)
+    }
+
     // ==================== EditorState.initFromNoteLines ====================
+
+    @Test
+    fun `initFromNoteLines resets focus and selection`() {
+        val state = EditorState()
+        state.focusedLineIndex = 5
+        state.initFromNoteLines(listOf(
+            "Line A" to listOf("noteA"),
+            "Line B" to listOf("noteB")
+        ))
+
+        assertEquals(0, state.focusedLineIndex)
+        assertEquals(EditorSelection.None, state.selection)
+    }
 
     @Test
     fun `initFromNoteLines sets noteIds on each line`() {
@@ -45,6 +64,22 @@ class NoteIdPropagationTest {
     }
 
     // ==================== updateFromText preserves noteIds ====================
+
+    @Test
+    fun `updateFromText handles duplicate content lines correctly`() {
+        val state = EditorState()
+        state.initFromNoteLines(listOf(
+            "Same" to listOf("note1"),
+            "Same" to listOf("note2"),
+            "Different" to listOf("note3")
+        ))
+
+        state.updateFromText("Same\nSame\nDifferent")
+
+        assertEquals(listOf("note1"), state.lines[0].noteIds)
+        assertEquals(listOf("note2"), state.lines[1].noteIds)
+        assertEquals(listOf("note3"), state.lines[2].noteIds)
+    }
 
     @Test
     fun `updateFromText preserves noteIds via exact content match`() {
@@ -248,7 +283,7 @@ class NoteIdPropagationTest {
     // ==================== Merge line propagation ====================
 
     @Test
-    fun `mergeToPreviousLine combines noteIds, longer content first`() {
+    fun `mergeToPreviousLine combines noteIds in text order`() {
         val state = EditorState()
         val controller = EditorController(state)
         state.initFromNoteLines(listOf(
@@ -262,8 +297,8 @@ class NoteIdPropagationTest {
         controller.mergeToPreviousLine(1)
 
         assertEquals("ShortMuch longer content", state.lines[0].text)
-        // noteB had longer content, so it should be first (primary)
-        assertEquals(listOf("noteB", "noteA"), state.lines[0].noteIds)
+        // noteIds follow text order: previous line (noteA) first
+        assertEquals(listOf("noteA", "noteB"), state.lines[0].noteIds)
     }
 
     @Test
@@ -283,6 +318,103 @@ class NoteIdPropagationTest {
         assertEquals("Long first line hereShort", state.lines[0].text)
         // noteA had longer content, so it should be first (primary)
         assertEquals(listOf("noteA", "noteB"), state.lines[0].noteIds)
+    }
+
+    @Test
+    fun `mergeNextLine deduplicates shared noteIds`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.initFromNoteLines(listOf(
+            "Line A" to listOf("shared", "noteA"),
+            "Line B longer" to listOf("shared", "noteB"),
+            "" to emptyList()
+        ))
+        state.focusedLineIndex = 0
+
+        controller.mergeNextLine(0)
+
+        // lineA's noteIds come first (text order); 'shared' appears once
+        assertEquals(listOf("shared", "noteA", "noteB"), state.lines[0].noteIds)
+    }
+
+    // ==================== Merge→split round-trip (noteId distribution) ====================
+
+    @Test
+    fun `backspace merge then enter restores original noteIds`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.initFromNoteLines(listOf(
+            "Hello" to listOf("noteA"),
+            "World" to listOf("noteB"),
+            "" to emptyList()
+        ))
+        state.focusedLineIndex = 1
+        state.lines[1].updateFull("World", 0)
+
+        controller.mergeToPreviousLine(1)
+        assertEquals("HelloWorld", state.lines[0].text)
+        assertEquals(listOf("noteA", "noteB"), state.lines[0].noteIds)
+
+        // Split at the original boundary (after "Hello")
+        // Save and restore metadata around cursor positioning (updateFull clears it)
+        val savedLengths = state.lines[0].noteIdContentLengths
+        state.lines[0].updateFull("HelloWorld", 5)
+        state.lines[0].noteIdContentLengths = savedLengths
+        controller.splitLine(0)
+
+        assertEquals(listOf("noteA"), state.lines[0].noteIds)
+        assertEquals(listOf("noteB"), state.lines[1].noteIds)
+    }
+
+    @Test
+    fun `merge then split with uneven content distributes correctly`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.initFromNoteLines(listOf(
+            "AB" to listOf("noteA"),
+            "CDEFGH" to listOf("noteB"),
+            "" to emptyList()
+        ))
+        state.focusedLineIndex = 1
+        state.lines[1].updateFull("CDEFGH", 0)
+
+        controller.mergeToPreviousLine(1)
+        assertEquals("ABCDEFGH", state.lines[0].text)
+
+        // Split at position 3: noteA (2 chars, all before) → before; noteB (6 chars, 1 before + 5 after) → after
+        val savedLengths2 = state.lines[0].noteIdContentLengths
+        state.lines[0].updateFull("ABCDEFGH", 3)
+        state.lines[0].noteIdContentLengths = savedLengths2
+        controller.splitLine(0)
+
+        assertEquals(listOf("noteA"), state.lines[0].noteIds)
+        assertEquals(listOf("noteB"), state.lines[1].noteIds)
+    }
+
+    @Test
+    fun `merge then split at original boundary with prefixed lines`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.initFromNoteLines(listOf(
+            "\t\u2022 First" to listOf("noteA"),
+            "\t\u2022 Second" to listOf("noteB"),
+            "" to emptyList()
+        ))
+        state.focusedLineIndex = 1
+        state.lines[1].updateFull("\t\u2022 Second", 0)
+
+        controller.mergeToPreviousLine(1)
+        // After merge: "\t• FirstSecond" (content of line 1 appended without its prefix)
+        assertEquals("\t\u2022 FirstSecond", state.lines[0].text)
+
+        // Split after "First": prefix is "\t• " (3 chars), so "First" ends at position 8
+        val savedLengths3 = state.lines[0].noteIdContentLengths
+        state.lines[0].updateFull("\t\u2022 FirstSecond", 8)
+        state.lines[0].noteIdContentLengths = savedLengths3
+        controller.splitLine(0)
+
+        assertEquals(listOf("noteA"), state.lines[0].noteIds)
+        assertEquals(listOf("noteB"), state.lines[1].noteIds)
     }
 
     // ==================== Move lines propagation ====================
@@ -325,6 +457,29 @@ class NoteIdPropagationTest {
         assertEquals(listOf("noteC"), state.lines[0].noteIds)
         assertEquals(listOf("noteA"), state.lines[1].noteIds)
         assertEquals(listOf("noteB"), state.lines[2].noteIds)
+    }
+
+    @Test
+    fun `moveLinesInternal preserves noteIds when moving a range`() {
+        val state = EditorState()
+        state.initFromNoteLines(listOf(
+            "Line A" to listOf("noteA"),
+            "Line B" to listOf("noteB"),
+            "Line C" to listOf("noteC"),
+            "Line D" to listOf("noteD")
+        ))
+
+        // Move lines 0-1 to after line 2 (targetIndex=3)
+        state.moveLinesInternal(0..1, 3)
+
+        assertEquals("Line C", state.lines[0].text)
+        assertEquals("Line A", state.lines[1].text)
+        assertEquals("Line B", state.lines[2].text)
+        assertEquals("Line D", state.lines[3].text)
+        assertEquals(listOf("noteC"), state.lines[0].noteIds)
+        assertEquals(listOf("noteA"), state.lines[1].noteIds)
+        assertEquals(listOf("noteB"), state.lines[2].noteIds)
+        assertEquals(listOf("noteD"), state.lines[3].noteIds)
     }
 
     // ==================== Full-line paste preserves noteIds ====================
@@ -437,5 +592,124 @@ class NoteIdPropagationTest {
         assertEquals("Line A", state.lines[0].text)
         assertEquals(listOf("noteA"), state.lines[0].noteIds)
         assertEquals(listOf("noteB"), state.lines[1].noteIds)
+    }
+
+    @Test
+    fun `redo restores noteIds`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.initFromNoteLines(listOf(
+            "Line A" to listOf("noteA"),
+            "Line B" to listOf("noteB")
+        ))
+        controller.undoManager.setBaseline(state)
+        controller.undoManager.beginEditingLine(state, 0)
+
+        // Make a change
+        state.lines[0].updateFull("Modified A", 10)
+        controller.commitUndoState()
+
+        // Undo then redo
+        controller.undo()
+        controller.redo()
+
+        assertEquals("Modified A", state.lines[0].text)
+        assertEquals(listOf("noteA"), state.lines[0].noteIds)
+    }
+
+    // ==================== Delete selection preserves noteIds ====================
+
+    @Test
+    fun `deleteSelection preserves noteIds on surviving lines`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.initFromNoteLines(listOf(
+            "Line A" to listOf("noteA"),
+            "Line B" to listOf("noteB"),
+            "Line C" to listOf("noteC")
+        ))
+
+        // Select "Line B\n" and delete
+        val startOffset = "Line A\n".length
+        val endOffset = "Line A\nLine B\n".length
+        state.setSelection(startOffset, endOffset)
+        controller.deleteSelectionWithUndo()
+
+        assertEquals(2, state.lines.size)
+        assertEquals("Line A", state.lines[0].text)
+        assertEquals("Line C", state.lines[1].text)
+        assertEquals(listOf("noteA"), state.lines[0].noteIds)
+        assertEquals(listOf("noteC"), state.lines[1].noteIds)
+    }
+
+    // ==================== Cut then paste replaces with same noteIds ====================
+
+    @Test
+    fun `cut then full-line paste replaces with same noteIds`() {
+        val lines = listOf(
+            LineState("Line A", noteIds = listOf("noteA")),
+            LineState("Line D", noteIds = listOf("noteD")),
+        )
+
+        // Full-line select Line D, paste Line B and Line C over it
+        val selection = EditorSelection("Line A\n".length, "Line A\nLine D".length)
+        val parsed = ClipboardParser.parseInternal("Line B\nLine C")
+        val result = PasteHandler.execute(lines, 1, selection, parsed)
+
+        assertEquals("Line A", result.lines[0].text)
+        assertEquals(listOf("noteA"), result.lines[0].noteIds)
+        // Line B gets noteD via positional fallback
+        assertEquals("Line B", result.lines[1].text)
+        assertEquals(listOf("noteD"), result.lines[1].noteIds)
+        // Line C is extra — no deleted line to match
+        assertEquals("Line C", result.lines[2].text)
+        assertTrue(result.lines[2].noteIds.isEmpty())
+    }
+
+    // ==================== Full lifecycle ====================
+
+    @Test
+    fun `preserves identity through split and merge cycle`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.initFromNoteLines(listOf(
+            "Hello World" to listOf("note1"),
+            "Other line" to listOf("note2"),
+            "" to emptyList()
+        ))
+
+        // Split line 0 at position 5: "Hello" (5) vs " World" (6)
+        state.focusedLineIndex = 0
+        state.lines[0].updateFull("Hello World", 5)
+        controller.splitLine(0)
+
+        // Longer fragment (" World") keeps the noteId
+        assertTrue(state.lines[0].noteIds.isEmpty())
+        assertEquals(listOf("note1"), state.lines[1].noteIds)
+
+        // Merge them back
+        state.focusedLineIndex = 1
+        state.lines[1].updateFull(state.lines[1].text, 0)
+        controller.mergeToPreviousLine(1)
+
+        assertEquals("Hello World", state.lines[0].text)
+        assertEquals(listOf("note1"), state.lines[0].noteIds)
+    }
+
+    @Test
+    fun `preserves identity through move and save`() {
+        val state = EditorState()
+        state.initFromNoteLines(listOf(
+            "Task 1" to listOf("note1"),
+            "Task 2" to listOf("note2"),
+            "Task 3" to listOf("note3")
+        ))
+
+        // Move task 3 to top
+        state.moveLinesInternal(2..2, 0)
+
+        assertEquals(listOf("Task 3", "Task 1", "Task 2"), state.lines.map { it.text })
+        assertEquals(listOf(listOf("note3"), listOf("note1"), listOf("note2")),
+            state.lines.map { it.noteIds })
     }
 }

@@ -25,6 +25,15 @@ class LineState(
     var noteIds: List<String> = noteIds
         internal set
 
+    /**
+     * Content lengths per noteId, in text order (not noteId order).
+     * When lines merge, records how many content characters each noteId contributed.
+     * Used by splitNoteIds to distribute noteIds to the correct halves when a line is re-split.
+     * Empty when not applicable (single noteId, loaded from server, etc.).
+     */
+    var noteIdContentLengths: List<Int> = emptyList()
+        internal set
+
     /** Stable temporary ID for directive key generation before a Firestore noteId is assigned. */
     val tempId: String = UUID.randomUUID().toString()
 
@@ -49,6 +58,7 @@ class LineState(
     fun updateContent(newContent: String, newContentCursor: Int) {
         text = prefix + newContent
         cursorPosition = prefix.length + newContentCursor.coerceIn(0, newContent.length)
+        noteIdContentLengths = emptyList()
     }
 
     /**
@@ -57,6 +67,7 @@ class LineState(
     fun updateFull(newText: String, newCursor: Int) {
         text = newText
         cursorPosition = newCursor.coerceIn(0, newText.length)
+        noteIdContentLengths = emptyList()
     }
 
     /**

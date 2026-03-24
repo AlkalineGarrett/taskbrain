@@ -8,6 +8,13 @@ export class LineState {
   text: string
   cursorPosition: number
   noteIds: string[]
+  /**
+   * Content lengths per noteId, in text order (not noteId order).
+   * When lines merge, records how many content characters each noteId contributed.
+   * Used by splitNoteIds to distribute noteIds to the correct halves when a line is re-split.
+   * Empty when not applicable (single noteId, loaded from server, etc.).
+   */
+  noteIdContentLengths: number[] = []
   /** Stable temporary ID for directive key generation before a Firestore noteId is assigned. */
   readonly tempId: string
 
@@ -39,11 +46,13 @@ export class LineState {
   updateContent(newContent: string, newContentCursor: number): void {
     this.text = this.prefix + newContent
     this.cursorPosition = this.prefix.length + clamp(newContentCursor, 0, newContent.length)
+    this.noteIdContentLengths = []
   }
 
   updateFull(newText: string, newCursor: number): void {
     this.text = newText
     this.cursorPosition = clamp(newCursor, 0, newText.length)
+    this.noteIdContentLengths = []
   }
 
   indent(): void {
