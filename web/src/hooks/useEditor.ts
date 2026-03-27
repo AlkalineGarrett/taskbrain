@@ -1,23 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { doc, onSnapshot } from 'firebase/firestore'
 import { EditorState } from '@/editor/EditorState'
 import { EditorController } from '@/editor/EditorController'
 import { UndoManager, type UndoManagerState } from '@/editor/UndoManager'
 import type { NoteLine } from '@/data/Note'
 import { NoteRepository } from '@/data/NoteRepository'
+import { noteStore } from '@/data/NoteStore'
 import { resolveNoteIds } from '@/editor/resolveNoteIds'
 import { db, auth } from '@/firebase/config'
-import { ERROR_LOAD, ERROR_SAVE } from '@/strings'
+import { ERROR_LOAD, ERROR_SAVE, SAVE_ERROR_BANNER } from '@/strings'
+
+const PENDING_SAVE_ERROR_KEY = 'pendingSaveError'
 
 const repo = new NoteRepository(db, auth)
 
-/** In-memory cache for instant tab switching. */
-interface CachedNoteContent {
-  lines: NoteLine[]
+/**
+ * Editor-specific state cache for instant tab switching.
+ * Only stores unsaved edits and noteId mappings — canonical content
+ * comes from NoteStore (always fresh via collection listener).
+ */
+interface EditorCacheEntry {
+  trackedLines: NoteLine[]
   editorTexts: string[]
   dirty: boolean
 }
-const contentCache = new Map<string, CachedNoteContent>()
+const editorStateCache = new Map<string, EditorCacheEntry>()
 
 export function useEditor(noteId: string | undefined) {
   const [editorState] = useState(() => new EditorState())
@@ -29,8 +35,21 @@ export function useEditor(noteId: string | undefined) {
   const [showLoading, setShowLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
   const [showCompleted, setShowCompleted] = useState(true)
+
+  // Check for save errors persisted from a previous unmount/beforeunload
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(PENDING_SAVE_ERROR_KEY)
+      if (raw) {
+        sessionStorage.removeItem(PENDING_SAVE_ERROR_KEY)
+        const { message } = JSON.parse(raw) as { message: string }
+        setSaveError(message)
+      }
+    } catch { /* sessionStorage may be unavailable */ }
+  }, [])
 
   // Track line IDs for Firestore mapping
   const trackedLinesRef = useRef<NoteLine[]>([])
@@ -71,14 +90,14 @@ export function useEditor(noteId: string | undefined) {
     }
   }, [undoStorageKey, undoManager])
 
-  // Cache content when switching away from a note
+  // Cache editor state when switching away from a note
   const currentNoteIdRef = useRef<string | undefined>(undefined)
   useEffect(() => {
     return () => {
       const prevId = currentNoteIdRef.current
       if (prevId && trackedLinesRef.current.length > 0) {
-        contentCache.set(prevId, {
-          lines: trackedLinesRef.current,
+        editorStateCache.set(prevId, {
+          trackedLines: trackedLinesRef.current,
           editorTexts: editorState.lines.map((l) => l.text),
           dirty: dirtyRef.current,
         })
@@ -137,46 +156,49 @@ export function useEditor(noteId: string | undefined) {
       setLoadedNoteId(noteId)
     }
 
-    // Try cache first for instant display
-    const cached = contentCache.get(noteId)
-    if (cached) {
-      populateEditor(cached.lines, true, cached.dirty, cached.editorTexts)
-      contentCache.delete(noteId)
+    // Check editor state cache for instant tab switch with unsaved edits
+    const cached = editorStateCache.get(noteId)
+    editorStateCache.delete(noteId)
+
+    if (cached?.dirty) {
+      // Restore unsaved edits immediately for instant display
+      populateEditor(cached.trackedLines, true, true, cached.editorTexts)
       setShowLoading(false)
       void repo.updateLastAccessed(noteId)
 
-      // If cached content was dirty, a fire-and-forget save was in flight.
-      // Refresh tracked line IDs from Firestore once the save completes
-      // to avoid creating duplicate children on the next save.
-      if (cached.dirty) {
-        void repo.loadNoteWithChildren(noteId).then((freshLines) => {
-          if (cancelled) return
-          const freshContent = freshLines.map((l) => l.content).join('\n')
-          const currentContent = editorState.lines.map((l) => l.text).join('\n')
-          if (freshContent === currentContent) {
-            trackedLinesRef.current = freshLines
-            editorState.updateNoteIds(
-              freshLines.map((l) => (l.noteId ? [l.noteId] : [])),
-            )
-            setDirty(false)
-          }
-        }).catch(() => { /* cache is still usable */ })
-      }
+      // Refresh tracked line IDs from Firestore (the fire-and-forget save
+      // may have created new child notes with IDs we don't have yet)
+      void repo.loadNoteWithChildren(noteId).then((freshLines) => {
+        if (cancelled) return
+        const freshContent = freshLines.map((l) => l.content).join('\n')
+        const currentContent = editorState.lines.map((l) => l.text).join('\n')
+        if (freshContent === currentContent) {
+          trackedLinesRef.current = freshLines
+          editorState.updateNoteIds(
+            freshLines.map((l) => (l.noteId ? [l.noteId] : [])),
+          )
+          setDirty(false)
+        }
+      }).catch(() => { /* editor state is still usable */ })
 
       return () => { cancelled = true }
     }
 
-    // Load from Firestore
+    // Load from Firestore — canonical path for clean notes
     setLoading(true)
     const loadNote = async () => {
       try {
         setError(null)
+        // Await any pending inline-edit saves for this note to avoid reading stale data
+        await noteStore.awaitPendingSave(noteId)
         const [lines, note] = await Promise.all([
           repo.loadNoteWithChildren(noteId),
           repo.loadNoteById(noteId),
         ])
 
         setShowCompleted(note?.showCompleted ?? true)
+        // If we had a clean cache entry, use its tracked lines for noteId mappings
+        // but content from Firestore (always fresh)
         populateEditor(lines, false, false)
         setShowLoading(false)
 
@@ -195,39 +217,35 @@ export function useEditor(noteId: string | undefined) {
     return () => { cancelled = true }
   }, [noteId, editorState, controller, undoManager])
 
-  // Real-time listener for external changes (e.g. from Android app)
-  const suppressSnapshotRef = useRef(false)
+  // Detect external changes via NoteStore's collection listener.
+  // When the store's content for the current note changes and the editor isn't dirty,
+  // reload the editor to show the external update.
+  const suppressStoreReloadRef = useRef(false)
   useEffect(() => {
     if (!noteId) return
-    // Suppress the initial snapshot fired on registration
-    suppressSnapshotRef.current = true
+    // Suppress the first notification (initial load — editor already has this content)
+    suppressStoreReloadRef.current = true
 
-    const noteDocRef = doc(db, 'notes', noteId)
-    const unsubscribe = onSnapshot(noteDocRef, (snapshot) => {
-      if (!snapshot.exists()) return
-      // Skip local pending writes (our own saves) — check before suppress
-      // so the suppress flag isn't consumed by the pending-write event
-      if (snapshot.metadata.hasPendingWrites) return
-      if (suppressSnapshotRef.current) {
-        suppressSnapshotRef.current = false
+    const unsub = noteStore.subscribe(() => {
+      if (suppressStoreReloadRef.current) {
+        suppressStoreReloadRef.current = false
         return
       }
+      if (dirtyRef.current) return
 
-      // Reload the full note (parent + children) to pick up external changes
+      const storeNote = noteStore.getNoteById(noteId)
+      if (!storeNote) return
+
+      const currentContent = editorState.lines.map((l) => l.text).join('\n')
+      if (storeNote.content === currentContent) return
+
+      // External change detected — reload from Firestore for proper noteId mappings
       void (async () => {
         try {
-          // Don't overwrite unsaved local edits — the user's changes take priority
-          if (dirtyRef.current) {
-            console.log('Snapshot listener skipping reload for', noteId, '— editor is dirty')
-            return
-          }
-
           const freshLines = await repo.loadNoteWithChildren(noteId)
           const freshContent = freshLines.map((l) => l.content).join('\n')
-          const currentContent = editorState.lines.map((l) => l.text).join('\n')
-          if (freshContent === currentContent) return
+          if (freshContent === editorState.lines.map((l) => l.text).join('\n')) return
 
-          console.log('Snapshot listener detected external change for', noteId)
           const noteLines = freshLines.map((l) => ({
             text: l.content,
             noteIds: l.noteId ? [l.noteId] : [],
@@ -238,19 +256,19 @@ export function useEditor(noteId: string | undefined) {
           setDirty(false)
           setRenderVersion((v) => v + 1)
         } catch (e) {
-          console.error('Snapshot-triggered reload failed:', e)
+          console.error('NoteStore-triggered reload failed:', e)
         }
       })()
     })
 
-    return unsubscribe
+    return unsub
   }, [noteId, editorState])
 
   // Core save logic — accepts noteId as parameter to avoid stale closure bugs
   const saveNoteById = useCallback(async (targetNoteId: string) => {
     try {
       setSaving(true)
-      suppressSnapshotRef.current = true
+      suppressStoreReloadRef.current = true
       controller.sortCompletedToBottom()
       controller.commitUndoState(true)
 
@@ -281,7 +299,8 @@ export function useEditor(noteId: string | undefined) {
 
       setDirty(false)
     } catch (e) {
-      setError(e instanceof Error ? e.message : ERROR_SAVE)
+      setSaveError(e instanceof Error ? e.message : ERROR_SAVE)
+      throw e // Re-throw so unmount/beforeunload callers can persist the error
     } finally {
       setSaving(false)
     }
@@ -297,7 +316,7 @@ export function useEditor(noteId: string | undefined) {
     if (!noteId) return
     const newValue = !showCompleted
     setShowCompleted(newValue)
-    suppressSnapshotRef.current = true
+    suppressStoreReloadRef.current = true
     try {
       await repo.updateShowCompleted(noteId, newValue)
     } catch (e) {
@@ -313,7 +332,11 @@ export function useEditor(noteId: string | undefined) {
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
       if (dirtyRef.current && noteIdRef.current) {
-        void saveNoteById(noteIdRef.current)
+        const targetId = noteIdRef.current
+        void saveNoteById(targetId).catch((err) => {
+          const msg = err instanceof Error ? err.message : SAVE_ERROR_BANNER
+          try { sessionStorage.setItem(PENDING_SAVE_ERROR_KEY, JSON.stringify({ noteId: targetId, message: msg })) } catch { /* ignore */ }
+        })
         e.preventDefault()
       }
     }
@@ -329,10 +352,26 @@ export function useEditor(noteId: string | undefined) {
     const capturedNoteId = noteId
     return () => {
       if (dirtyRef.current && capturedNoteId) {
-        void saveNoteById(capturedNoteId)
+        // Optimistic update: push dirty content into NoteStore immediately
+        // so view directives on the destination note see the edit before
+        // the async save completes. Use silent update to avoid triggering
+        // a re-render of the outgoing screen (the destination note's render
+        // will pick up the new snapshot via getSnapshot()).
+        const existing = noteStore.getNoteById(capturedNoteId)
+        if (existing) {
+          const dirtyContent = editorState.lines.map((l) => l.text).join('\n')
+          noteStore.updateNoteSilently(capturedNoteId, { ...existing, content: dirtyContent })
+        }
+
+        void saveNoteById(capturedNoteId).catch((err) => {
+          const msg = err instanceof Error ? err.message : SAVE_ERROR_BANNER
+          try { sessionStorage.setItem(PENDING_SAVE_ERROR_KEY, JSON.stringify({ noteId: capturedNoteId, message: msg })) } catch { /* ignore */ }
+        })
       }
     }
-  }, [noteId, saveNoteById])
+  }, [noteId, editorState, saveNoteById])
+
+  const clearSaveError = useCallback(() => setSaveError(null), [])
 
   return {
     controller,
@@ -342,6 +381,8 @@ export function useEditor(noteId: string | undefined) {
     showLoading,
     saving,
     error,
+    saveError,
+    clearSaveError,
     dirty,
     save,
     showCompleted,

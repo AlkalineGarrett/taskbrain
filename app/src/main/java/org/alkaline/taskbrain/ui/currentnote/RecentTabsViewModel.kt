@@ -16,7 +16,8 @@ import org.alkaline.taskbrain.data.TabState
  */
 data class CachedNoteContent(
     val noteLines: List<NoteLine>,
-    val isDeleted: Boolean = false
+    val isDeleted: Boolean = false,
+    val isDirty: Boolean = false
 )
 
 /**
@@ -53,8 +54,8 @@ class RecentTabsViewModel : ViewModel() {
     /**
      * Caches note content for instant tab switching.
      */
-    fun cacheNoteContent(noteId: String, noteLines: List<NoteLine>, isDeleted: Boolean = false) {
-        noteCache[noteId] = CachedNoteContent(noteLines, isDeleted)
+    fun cacheNoteContent(noteId: String, noteLines: List<NoteLine>, isDeleted: Boolean = false, isDirty: Boolean = false) {
+        noteCache[noteId] = CachedNoteContent(noteLines, isDeleted, isDirty)
     }
 
     /**

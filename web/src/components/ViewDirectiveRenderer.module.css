@@ -3,7 +3,6 @@
   flex: 1 1 100%;
   border-left: 3px solid var(--color-view-border);
   padding-left: 12px;
-  padding-right: 28px;
   margin: 4px 0;
   position: relative;
 }
@@ -44,23 +43,6 @@
 
 .noteSection {
   padding: 4px 0;
-  cursor: pointer;
-  border-radius: 4px;
-  transition: background-color 0.15s;
-}
-
-.noteSection:hover {
-  background-color: var(--color-surface-alt);
-}
-
-.noteLine {
-  min-height: 1.4em;
-  line-height: 1.4;
-  font-size: var(--font-size-editor);
-}
-
-.noteSectionEditing {
-  padding: 4px 0;
 }
 
 .inlineTextarea {
@@ -71,9 +53,62 @@
   overflow: hidden;
   font-family: inherit;
   font-size: var(--font-size-editor);
-  line-height: 1.4;
-  padding: 4px 0;
-  background: var(--color-surface-focus);
+  line-height: 1.5rem;
+  padding: 0;
+  background: transparent;
   border-radius: 4px;
   box-sizing: border-box;
+  cursor: text;
+}
+
+.inlineTextarea:focus {
+  background: var(--color-surface-focus);
+}
+
+.inlineSaveButton {
+  position: absolute;
+  top: 4px;
+  right: 30px;
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  border: none;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  height: 1.5rem;
+  z-index: 1;
+}
+
+.inlineSaveButton:hover {
+  background: var(--color-primary-hover);
+}
+
+.inlineSaveButton:disabled {
+  background: var(--color-disabled-bg);
+  cursor: default;
+}
+
+.inlineSaveError {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--color-error-bg, #fdecea);
+  color: var(--color-error-hover);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  margin-bottom: 4px;
+}
+
+.inlineSaveErrorDismiss {
+  background: none;
+  border: none;
+  color: var(--color-error-hover);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.125rem 0.25rem;
+  margin-left: 0.5rem;
+  flex-shrink: 0;
 }

@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import org.alkaline.taskbrain.data.Alarm
 import org.alkaline.taskbrain.data.AlarmStatus
 import org.alkaline.taskbrain.data.CloseTabResult
+import org.alkaline.taskbrain.data.NoteStore
 import org.alkaline.taskbrain.data.TabState
 import org.alkaline.taskbrain.ui.currentnote.rendering.ButtonCallbacks
 import org.alkaline.taskbrain.ui.currentnote.util.AlarmSymbolUtils
@@ -55,6 +56,7 @@ import org.alkaline.taskbrain.ui.currentnote.components.CommandBar
 import org.alkaline.taskbrain.ui.currentnote.components.NoteTextField
 import org.alkaline.taskbrain.ui.currentnote.components.StatusBar
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.SideEffect
 import android.util.Log
 import org.alkaline.taskbrain.dsl.directives.DirectiveFinder
 import org.alkaline.taskbrain.dsl.directives.DirectiveResult
@@ -86,6 +88,7 @@ fun CurrentNoteScreen(
     val schedulingWarning by currentNoteViewModel.schedulingWarning.observeAsState()
     val isAlarmOperationPending by currentNoteViewModel.isAlarmOperationPending.observeAsState(false)
     val redoRollbackWarning by currentNoteViewModel.redoRollbackWarning.observeAsState()
+    val saveWarning by currentNoteViewModel.saveWarning.observeAsState()
     val isNoteDeletedFromVm by currentNoteViewModel.isNoteDeleted.observeAsState(false)
     val showCompleted by currentNoteViewModel.showCompleted.observeAsState(true)
     // Generation counter bumps after async cache fills, triggering recomposition
@@ -98,14 +101,21 @@ fun CurrentNoteScreen(
     // --- Local state ---
     var displayedNoteId by remember { mutableStateOf(noteId) }
     LaunchedEffect(noteId) {
-        if (noteId != displayedNoteId) displayedNoteId = noteId
+        // Skip null transitions (navigation intermediates) to avoid flashing empty content
+        if (noteId != null && noteId != displayedNoteId) displayedNoteId = noteId
     }
 
+    // Only use editor cache for dirty notes (unsaved edits); clean notes load from NoteStore
     val cachedContent = remember(displayedNoteId) {
-        displayedNoteId?.let { recentTabsViewModel.getCachedContent(it) }
+        displayedNoteId?.let { recentTabsViewModel.getCachedContent(it) }?.takeIf { it.isDirty }
     }
-    val initialContent = cachedContent?.noteLines?.joinToString("\n") { it.content } ?: ""
-    val initialIsDeleted = cachedContent?.isDeleted ?: false
+    val storeContent = remember(displayedNoteId) {
+        displayedNoteId?.let { NoteStore.getNoteById(it) }
+    }
+    val initialContent = cachedContent?.noteLines?.joinToString("\n") { it.content }
+        ?: storeContent?.content
+        ?: ""
+    val initialIsDeleted = cachedContent?.isDeleted ?: (storeContent?.state == "deleted")
 
     var isNoteDeleted by remember(displayedNoteId) { mutableStateOf(initialIsDeleted) }
     LaunchedEffect(isNoteDeletedFromVm) { isNoteDeleted = isNoteDeletedFromVm }
@@ -119,6 +129,32 @@ fun CurrentNoteScreen(
     var isAgentSectionExpanded by remember { mutableStateOf(false) }
     @Suppress("KotlinConstantConditions")
     val agentCommandEnabled = BuildConfig.AGENT_COMMAND_ENABLED
+
+    // Wrapper for user edits. Updates userContent and marks the note hot
+    // (so Firestore echo doesn't overwrite it).
+    fun updateContent(newContent: String) {
+        userContent = newContent
+        displayedNoteId?.let { NoteStore.markHot(it) }
+    }
+
+    // Push editor content to NoteStore on tab switch only (not every keystroke —
+    // StateFlow emissions reset the cursor). SideEffect captures the latest
+    // content/noteId AFTER each composition. When displayedNoteId changes, the
+    // remember block reads the refs (still holding PREVIOUS values) and pushes.
+    val prevContentRef = remember { mutableStateOf("") }
+    val prevNoteIdRef = remember { mutableStateOf<String?>(null) }
+    SideEffect {
+        prevContentRef.value = userContent
+        prevNoteIdRef.value = displayedNoteId
+    }
+    remember(displayedNoteId) {
+        val prevId = prevNoteIdRef.value
+        val prevContent = prevContentRef.value
+        if (prevId != null && prevId != displayedNoteId && prevContent.isNotEmpty()) {
+            currentNoteViewModel.pushContentToNoteStore(prevId, prevContent)
+        }
+        Unit
+    }
 
     val mainContentFocusRequester = remember { FocusRequester() }
     var isMainContentFocused by remember { mutableStateOf(false) }
@@ -136,8 +172,10 @@ fun CurrentNoteScreen(
     // Compute directive results synchronously — no async races.
     // The CachedDirectiveExecutor's L1 cache makes cache hits instant.
     // directiveCacheGeneration triggers recomposition after async cache fills (cold start).
-    val directiveResults = remember(userContent, directiveCacheGeneration) {
-        currentNoteViewModel.computeDirectiveResults(userContent)
+    val directiveResults = remember(userContent, directiveCacheGeneration, displayedNoteId) {
+        // NoteStore already has the latest content (pushed on every keystroke via updateContent).
+        // No flush needed — just compute directives.
+        currentNoteViewModel.computeDirectiveResults(userContent, displayedNoteId)
     }
 
     // Update hidden indices for move system when showCompleted or lines change
@@ -160,6 +198,7 @@ fun CurrentNoteScreen(
                     noteId = session.noteId,
                     newContent = session.currentContent,
                     onSuccess = {
+                        session.markSaved()
                         recentTabsViewModel.invalidateCache(session.noteId)
                         currentNoteViewModel.executeDirectivesForContent(session.currentContent) { results ->
                             session.updateDirectiveResults(results)
@@ -233,10 +272,12 @@ fun CurrentNoteScreen(
         loadStatus = loadStatus,
         tabsError = tabsError,
         userContent = userContent,
+        isSaved = isSaved,
         editorState = editorState,
         controller = controller,
         currentNoteViewModel = currentNoteViewModel,
         recentTabsViewModel = recentTabsViewModel,
+        inlineEditState = inlineEditState,
         onContentLoaded = { loadedContent ->
             userContent = loadedContent
             textFieldValue = TextFieldValue(loadedContent, TextRange(loadedContent.length))
@@ -255,7 +296,7 @@ fun CurrentNoteScreen(
         controller = controller,
         currentNoteViewModel = currentNoteViewModel,
         recentTabsViewModel = recentTabsViewModel,
-        onContentChanged = { userContent = it },
+        onContentChanged = { updateContent(it) },
         onSavedChanged = { isSaved = it }
     )
 
@@ -267,7 +308,7 @@ fun CurrentNoteScreen(
         controller = controller,
         currentNoteViewModel = currentNoteViewModel,
         onContentChanged = { content, tfv ->
-            userContent = content
+            updateContent(content)
             textFieldValue = tfv
         },
         onMarkUnsaved = { isSaved = false }
@@ -281,7 +322,7 @@ fun CurrentNoteScreen(
         val updatedText = editorState.text.replace(tapped, newDirective)
         if (updatedText != editorState.text) {
             editorState.updateFromText(updatedText)
-            userContent = editorState.text
+            updateContent(editorState.text)
             isSaved = false
             currentNoteViewModel.saveContent(editorState.text, editorState.lines.map { it.noteIds })
         }
@@ -297,6 +338,8 @@ fun CurrentNoteScreen(
         notificationPermissionWarning = notificationPermissionWarning,
         schedulingWarning = schedulingWarning,
         redoRollbackWarning = redoRollbackWarning,
+        saveWarning = saveWarning,
+        onClearSaveWarning = { currentNoteViewModel.clearSaveWarning() },
         onClearSaveError = { currentNoteViewModel.clearSaveError() },
         onClearLoadError = { currentNoteViewModel.clearLoadError() },
         onClearTabsError = { recentTabsViewModel.clearError() },
@@ -382,7 +425,7 @@ fun CurrentNoteScreen(
         val oldText = textFieldValue.text
         textFieldValue = newValue
         if (newValue.text != userContent) {
-            userContent = newValue.text
+            updateContent(newValue.text)
             if (isSaved) isSaved = false
             val oldBracketCount = oldText.count { it == ']' }
             val newBracketCount = newValue.text.count { it == ']' }
@@ -429,7 +472,7 @@ fun CurrentNoteScreen(
             editorState = editorState,
             controller = controller,
             currentNoteViewModel = currentNoteViewModel,
-            onContentChanged = { userContent = it },
+            onContentChanged = { updateContent(it) },
             onMarkUnsaved = { isSaved = false },
             showCompleted = showCompleted,
             onShowCompletedToggle = { currentNoteViewModel.toggleShowCompleted() },
@@ -473,7 +516,7 @@ fun CurrentNoteScreen(
                 recentTabsViewModel = recentTabsViewModel,
                 inlineEditState = inlineEditState,
                 userContent = userContent,
-                onContentChanged = { userContent = it },
+                onContentChanged = { updateContent(it) },
                 onMarkUnsaved = { isSaved = false }
             )
             val buttonCallbacks = rememberButtonCallbacks(
@@ -541,7 +584,7 @@ fun CurrentNoteScreen(
                 inlineEditState.activeSession?.let { it.isMoveInProgress = true }
                 if (activeController.moveUp()) {
                     if (!inlineEditState.isActive) {
-                        userContent = editorState.text
+                        updateContent(editorState.text)
                         isSaved = false
                     }
                 }
@@ -550,7 +593,7 @@ fun CurrentNoteScreen(
                 inlineEditState.activeSession?.let { it.isMoveInProgress = true }
                 if (activeController.moveDown()) {
                     if (!inlineEditState.isActive) {
-                        userContent = editorState.text
+                        updateContent(editorState.text)
                         isSaved = false
                     }
                 }
@@ -639,7 +682,8 @@ private fun LifecycleAutoSaveEffect(
                 recentTabsViewModel.cacheNoteContent(
                     currentNoteIdForPersistence!!,
                     trackedLines,
-                    currentIsNoteDeleted
+                    currentIsNoteDeleted,
+                    isDirty = true
                 )
                 recentTabsViewModel.updateTabDisplayText(currentNoteIdForPersistence!!, currentUserContent)
                 currentNoteViewModel.saveContent(currentUserContent, controller.state.lines.map { it.noteIds })
@@ -657,17 +701,63 @@ private fun DataLoadingEffects(
     loadStatus: LoadStatus?,
     tabsError: TabsError?,
     userContent: String,
+    isSaved: Boolean,
     editorState: EditorState,
     controller: EditorController,
     currentNoteViewModel: CurrentNoteViewModel,
     recentTabsViewModel: RecentTabsViewModel,
+    inlineEditState: InlineEditState?,
     onContentLoaded: (String) -> Unit,
 ) {
     val context = LocalContext.current
 
-    // Load content when displayed note changes
+    // Load content when displayed note changes.
+    // Flush any dirty inline edit to NoteStore before loading the new note.
+    // Focus loss fires AFTER recomposition, so the inline edit's onSave hasn't
+    // run yet — push the dirty content to NoteStore here so loadContent sees it.
     LaunchedEffect(displayedNoteId) {
+        inlineEditState?.activeSession?.let { session ->
+            if (session.isDirty) {
+                // Only save if the session's content is actually NEWER than NoteStore.
+                // The user may have edited the note directly (on another tab) after the
+                // inline session was created — NoteStore would have the newer content.
+                // Saving the stale session content would overwrite the direct edit.
+                val storeContent = NoteStore.getNoteById(session.noteId)?.content
+                val sessionContent = session.currentContent
+                if (storeContent == null || storeContent == session.originalContent || sessionContent == storeContent) {
+                    // NoteStore hasn't changed since the session started, or matches session — safe to save
+                    if (storeContent != sessionContent) {
+                        currentNoteViewModel.saveInlineNoteContent(
+                            noteId = session.noteId,
+                            newContent = sessionContent
+                        )
+                    }
+                }
+                // else: NoteStore has different content from a direct edit — don't overwrite
+            }
+        }
         currentNoteViewModel.loadContent(displayedNoteId, recentTabsViewModel)
+    }
+
+    // Detect external changes (e.g., from web app) via NoteStore's collection listener.
+    // Only applies when the editor is clean and the change is truly external (not our own save).
+    LaunchedEffect(displayedNoteId) {
+        if (displayedNoteId == null) return@LaunchedEffect
+        var isFirstEmission = true
+        NoteStore.notes.collect {
+            if (isFirstEmission) { isFirstEmission = false; return@collect }
+            if (!isSaved) return@collect // local edits take priority
+            // Skip if a save is in progress or just completed — the NoteStore change
+            // is from our own save, not an external source. Without this, the save's
+            // NoteStore update triggers editorState.updateFromText which resets the cursor.
+            val currentSaveStatus = currentNoteViewModel.saveStatus.value
+            if (currentSaveStatus is SaveStatus.Saving || currentSaveStatus is SaveStatus.Success) return@collect
+            val storeNote = NoteStore.getNoteById(displayedNoteId) ?: return@collect
+            if (storeNote.content != userContent) {
+                onContentLoaded(storeNote.content)
+                editorState.updateFromText(storeNote.content)
+            }
+        }
     }
 
     // Re-execute directives when notes cache is refreshed
@@ -682,6 +772,9 @@ private fun DataLoadingEffects(
     // Update content when loaded from ViewModel
     LaunchedEffect(loadStatus) {
         if (loadStatus is LoadStatus.Success) {
+            // Guard: only apply content if it's for the currently displayed note.
+            // Stale results from a previous loadContent can arrive after a tab switch.
+            if (loadStatus.noteId != displayedNoteId) return@LaunchedEffect
             val loadedContent = loadStatus.content
             if (loadedContent != userContent) {
                 onContentLoaded(loadedContent)
@@ -795,8 +888,6 @@ private fun ContentSyncEffects(
             if (userContent.isNotEmpty()) {
                 currentNoteId?.let { noteId ->
                     recentTabsViewModel.updateTabDisplayText(noteId, userContent)
-                    val trackedLines = currentNoteViewModel.getTrackedLines()
-                    recentTabsViewModel.cacheNoteContent(noteId, trackedLines, isNoteDeleted)
                 }
             }
         }

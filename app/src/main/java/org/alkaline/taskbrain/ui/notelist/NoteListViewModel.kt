@@ -9,6 +9,7 @@ import kotlinx.coroutines.launch
 import org.alkaline.taskbrain.data.Note
 import org.alkaline.taskbrain.data.NoteFilteringUtils
 import org.alkaline.taskbrain.data.NoteRepository
+import org.alkaline.taskbrain.data.NoteStore
 
 class NoteListViewModel : ViewModel() {
 
@@ -26,48 +27,53 @@ class NoteListViewModel : ViewModel() {
     private val _createNoteStatus = MutableLiveData<CreateNoteStatus>()
     val createNoteStatus: LiveData<CreateNoteStatus> = _createNoteStatus
 
+    init {
+        // Observe NoteStore for real-time updates to the note list
+        viewModelScope.launch {
+            NoteStore.notes.collect { storeNotes ->
+                if (storeNotes.isNotEmpty()) {
+                    applyFilters(storeNotes)
+                    if (_loadStatus.value == LoadStatus.Loading) {
+                        _loadStatus.value = LoadStatus.Success
+                    }
+                }
+            }
+        }
+    }
+
     fun loadNotes() {
         _loadStatus.value = LoadStatus.Loading
 
         viewModelScope.launch {
-            val result = repository.loadAllUserNotes()
-            result.fold(
-                onSuccess = { notesList ->
-                    val activeNotes = NoteFilteringUtils.filterAndSortNotesByLastAccessed(notesList)
-                    val deletedNotes = NoteFilteringUtils.filterAndSortDeletedNotes(notesList)
-                    _notes.value = activeNotes
-                    _deletedNotes.value = deletedNotes
+            try {
+                NoteStore.ensureLoaded()
+                // ensureLoaded() resolved — if the collector hasn't already
+                // set Success (e.g. user has zero notes), do it now.
+                if (_loadStatus.value == LoadStatus.Loading) {
                     _loadStatus.value = LoadStatus.Success
-                },
-                onFailure = { exception ->
-                    Log.d("NoteListViewModel", "Error getting documents: ", exception)
-                    _loadStatus.value = LoadStatus.Error(exception)
                 }
-            )
+            } catch (e: Exception) {
+                Log.d("NoteListViewModel", "Error loading notes: ", e)
+                _loadStatus.value = LoadStatus.Error(e)
+            }
         }
     }
 
     /**
      * Refreshes the notes list without showing loading indicator.
-     * Used for background updates (e.g., when a save completes on another screen).
+     * The NoteStore's collection listener keeps data fresh, so this
+     * is essentially a no-op — the collector above handles updates.
      */
     fun refreshNotes() {
-        viewModelScope.launch {
-            val result = repository.loadAllUserNotes()
-            result.fold(
-                onSuccess = { notesList ->
-                    val activeNotes = NoteFilteringUtils.filterAndSortNotesByLastAccessed(notesList)
-                    val deletedNotes = NoteFilteringUtils.filterAndSortDeletedNotes(notesList)
-                    _notes.value = activeNotes
-                    _deletedNotes.value = deletedNotes
-                    // Don't change loadStatus - keep showing the list
-                },
-                onFailure = { exception ->
-                    Log.d("NoteListViewModel", "Error refreshing notes: ", exception)
-                    // Silently fail - don't show error for background refresh
-                }
-            )
+        val storeNotes = NoteStore.notes.value
+        if (storeNotes.isNotEmpty()) {
+            applyFilters(storeNotes)
         }
+    }
+
+    private fun applyFilters(storeNotes: List<Note>) {
+        _notes.value = NoteFilteringUtils.filterAndSortNotesByLastAccessed(storeNotes)
+        _deletedNotes.value = NoteFilteringUtils.filterAndSortDeletedNotes(storeNotes)
     }
 
     fun createNote(onSuccess: (String) -> Unit) {

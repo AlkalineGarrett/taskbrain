@@ -36,11 +36,6 @@
   background: var(--color-gutter-selected);
 }
 
-
-.line.focused {
-  background: var(--color-surface-focus);
-}
-
 .gutter {
   display: flex;
   align-items: flex-start;
@@ -61,6 +56,10 @@
   width: 500px;
   flex-shrink: 0;
   position: relative;
+}
+
+.line.focused .inputWrapper {
+  background: var(--color-surface-focus);
 }
 
 .input {
@@ -129,6 +128,10 @@
   position: relative;
   font-size: var(--font-size-editor);
   line-height: 1.5rem;
+}
+
+.line.focused .directiveContent {
+  background: var(--color-surface-focus);
 }
 
 /* Grab cursor over selected text to indicate draggable */

@@ -114,7 +114,9 @@ object StalenessChecker {
 
             val currentHash = ContentHasher.hashFirstLine(note.content)
             val cachedHash = cached.noteContentHashes[noteId]?.firstLineHash
-            if (cachedHash == null || currentHash != cachedHash) return true
+            if (cachedHash == null || currentHash != cachedHash) {
+                return true
+            }
         }
 
         for (noteId in deps.nonFirstLineNotes) {
@@ -123,7 +125,9 @@ object StalenessChecker {
 
             val currentHash = ContentHasher.hashNonFirstLine(note.content)
             val cachedHash = cached.noteContentHashes[noteId]?.nonFirstLineHash
-            if (cachedHash == null || currentHash != cachedHash) return true
+            if (cachedHash == null || currentHash != cachedHash) {
+                return true
+            }
         }
 
         // Check hierarchy dependencies (.up, .root)

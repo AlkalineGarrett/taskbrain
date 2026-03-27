@@ -2,6 +2,8 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useEffect, useCallback, useState, useRef, useMemo } from 'react'
 import type { Note } from '@/data/Note'
 import { NoteRepository } from '@/data/NoteRepository'
+import { noteStore } from '@/data/NoteStore'
+import { useAllNotes, useNoteStoreError } from '@/hooks/useNoteStore'
 import { MutationType, type NoteMutation } from '@/dsl/runtime/NoteMutation'
 import { NoteRepositoryOperations } from '@/dsl/runtime/NoteRepositoryOperations'
 import { useEditor } from '@/hooks/useEditor'
@@ -12,7 +14,7 @@ import { EditorLine } from '@/components/EditorLine'
 import { CompletedPlaceholderRow } from '@/components/CompletedPlaceholderRow'
 import { RecentTabsBar, addOrUpdateTab, updateTabDisplayText, removeTab } from '@/components/RecentTabsBar'
 import { extractDisplayText } from '@/data/TabState'
-import { LOADING_NOTE, DELETE_NOTE, DELETE_NOTE_CONFIRM_TITLE, DELETE_NOTE_CONFIRM_MESSAGE } from '@/strings'
+import { LOADING_NOTE, DELETE_NOTE, DELETE_NOTE_CONFIRM_TITLE, DELETE_NOTE_CONFIRM_MESSAGE, SAVE_ERROR_BANNER, SAVE_ERROR_DISMISS, SYNC_ERROR_BANNER } from '@/strings'
 import { db, auth } from '@/firebase/config'
 import { LineState } from '@/editor/LineState'
 import { computeHiddenIndices, computeDisplayItemsFromHidden, computeEffectiveHidden, computeFadedIndices, nearestVisibleLine } from '@/editor/CompletedLineUtils'
@@ -33,25 +35,18 @@ interface HitResult {
 export function NoteEditorScreen() {
   const { noteId: urlNoteId } = useParams<{ noteId: string }>()
   const navigate = useNavigate()
-  const { controller, editorState, loading, loadedNoteId, showLoading, saving, error, dirty, save, showCompleted, toggleShowCompleted } = useEditor(urlNoteId)
+  const { controller, editorState, loading, loadedNoteId, showLoading, saving, error, saveError, clearSaveError, dirty, save, showCompleted, toggleShowCompleted } = useEditor(urlNoteId)
   // Use loadedNoteId for all rendering — keeps showing the old note until
   // the new one is fully loaded, preventing transition flashes.
   const noteId = loadedNoteId ?? urlNoteId
 
-  // Load all notes with full content for DSL context (e.g., view() directive)
-  const [allNotes, setAllNotes] = useState<Note[]>([])
+  // All notes from singleton store — single source of truth for directive context
+  const allNotes = useAllNotes()
+  const syncError = useNoteStoreError()
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
-  // Load all notes once on mount. Reloaded explicitly after saves/edits.
-  useEffect(() => {
-    let cancelled = false
-    const load = async () => {
-      const notes = await noteRepo.loadNotesWithFullContent()
-      if (!cancelled) setAllNotes(notes)
-    }
-    void load()
-    return () => { cancelled = true }
-  }, [])
+  // Start Firestore collection listener for real-time note sync
+  useEffect(() => { noteStore.start(db, auth) }, [])
 
   // Derive currentNote from allNotes — no separate async load, no race.
   const currentNote = useMemo(
@@ -69,10 +64,7 @@ export function NoteEditorScreen() {
   // Handle mutations from directive execution
   const handleMutations = useCallback((mutations: NoteMutation[]) => {
     for (const mutation of mutations) {
-      // Update local notes cache
-      setAllNotes((prev) =>
-        prev.map((n) => (n.id === mutation.noteId ? mutation.updatedNote : n)),
-      )
+      noteStore.updateNote(mutation.noteId, mutation.updatedNote)
 
       // Update editor content if the currently-edited note was mutated
       if (mutation.noteId === noteId) {
@@ -112,7 +104,7 @@ export function NoteEditorScreen() {
     [allNotes],
   )
 
-  const { results: directiveResults, invalidateAndRecompute, refreshDirective } =
+  const { results: directiveResults, mutations: directiveMutations, invalidateAndRecompute, refreshDirective } =
     useDirectives({
       noteId: loadedNoteId,
       editorState,
@@ -121,14 +113,25 @@ export function NoteEditorScreen() {
       noteOperations,
     })
 
-  // Save an inline-edited viewed note and refresh directives
+  // Process mutations from directive execution (e.g., property assignments, .append())
+  useEffect(() => {
+    if (directiveMutations.length > 0) {
+      handleMutations(directiveMutations)
+    }
+  }, [directiveMutations, handleMutations])
+
   const handleViewNoteSave = useCallback(async (viewedNoteId: string, newContent: string) => {
-    await noteRepo.saveNoteWithFullContent(viewedNoteId, newContent)
-    // Refresh notes and re-execute directives
-    const notes = await noteRepo.loadNotesWithFullContent()
-    setAllNotes(notes)
+    // Update store optimistically so directives see the edit before Firestore confirms
+    const existing = noteStore.getNoteById(viewedNoteId)
+    if (existing) {
+      noteStore.updateNote(viewedNoteId, { ...existing, content: newContent })
+    }
+    // Track the Firestore write so useEditor can await it before loading
+    const savePromise = noteRepo.saveNoteWithFullContent(viewedNoteId, newContent)
+    noteStore.trackSave(viewedNoteId, savePromise)
+    await savePromise
     invalidateAndRecompute()
-  }, [noteId, editorState, invalidateAndRecompute])
+  }, [invalidateAndRecompute])
 
   // Add/move tab to front when note first opens, and remember for nav
   useEffect(() => {
@@ -146,11 +149,17 @@ export function NoteEditorScreen() {
     void updateTabDisplayText(noteId, displayText)
   }, [noteId, loading, firstLineText])
 
-  // Save with directive execution
+  // Save with directive execution — update note store so directives see fresh content
   const saveWithDirectives = useCallback(async () => {
     await save()
+    if (noteId) {
+      const existing = noteStore.getNoteById(noteId)
+      if (existing) {
+        noteStore.updateNote(noteId, { ...existing, content: editorState.text })
+      }
+    }
     invalidateAndRecompute()
-  }, [save, editorState, invalidateAndRecompute])
+  }, [save, noteId, editorState, invalidateAndRecompute])
 
   // Directive edit callback
   const handleDirectiveEdit = useCallback((oldSourceText: string, newSourceText: string) => {
@@ -194,7 +203,10 @@ export function NoteEditorScreen() {
     if (!noteId) return
     try {
       await noteRepo.undeleteNote(noteId)
-      setAllNotes((prev) => prev.map((n) => n.id === noteId ? { ...n, state: null } : n))
+      const existing = noteStore.getNoteById(noteId)
+      if (existing) {
+        noteStore.updateNote(noteId, { ...existing, state: null })
+      }
     } catch (e) {
       console.error('Failed to restore note:', e)
     }
@@ -511,6 +523,20 @@ export function NoteEditorScreen() {
         onConfirm={() => { setShowDeleteConfirm(false); void handleDeleteNote() }}
         onCancel={() => setShowDeleteConfirm(false)}
       />
+
+      {saveError && (
+        <div className={styles.saveErrorBanner}>
+          <span>{SAVE_ERROR_BANNER}</span>
+          <button className={styles.saveErrorDismiss} onClick={clearSaveError}>{SAVE_ERROR_DISMISS}</button>
+        </div>
+      )}
+
+      {syncError && (
+        <div className={styles.saveErrorBanner}>
+          <span>{SYNC_ERROR_BANNER}</span>
+          <button className={styles.saveErrorDismiss} onClick={() => noteStore.clearError()}>{SAVE_ERROR_DISMISS}</button>
+        </div>
+      )}
 
       <div className={styles.editorArea}>
         <div

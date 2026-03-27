@@ -13,20 +13,26 @@ import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -55,11 +61,15 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.colorResource
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.alkaline.taskbrain.R
 import org.alkaline.taskbrain.data.Note
 import org.alkaline.taskbrain.dsl.directives.DirectiveResult
 import org.alkaline.taskbrain.dsl.directives.DirectiveSegment
@@ -736,43 +746,6 @@ internal fun renderContentWithDirectives(
 }
 
 /**
- * Determines the effective display content during the transitional state.
- *
- * When saving an inline edit, there's a window between when isEditing becomes false
- * and when directiveResults is refreshed with new content. During this window,
- * displayContent (from directiveResults) contains STALE content.
- *
- * This function returns rendered sessionContent during the transitional state to ensure
- * the user sees their edits immediately with directives properly rendered.
- *
- * @param isEditing Whether the note is currently in edit mode
- * @param hasActiveSession Whether there's an active inline edit session for this note
- * @param displayContent The content from directiveResults (may be stale during transition)
- * @param sessionContent The current raw content from the active session (always fresh)
- * @param sessionDirectiveResults The directive results from the session (for rendering)
- * @return The content to display (with directives rendered)
- */
-internal fun getEffectiveDisplayContent(
-    isEditing: Boolean,
-    hasActiveSession: Boolean,
-    displayContent: String,
-    sessionContent: String?,
-    sessionDirectiveResults: Map<String, DirectiveResult>?
-): String {
-    return if (!isEditing && hasActiveSession && sessionContent != null) {
-        // Transitional state: session still active after save
-        // Render the fresh content using the session's directive results
-        if (sessionDirectiveResults != null && sessionDirectiveResults.isNotEmpty()) {
-            renderContentWithDirectives(sessionContent, sessionDirectiveResults)
-        } else {
-            sessionContent
-        }
-    } else {
-        displayContent
-    }
-}
-
-/**
  * Content from a view directive, rendered inline with inline editing support.
  * Shows the viewed notes' content with a subtle left border indicator.
  *
@@ -801,12 +774,6 @@ private fun ViewDirectiveInlineContent(
     val notes = viewVal.notes
     val renderedContents = viewVal.renderedContents
 
-    Log.d(TAG, "ViewDirectiveInlineContent: notes.size=${notes.size}, renderedContents.size=${renderedContents?.size}")
-    notes.forEachIndexed { index, note ->
-        val displayContent = renderedContents?.getOrNull(index) ?: note.content
-        Log.d(TAG, "  Note[$index]: id=${note.id}, displayContentPreview='${displayContent.take(50)}...', rawContentPreview='${note.content.take(50)}...'")
-    }
-
     // Track which note is currently being edited (by index)
     var editingNoteIndex by remember { mutableStateOf<Int?>(null) }
 
@@ -829,33 +796,22 @@ private fun ViewDirectiveInlineContent(
             )
         }
 
-        // Main content box with edit button
+        // Main content box with edit/save buttons
         Box(modifier = Modifier.fillMaxWidth()) {
-            // Edit directive button at top-right
-            IconButton(
-                onClick = onEditDirective,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .size(ViewEditButtonSize)
-                    .padding(end = 4.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = "Edit view directive",
-                    tint = ViewIndicatorColor,
-                    modifier = Modifier.size(ViewEditIconSize)
-                )
-            }
+            val inlineEditState = LocalInlineEditState.current
+            val activeSession = inlineEditState?.activeSession
+            val editingNoteIsDirty = editingNoteIndex != null &&
+                activeSession != null &&
+                notes.getOrNull(editingNoteIndex ?: -1)?.id == activeSession.noteId &&
+                activeSession.isDirty
 
-            // Note content - either split by sections or as a single block
+            // Note content first (below buttons in z-order)
             if (notes.isEmpty()) {
                 // Empty view - show placeholder
                 Text(
                     text = displayText,
                     style = textStyle.copy(color = ViewIndicatorColor),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(end = ViewEditButtonSize)
+                    modifier = Modifier.fillMaxWidth()
                 )
             } else if (notes.size == 1) {
                 // Single note - simple case
@@ -874,16 +830,13 @@ private fun ViewDirectiveInlineContent(
                         editingNoteIndex = null
                         onNoteTap(note.id, newContent)
                     },
-                    onCancel = { editingNoteIndex = null },
-                    modifier = Modifier.padding(end = ViewEditButtonSize)
+                    onCancel = { editingNoteIndex = null }
                 )
             } else {
                 // Multiple notes with separators
                 Log.d(TAG, "ViewDirectiveInlineContent: Rendering ${notes.size} notes in Column")
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(end = ViewEditButtonSize)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     notes.forEachIndexed { index, note ->
                         // Separator before each note except first
@@ -920,6 +873,52 @@ private fun ViewDirectiveInlineContent(
                     }
                 }
             }
+
+            // Overlay buttons on top (last child in Box = highest z-order = receives taps)
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (editingNoteIsDirty) {
+                    Button(
+                        onClick = {
+                            activeSession?.let { onNoteTap(it.noteId, it.currentContent) }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = colorResource(R.color.action_button_background),
+                            contentColor = colorResource(R.color.action_button_text)
+                        ),
+                        shape = RoundedCornerShape(6.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        modifier = Modifier.height(22.dp)
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_save),
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = colorResource(R.color.action_button_text)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = stringResource(R.string.action_save),
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = onEditDirective,
+                    modifier = Modifier.size(ViewEditButtonSize)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Edit view directive",
+                        tint = ViewIndicatorColor,
+                        modifier = Modifier.size(ViewEditIconSize)
+                    )
+                }
+            }
         }  // Close the Box
     }  // Close the Column
 }
@@ -950,18 +949,11 @@ private fun EditableViewNoteSection(
     // Track if the text field has ever been focused - prevents canceling on initial render
     var hasBeenFocused by remember { mutableStateOf(false) }
 
-    // Use helper function to get correct content during transitional state
-    val hasActiveSession = inlineEditState?.isEditingNote(note.id) == true
-    val activeSession = inlineEditState?.activeSession
-    val effectiveDisplayContent = getEffectiveDisplayContent(
-        isEditing = isEditing,
-        hasActiveSession = hasActiveSession,
-        displayContent = displayContent,
-        sessionContent = activeSession?.currentContent,
-        sessionDirectiveResults = activeSession?.directiveResults
-    )
-
-    Log.d(TAG, "EditableViewNoteSection: noteId=${note.id}, isEditing=$isEditing, effectiveDisplayContentLength=${effectiveDisplayContent.length}, preview='${effectiveDisplayContent.take(30)}...'")
+    // Always use displayContent from the directive result's ViewVal.
+    // Session content is only visible through its own EditorState text field,
+    // never through this display path (prevents stale session content from
+    // overriding fresh directive results — see Bug 10 in note-store-architecture.md).
+    val effectiveDisplayContent = displayContent
 
     // Reset hasBeenFocused when exiting edit mode
     LaunchedEffect(isEditing) {
@@ -970,12 +962,21 @@ private fun EditableViewNoteSection(
         }
     }
 
-    // Start/end inline edit session based on editing state
-    // Use editContent (raw) for editing, not displayContent (rendered)
-    LaunchedEffect(isEditing, note.id, editContent) {
-        if (isEditing && inlineEditState != null && !inlineEditState.isEditingNote(note.id)) {
-            inlineEditState.startSession(note.id, editContent)
+    // Start inline edit session synchronously during composition (not LaunchedEffect).
+    // LaunchedEffect runs after composition in a coroutine — EditorState mutations
+    // in the coroutine can be reverted by Compose's snapshot system, causing the
+    // content to appear empty on the next render.
+    remember(isEditing, note.id, editContent) {
+        if (isEditing && inlineEditState != null) {
+            val existingSession = inlineEditState.activeSession
+            val needsNewSession = existingSession == null ||
+                existingSession.noteId != note.id ||
+                existingSession.originalContent != editContent
+            if (needsNewSession) {
+                inlineEditState.startSession(note.id, editContent)
+            }
         }
+        Unit
     }
 
     // Get the active session if this note is being edited
@@ -994,24 +995,14 @@ private fun EditableViewNoteSection(
                 onFocusChanged = { isFocused ->
                     if (isFocused) {
                         hasBeenFocused = true
-                        // Don't clear the collapsing flag immediately - it will be cleared
-                        // after a short delay via LaunchedEffect to handle rapid focus changes
                     } else if (hasBeenFocused && isEditing) {
-                        // Check if focus moved to an expanded directive editor (part of inline editing)
-                        // or if we're in the process of collapsing a directive (focus will return)
-                        // or if a move operation is in progress (focus will return)
                         val hasExpandedDirective = session.expandedDirectiveKey != null
                         val isCollapsing = session.isCollapsingDirective
                         val isMoving = session.isMoveInProgress
                         if (!hasExpandedDirective && !isCollapsing && !isMoving) {
-                            // Only handle focus loss if we previously had focus and no directive interaction
-                            // DON'T end the UI session here - let the save/refresh flow handle it
-                            // to avoid showing stale directiveResults during the async refresh.
-                            // The session will be ended in CurrentNoteScreen after forceRefreshAllDirectives completes.
                             if (session.isDirty) {
                                 onSave(session.currentContent)
                             } else {
-                                // For cancel (no changes), we can end the session immediately since no refresh needed
                                 inlineEditState?.endSession()
                                 onCancel()
                             }
@@ -1021,7 +1012,6 @@ private fun EditableViewNoteSection(
                 modifier = Modifier.fillMaxWidth()
             )
 
-            // Request focus after the editor is composed
             LaunchedEffect(Unit) {
                 try {
                     focusRequester.requestFocus()
@@ -1030,12 +1020,8 @@ private fun EditableViewNoteSection(
                 }
             }
 
-            // Clear the collapsing flag after a delay when focus is gained
-            // This delay allows the directive confirm save chain to complete
-            // before we allow focus loss to trigger exit-edit-mode
             LaunchedEffect(session.isCollapsingDirective) {
                 if (session.isCollapsingDirective) {
-                    // Wait for things to settle before clearing the flag
                     kotlinx.coroutines.delay(500)
                     session.clearCollapsingFlag()
                 }

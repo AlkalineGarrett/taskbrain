@@ -216,4 +216,11 @@
     <string name="schedule_missed_fmt">Missed %s ago</string>
     <string name="schedule_success">Success</string>
     <string name="schedule_failed">Failed</string>
+
+    <!-- Save warnings -->
+    <string name="warning_save_failed_title">Save Warning</string>
+    <string name="warning_save_failed">Your changes may not have been saved</string>
+
+    <!-- Sync warnings -->
+    <string name="warning_sync_error">Note sync interrupted — changes from other devices may not appear</string>
 </resources>

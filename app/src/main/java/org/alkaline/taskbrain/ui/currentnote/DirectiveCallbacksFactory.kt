@@ -45,11 +45,11 @@ fun rememberDirectiveCallbacks(
             )
         },
         onViewNoteTap = { _, noteId, noteContent ->
-            Log.d("CurrentNoteScreen", "onViewNoteTap: saving noteId=$noteId")
             currentNoteViewModel.saveInlineNoteContent(
                 noteId = noteId,
                 newContent = noteContent,
                 onSuccess = {
+                    inlineEditState.activeSession?.markSaved()
                     recentTabsViewModel.invalidateCache(noteId)
                     currentNoteViewModel.forceRefreshAllDirectives {
                         currentNoteViewModel.endInlineEditSession()

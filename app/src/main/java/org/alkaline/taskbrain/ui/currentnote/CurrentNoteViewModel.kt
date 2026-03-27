@@ -22,7 +22,6 @@ import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
-import com.google.firebase.firestore.ListenerRegistration
 import org.alkaline.taskbrain.data.Alarm
 import org.alkaline.taskbrain.data.AlarmRepository
 import org.alkaline.taskbrain.data.AlarmStage
@@ -41,6 +40,7 @@ import org.alkaline.taskbrain.ui.currentnote.components.RecurrenceConfig
 import org.alkaline.taskbrain.data.NoteLine
 import org.alkaline.taskbrain.data.NoteLineTracker
 import org.alkaline.taskbrain.data.NoteRepository
+import org.alkaline.taskbrain.data.NoteStore
 import org.alkaline.taskbrain.data.PrompterAgent
 import org.alkaline.taskbrain.dsl.cache.CachedDirectiveExecutor
 import org.alkaline.taskbrain.dsl.cache.CachedDirectiveExecutorFactory
@@ -196,22 +196,14 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         _buttonErrors.value = current
     }
 
-    // Cached notes for find() operations in directives
-    private var cachedNotes: List<Note>? = null
-
-    // Cached current note for [.] reference in directives
-    private var cachedCurrentNote: Note? = null
-
     /**
      * Invalidate the notes cache so view directives get fresh content.
      * Call this when switching tabs after saving to ensure views show updated data.
      */
     fun invalidateNotesCache() {
-        cachedNotes = null
-        cachedCurrentNote = null
-        // Invalidate metadata hash cache when notes change
+        // NoteStore is always up to date via its collection listener.
+        // Only invalidate the derivative caches.
         MetadataHasher.invalidateCache()
-        // Also clear the directive cache to force re-execution with fresh data
         directiveCacheManager.clearAll()
     }
 
@@ -222,6 +214,34 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     // Start refresh scheduler on ViewModel creation and set up edit session listener
     init {
         refreshScheduler.start()
+        // Start the NoteStore collection listener so notes stay fresh
+        val userId = FirebaseAuth.getInstance().currentUser?.uid
+        if (userId != null) {
+            NoteStore.start(FirebaseFirestore.getInstance(), userId)
+        }
+        // Wire up the persist callback so every NoteStore.updateNote() automatically
+        // saves to Firestore (fire-and-forget). This eliminates the need for callers
+        // to remember to pair NoteStore updates with separate Firestore writes.
+        // Track in-flight persist jobs so a newer save cancels any older one.
+        // Without this, two concurrent saveNoteWithFullContent calls can race,
+        // and the older (stale) write might complete last, overwriting the newer content.
+        val persistJobs = mutableMapOf<String, kotlinx.coroutines.Job>()
+        NoteStore.setPersistCallback { noteId, content ->
+            persistJobs[noteId]?.cancel()
+            persistJobs[noteId] = viewModelScope.launch {
+                repository.saveNoteWithFullContent(noteId, content)
+                persistJobs.remove(noteId)
+            }
+        }
+        // Surface NoteStore errors (snapshot listener failures, parse errors) to the UI
+        viewModelScope.launch {
+            NoteStore.error.collect { errorMsg ->
+                if (errorMsg != null) {
+                    _saveWarning.postValue(errorMsg)
+                    NoteStore.clearError()
+                }
+            }
+        }
         // When an edit session ends, refresh the current view
         editSessionManager.addSessionEndListener {
             // Re-execute directives to pick up any changes that were suppressed
@@ -229,21 +249,18 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         }
     }
 
-    // Firestore snapshot listener for real-time external change detection
-    private var snapshotListener: ListenerRegistration? = null
-    private var suppressSnapshotUpdate = false
+    // External change detection is handled by NoteStore's collection listener
+    // with hot/cool protection. No per-note snapshot listener needed.
 
     /**
-     * Saves the current note to Firestore. ALL saves of the current note's content
-     * MUST go through this method — it sets [suppressSnapshotUpdate] to prevent
-     * the snapshot listener from triggering a spurious reload that overwrites the editor.
-     *
-     * On success, handles common post-save bookkeeping: updating line tracker IDs,
+     * Saves the current note to Firestore.
+     * On success, handles post-save bookkeeping: updating line tracker IDs,
      * notifying the UI, and syncing alarm line content.
+     * NoteStore's hot/cool mechanism prevents the collection listener from
+     * overwriting local state with a stale Firestore echo.
      */
-    private suspend fun persistCurrentNote(trackedLines: List<NoteLine>): Result<Map<Int, String>> {
-        suppressSnapshotUpdate = true
-        val result = repository.saveNoteWithChildren(currentNoteId, trackedLines)
+    private suspend fun persistCurrentNote(noteId: String, trackedLines: List<NoteLine>): Result<Map<Int, String>> {
+        val result = repository.saveNoteWithChildren(noteId, trackedLines)
         result.fold(
             onSuccess = { newIdsMap ->
                 for ((index, newId) in newIdsMap) {
@@ -300,60 +317,26 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         lineTracker.getTrackedLines().map { it.noteId }
 
     /**
-     * Starts a Firestore snapshot listener on the current note's parent document.
-     * When an external change is detected (not from our own save), reloads the full note.
+     * Push the current editor content to NoteStore immediately.
+     * Called on every user edit so NoteStore always has the latest content.
+     * View directives and tab switches just read NoteStore — no flush needed.
+     * persist=false because explicit save handles Firestore.
      */
-    private fun startSnapshotListener(noteId: String, recentTabsViewModel: RecentTabsViewModel?) {
-        snapshotListener?.remove()
-        // Suppress the initial snapshot that fires immediately on registration
-        suppressSnapshotUpdate = true
-        val db = FirebaseFirestore.getInstance()
-        snapshotListener = db.collection("notes").document(noteId)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    Log.e(TAG, "Snapshot listener error for $noteId", error)
-                    return@addSnapshotListener
-                }
-                if (snapshot == null || !snapshot.exists()) return@addSnapshotListener
-                if (noteId != currentNoteId) return@addSnapshotListener
-
-                // Skip local pending writes (optimistic updates from our own writes)
-                // Check before suppress so the flag isn't consumed by the pending-write event
-                if (snapshot.metadata.hasPendingWrites()) return@addSnapshotListener
-
-                // Skip the initial snapshot and our own saves
-                if (suppressSnapshotUpdate) {
-                    suppressSnapshotUpdate = false
-                    return@addSnapshotListener
-                }
-
-                Log.d(TAG, "Snapshot listener detected external change for $noteId")
-                // Reload the full note (parent + children) from Firestore
-                viewModelScope.launch {
-                    val result = repository.loadNoteWithChildren(noteId)
-                    result.fold(
-                        onSuccess = { freshLines ->
-                            if (noteId != currentNoteId) return@fold
-                            lineTracker.setTrackedLines(freshLines)
-                            val freshContent = freshLines.joinToString("\n") { it.content }
-                            _loadStatus.value = LoadStatus.Success(freshContent, noteLinesToNoteIds(freshLines))
-                            recentTabsViewModel?.cacheNoteContent(
-                                noteId, freshLines, _isNoteDeleted.value ?: false
-                            )
-                            loadDirectiveResults(freshContent)
-                            loadAlarmStates()
-                        },
-                        onFailure = { e ->
-                            Log.e(TAG, "Snapshot-triggered reload failed for $noteId", e)
-                        }
-                    )
-                }
-            }
+    fun pushContentToNoteStore(noteId: String, content: String) {
+        val existing = NoteStore.getNoteById(noteId) ?: return
+        if (existing.content == content) return
+        NoteStore.updateNote(noteId, existing.copy(content = content), persist = false)
     }
 
     fun loadContent(noteId: String? = null, recentTabsViewModel: RecentTabsViewModel? = null) {
         val resolvedId = noteId?.takeIf { it.isNotEmpty() }
             ?: sharedPreferences.getString(LAST_VIEWED_NOTE_KEY, null)
+
+        // On tab switch: invalidate directive cache so view directives re-execute
+        // with fresh NoteStore data (pushed by the remember block on every edit).
+        if (resolvedId != null && resolvedId != currentNoteId) {
+            MetadataHasher.invalidateCache()
+        }
 
         if (resolvedId == null) {
             // New user with no notes — create their first note
@@ -375,79 +358,114 @@ class CurrentNoteViewModel @JvmOverloads constructor(
 
         currentNoteId = resolvedId
         _currentNoteIdLiveData.value = currentNoteId
-        // (generation bumped after async load completes)
-        Log.d(TAG, "loadContent: switching to noteId=$currentNoteId, cachedNotes=${cachedNotes?.size}, cachedNotesNull=${cachedNotes == null}")
+
+        // Capture noteId for all coroutines in this method. currentNoteId is a mutable
+        // field that changes on the next loadContent call, so coroutines MUST NOT read it.
+        val noteId = resolvedId
+
+        Log.d(TAG, "loadContent: switching to noteId=$noteId, storeNotes=${NoteStore.notes.value.size}")
 
         // Save the current note as the last viewed note
-        sharedPreferences.edit().putString(LAST_VIEWED_NOTE_KEY, currentNoteId).apply()
-
-        // Start real-time listener for external changes on this note
-        startSnapshotListener(currentNoteId, recentTabsViewModel)
-
-        // Note: Don't clear cachedNotes here - it persists until a save happens
-        // This allows view directives to use cached content when switching tabs
-        // The cache is refreshed in refreshNotesCache() after saves
+        sharedPreferences.edit().putString(LAST_VIEWED_NOTE_KEY, noteId).apply()
 
         // Recreate line tracker with new parent note ID
-        lineTracker = NoteLineTracker(currentNoteId)
+        lineTracker = NoteLineTracker(noteId)
 
         // Clear expanded state from previous note
         expandedDirectiveHashes.clear()
 
-        // Check cache first for instant tab switching
-        val cached = recentTabsViewModel?.getCachedContent(currentNoteId)
-        if (cached != null) {
+        // --- Tab-switch loading priority (mirrors web's useEditor pattern) ---
+        // 1. Dirty editor cache: restore unsaved edits immediately (user's in-progress work)
+        // 2. NoteStore: always-fresh reconstructed content (instant, no Firestore round-trip)
+        // 3. Firestore: canonical load with full noteId mappings
+        //
+        // The RecentTabsViewModel cache stores NoteLine[] with per-line noteId mappings
+        // needed by NoteLineTracker. It is ONLY used for dirty notes (unsaved edits).
+        // For clean notes, NoteStore has the canonical content and Firestore provides
+        // noteId mappings in a background refresh.
+
+        // Path 1: Dirty editor cache — restore unsaved edits
+        val cached = recentTabsViewModel?.getCachedContent(noteId)
+        if (cached != null && cached.isDirty) {
             val fullContent = cached.noteLines.joinToString("\n") { it.content }
-            Log.d(TAG, "loadContent: using RecentTabsViewModel cache for $currentNoteId")
-            // Use cached content - instant!
+            Log.d(TAG, "loadContent: restoring dirty editor cache for $noteId")
             _isNoteDeleted.value = cached.isDeleted
             lineTracker.setTrackedLines(cached.noteLines)
-            _loadStatus.value = LoadStatus.Success(fullContent, noteLinesToNoteIds(cached.noteLines))
-            // Still update lastAccessedAt, load showCompleted, and directive results in background
+            _loadStatus.value = LoadStatus.Success(noteId, fullContent, noteLinesToNoteIds(cached.noteLines))
             viewModelScope.launch {
-                repository.updateLastAccessed(currentNoteId)
-                repository.loadNoteById(currentNoteId).onSuccess { note ->
+                repository.updateLastAccessed(noteId)
+                repository.loadNoteById(noteId).onSuccess { note ->
                     _showCompleted.value = note?.showCompleted ?: true
                 }
-                loadDirectiveResults(fullContent)
+                loadDirectiveResults(fullContent, noteId)
             }
             loadAlarmStates()
 
-            // Background refresh: fetch from Firebase to pick up external changes (e.g. web edits)
-            val cachedNoteId = currentNoteId
+            // Background refresh for proper noteId mappings (the fire-and-forget save
+            // may have created new child notes with IDs we don't have yet)
             viewModelScope.launch {
-                val result = repository.loadNoteWithChildren(cachedNoteId)
-                result.fold(
-                    onSuccess = { freshLines ->
-                        val freshContent = freshLines.joinToString("\n") { it.content }
-                        if (freshContent != fullContent && cachedNoteId == currentNoteId) {
-                            Log.d(TAG, "loadContent: background refresh found changes for $cachedNoteId")
-                            lineTracker.setTrackedLines(freshLines)
-                            _loadStatus.value = LoadStatus.Success(freshContent, noteLinesToNoteIds(freshLines))
-                            recentTabsViewModel?.cacheNoteContent(
-                                cachedNoteId,
-                                freshLines,
-                                _isNoteDeleted.value ?: false
-                            )
-                            loadDirectiveResults(freshContent)
-                            loadAlarmStates()
-                        }
-                    },
-                    onFailure = { e ->
-                        Log.e(TAG, "Background refresh failed for $cachedNoteId", e)
+                repository.loadNoteWithChildren(noteId).onSuccess { freshLines ->
+                    if (noteId != currentNoteId) return@onSuccess
+                    val freshContent = freshLines.joinToString("\n") { it.content }
+                    if (freshContent == fullContent) {
+                        // Content matches — update noteId mappings without changing editor
+                        lineTracker.setTrackedLines(freshLines)
                     }
-                )
+                }
             }
             return
         }
-        Log.d(TAG, "loadContent: cache miss for $currentNoteId, fetching from Firebase")
+        // Clean cache entries are not useful — NoteStore has fresher data
+        recentTabsViewModel?.invalidateCache(noteId)
+
+        // Path 2: NoteStore — instant display from the collection listener's data
+        val storeNote = NoteStore.getNoteById(noteId)
+        if (storeNote != null) {
+            val content = storeNote.content
+            val storeLines = content.lines().mapIndexed { index, line ->
+                NoteLine(content = line, noteId = if (index == 0) noteId else null)
+            }
+            Log.d(TAG, "loadContent: using NoteStore content for $noteId (${storeLines.size} lines)")
+            _isNoteDeleted.value = storeNote.state == "deleted"
+            lineTracker.setTrackedLines(storeLines)
+            _loadStatus.value = LoadStatus.Success(noteId, content, noteLinesToNoteIds(storeLines))
+            viewModelScope.launch {
+                repository.updateLastAccessed(noteId)
+                repository.loadNoteById(noteId).onSuccess { note ->
+                    _showCompleted.value = note?.showCompleted ?: true
+                }
+                loadDirectiveResults(content, noteId)
+            }
+            loadAlarmStates()
+
+            // Background refresh from Firestore for proper noteId mappings.
+            // Only update noteId mappings (line tracker) — never overwrite displayed
+            // content, which may contain an optimistic edit not yet saved to Firestore.
+            viewModelScope.launch {
+                repository.loadNoteWithChildren(noteId).onSuccess { freshLines ->
+                    if (noteId != currentNoteId) return@onSuccess
+                    val freshContent = freshLines.joinToString("\n") { it.content }
+                    if (freshContent == content) {
+                        // Content matches — safe to update noteId mappings
+                        lineTracker.setTrackedLines(freshLines)
+                    }
+                    // If content differs, Firestore is stale (optimistic edit pending).
+                    // Don't overwrite. The collection listener will deliver the
+                    // correct content once the save completes.
+                }
+            }
+            return
+        }
+
+        // Path 3: Firestore — full load (first visit or store not ready)
+        Log.d(TAG, "loadContent: cache miss for $noteId, fetching from Firebase")
 
         // Cache miss - fetch from Firebase
         _loadStatus.value = LoadStatus.Loading
 
         viewModelScope.launch {
             // Load note metadata (deleted state + showCompleted)
-            repository.loadNoteById(currentNoteId).fold(
+            repository.loadNoteById(noteId).fold(
                 onSuccess = { note ->
                     _isNoteDeleted.value = note?.state == "deleted"
                     _showCompleted.value = note?.showCompleted ?: true
@@ -459,21 +477,14 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             )
 
             // Update lastAccessedAt (fire-and-forget, doesn't block loading)
-            launch { repository.updateLastAccessed(currentNoteId) }
+            launch { repository.updateLastAccessed(noteId) }
 
-            val result = repository.loadNoteWithChildren(currentNoteId)
+            val result = repository.loadNoteWithChildren(noteId)
             result.fold(
                 onSuccess = { loadedLines ->
                     lineTracker.setTrackedLines(loadedLines)
                     val fullContent = loadedLines.joinToString("\n") { it.content }
-                    _loadStatus.value = LoadStatus.Success(fullContent, noteLinesToNoteIds(loadedLines))
-
-                    // Cache the loaded content for future tab switches
-                    recentTabsViewModel?.cacheNoteContent(
-                        currentNoteId,
-                        loadedLines,
-                        _isNoteDeleted.value ?: false
-                    )
+                    _loadStatus.value = LoadStatus.Success(noteId, fullContent, noteLinesToNoteIds(loadedLines))
 
                     // Load cached directive results and execute any missing directives
                     loadDirectiveResults(fullContent)
@@ -485,7 +496,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                         // Note belongs to a different user (stale SharedPreferences
                         // from a previous sign-in). Clear the stale pref and create
                         // a fresh note for the current user.
-                        Log.w(TAG, "Permission denied loading note $currentNoteId — creating new note for current user")
+                        Log.w(TAG, "Permission denied loading note $noteId — creating new note for current user")
                         sharedPreferences.edit().remove(LAST_VIEWED_NOTE_KEY).apply()
                         loadContent(null, recentTabsViewModel)
                     } else {
@@ -514,9 +525,9 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     fun toggleShowCompleted() {
         val newValue = !(_showCompleted.value ?: true)
         _showCompleted.value = newValue
-        suppressSnapshotUpdate = true
+        val capturedNoteId = currentNoteId
         viewModelScope.launch {
-            repository.updateShowCompleted(currentNoteId, newValue).onFailure { e ->
+            repository.updateShowCompleted(capturedNoteId, newValue).onFailure { e ->
                 Log.e(TAG, "Failed to persist showCompleted", e)
             }
         }
@@ -534,21 +545,26 @@ class CurrentNoteViewModel @JvmOverloads constructor(
 
         _saveStatus.value = SaveStatus.Saving
 
+        // Capture noteId now — currentNoteId may change before the coroutine runs
+        val savedNoteId = currentNoteId
+
+        // Update NoteStore synchronously — before the async Firestore write.
+        // markHot (called by updateNote) prevents the collection listener from
+        // overwriting this with a potentially stale Firestore echo.
+        val existing = NoteStore.getNoteById(savedNoteId)
+        if (existing != null) {
+            NoteStore.updateNote(savedNoteId, existing.copy(content = content), persist = false)
+        }
+        MetadataHasher.invalidateCache()
+
+        // persistCurrentNote does a structured save (with noteId mappings) — more
+        // precise than the auto-persist callback, so we passed persist = false above.
         viewModelScope.launch {
             val trackedLines = lineTracker.getTrackedLines()
-            val result = persistCurrentNote(trackedLines)
+            val result = persistCurrentNote(savedNoteId, trackedLines)
 
             result.onSuccess {
                 syncAlarmNoteIds(trackedLines)
-
-                // Invalidate notes cache so other notes' view directives get fresh data
-                // This must happen BEFORE executeAndStoreDirectives to ensure
-                // ensureNotesLoaded() fetches fresh notes when switching tabs
-                cachedNotes = null
-                // Invalidate metadata hash cache when notes change
-                MetadataHasher.invalidateCache()
-
-                // Execute directives and store results
                 executeAndStoreDirectives(content)
             }
         }
@@ -556,6 +572,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
 
     fun processAgentCommand(currentContent: String, command: String) {
         _isAgentProcessing.value = true
+        val capturedNoteId = currentNoteId
         viewModelScope.launch {
             try {
                 val updatedContent = agent.processCommand(currentContent, command)
@@ -564,6 +581,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
 
                 // Update the UI with the new content
                 _loadStatus.value = LoadStatus.Success(
+                    capturedNoteId,
                     updatedContent,
                     noteLinesToNoteIds(lineTracker.getTrackedLines())
                 )
@@ -748,6 +766,14 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         _schedulingWarning.value = null
     }
 
+    // Save warning (e.g., directive result save failures)
+    private val _saveWarning = MutableLiveData<String?>()
+    val saveWarning: LiveData<String?> = _saveWarning
+
+    fun clearSaveWarning() {
+        _saveWarning.value = null
+    }
+
     /**
      * Saves content if needed, then creates a new alarm for the current line.
      * This ensures the line tracker has correct note IDs before alarm creation.
@@ -759,10 +785,11 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         dueTime: Timestamp?,
         stages: List<AlarmStage> = Alarm.DEFAULT_STAGES
     ) {
+        val savedNoteId = currentNoteId
         viewModelScope.launch {
             updateTrackedLines(content)
             val trackedLines = lineTracker.getTrackedLines()
-            val saveResult = persistCurrentNote(trackedLines)
+            val saveResult = persistCurrentNote(savedNoteId, trackedLines)
 
             saveResult.onSuccess {
                 createAlarmInternal(lineContent, lineIndex, dueTime, stages)
@@ -781,10 +808,11 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         stages: List<AlarmStage> = Alarm.DEFAULT_STAGES,
         recurrenceConfig: RecurrenceConfig
     ) {
+        val savedNoteId = currentNoteId
         viewModelScope.launch {
             updateTrackedLines(content)
             val trackedLines = lineTracker.getTrackedLines()
-            val saveResult = persistCurrentNote(trackedLines)
+            val saveResult = persistCurrentNote(savedNoteId, trackedLines)
 
             saveResult.onSuccess {
                 createRecurringAlarmInternal(
@@ -942,39 +970,8 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      * Call this before executing directives that may use find().
      */
     private suspend fun ensureNotesLoaded(): List<Note> {
-        Log.d(TAG, "ensureNotesLoaded: cachedNotes=${cachedNotes?.size}, cachedCurrentNote=${cachedCurrentNote?.id}, currentNoteId=$currentNoteId")
-
-        // Only skip loading if both notes AND current note are cached
-        if (cachedNotes != null && cachedCurrentNote != null) {
-            Log.d(TAG, "ensureNotesLoaded: returning cached (notes=${cachedNotes?.size}, currentNote=${cachedCurrentNote?.id})")
-            return cachedNotes!!
-        }
-
-        // Load notes if not cached
-        if (cachedNotes == null) {
-            Log.d(TAG, "ensureNotesLoaded: FETCHING FRESH from Firestore...")
-            // Use loadNotesWithFullContent for directives that need complete note text (e.g., view())
-            val result = repository.loadNotesWithFullContent()
-            val notes = result.getOrNull() ?: emptyList()
-            cachedNotes = notes
-            cachedCurrentNote = notes.find { it.id == currentNoteId }
-            Log.d(TAG, "ensureNotesLoaded: FETCHED ${notes.size} notes from Firestore, found currentNote in list: ${cachedCurrentNote != null}")
-            // Log first few note contents for debugging
-            notes.take(3).forEach { note ->
-                Log.d(TAG, "ensureNotesLoaded: note ${note.id} content preview: '${note.content.take(40)}...'")
-            }
-        }
-
-        // If current note not found in top-level notes (e.g., it's a child note), load it separately
-        if (cachedCurrentNote == null) {
-            Log.d(TAG, "ensureNotesLoaded: currentNote not in list, loading by ID: $currentNoteId")
-            val loadResult = repository.loadNoteById(currentNoteId)
-            cachedCurrentNote = loadResult.getOrNull()
-            Log.d(TAG, "ensureNotesLoaded: loadNoteById result: ${cachedCurrentNote?.id}, error: ${loadResult.exceptionOrNull()?.message}")
-        }
-
-        Log.d(TAG, "ensureNotesLoaded: final cachedCurrentNote=${cachedCurrentNote?.id}")
-        return cachedNotes ?: emptyList()
+        NoteStore.ensureLoaded()
+        return NoteStore.notes.value
     }
 
     /**
@@ -983,18 +980,8 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      * Call this when notes may have changed (e.g., after save).
      */
     private suspend fun refreshNotesCache(): List<Note> {
-        // Use loadNotesWithFullContent for directives that need complete note text (e.g., view())
-        val result = repository.loadNotesWithFullContent()
-        val notes = result.getOrNull() ?: emptyList()
-        cachedNotes = notes
-        cachedCurrentNote = notes.find { it.id == currentNoteId }
-
-        // If current note not found in top-level notes (e.g., it's a child note), load it separately
-        if (cachedCurrentNote == null) {
-            cachedCurrentNote = repository.loadNoteById(currentNoteId).getOrNull()
-        }
-
-        return notes
+        NoteStore.ensureLoaded()
+        return NoteStore.notes.value
     }
 
     /**
@@ -1033,15 +1020,8 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         for (mutation in mutations) {
             Log.d(TAG, "Processing mutation: ${mutation.mutationType} on note ${mutation.noteId}, alreadyPersisted=$alreadyPersisted")
 
-            // Update cache
-            cachedNotes = cachedNotes?.map { note ->
-                if (note.id == mutation.noteId) mutation.updatedNote else note
-            }
-
-            // Update current note cache if this note was mutated
-            if (cachedCurrentNote?.id == mutation.noteId) {
-                cachedCurrentNote = mutation.updatedNote
-            }
+            // Update NoteStore optimistically (already persisted by directive executor)
+            NoteStore.updateNote(mutation.noteId, mutation.updatedNote, persist = false)
 
             // If this mutation affects the note currently being edited, notify the UI
             if (mutation.noteId == currentNoteId) {
@@ -1114,9 +1094,13 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             return
         }
 
+        // Capture noteId now — currentNoteId may change during the coroutine
+        val savedNoteId = currentNoteId
+
         viewModelScope.launch {
             // Refresh notes cache (notes may have changed after save)
             val notes = refreshNotesCache()
+            val currentNote = NoteStore.getNoteById(savedNoteId)
 
             // Notify observers that notes cache was refreshed (for view directive updates)
             _notesCacheRefreshed.tryEmit(Unit)
@@ -1126,10 +1110,10 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             for (line in content.lines()) {
                 for (directive in DirectiveFinder.findDirectives(line)) {
                     val cachedResult = cachedDirectiveExecutor.execute(
-                        directive.sourceText, notes, cachedCurrentNote, noteOperations
+                        directive.sourceText, notes, currentNote, noteOperations
                     )
                     allMutations.addAll(cachedResult.mutations)
-                    registerRefreshTriggersIfNeeded(directive.sourceText, cachedCurrentNote?.id)
+                    registerRefreshTriggersIfNeeded(directive.sourceText, currentNote?.id)
 
                     // Store in Firestore using text hash (skip view/alarm results)
                     val resultValue = cachedResult.result.toValue()
@@ -1137,9 +1121,10 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                     val isAlarmResult = resultValue is AlarmVal
                     if (!isViewResult && !isAlarmResult) {
                         val textHash = DirectiveResult.hashDirective(directive.sourceText)
-                        directiveResultRepository.saveResult(currentNoteId, textHash, cachedResult.result)
+                        directiveResultRepository.saveResult(savedNoteId, textHash, cachedResult.result)
                             .onFailure { e ->
                                 Log.e(TAG, "Failed to save directive result: $textHash", e)
+                                _saveWarning.postValue("Failed to save directive result: ${e.message}")
                             }
                     }
                 }
@@ -1149,16 +1134,20 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             processMutations(allMutations, alreadyPersisted = true)
 
             // Register any schedule directives found in this note
-            cachedCurrentNote?.let { note ->
+            currentNote?.let { note ->
                 ScheduleManager.registerSchedulesFromNote(note)
             }
 
-            // Invalidate notes cache — Firestore eventual consistency means
-            // refreshNotesCache() above may have fetched stale data.
-            cachedNotes = null
             MetadataHasher.invalidateCache()
 
-            bumpDirectiveCacheGeneration()
+            // Only bump generation if we're still on the same note.
+            // If the user already switched tabs, the new note's directives
+            // were computed fresh — a stale generation bump would cause them
+            // to re-run with this coroutine's cached results (which are for
+            // the OLD note and may have stale content).
+            if (savedNoteId == currentNoteId) {
+                bumpDirectiveCacheGeneration()
+            }
         }
     }
 
@@ -1169,14 +1158,16 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      * Alarm directives are trivial pure functions — computeDirectiveResults handles
      * them synchronously, so no pre-population is needed.
      */
-    private suspend fun loadDirectiveResults(content: String) {
+    private suspend fun loadDirectiveResults(content: String, noteId: String = currentNoteId) {
         if (!DirectiveFinder.containsDirectives(content)) {
-            _directiveCacheGeneration.postValue((_directiveCacheGeneration.value ?: 0) + 1)
+            if (noteId == currentNoteId) {
+                _directiveCacheGeneration.postValue((_directiveCacheGeneration.value ?: 0) + 1)
+            }
             return
         }
 
         // Load cached results from Firestore (keyed by text hash)
-        val cachedByHash = directiveResultRepository.getResults(currentNoteId)
+        val cachedByHash = directiveResultRepository.getResults(noteId)
             .getOrElse { e ->
                 Log.e(TAG, "Failed to load directive results", e)
                 emptyMap()
@@ -1206,41 +1197,47 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             val isAlarmResult = cachedValue is AlarmVal || cachedResultType == "alarm"
 
             if (cached != null && !isViewResult && !isBareTemporalResult && !isAlarmResult) {
-                // Prime L1 cache with this Firestore result
-                cachedDirectiveExecutor.primeCache(sourceText, currentNoteId, cached)
+                cachedDirectiveExecutor.primeCache(sourceText, noteId, cached)
             } else {
                 missingTexts.add(sourceText)
             }
         }
 
         if (missingTexts.isEmpty()) {
-            _directiveCacheGeneration.postValue((_directiveCacheGeneration.value ?: 0) + 1)
+            if (noteId == currentNoteId) {
+                _directiveCacheGeneration.postValue((_directiveCacheGeneration.value ?: 0) + 1)
+            }
             return
         }
 
         // Load notes and execute missing directives
         val notes = ensureNotesLoaded()
+        val currentNote = NoteStore.getNoteById(noteId)
         val allMutations = mutableListOf<NoteMutation>()
         for (sourceText in missingTexts) {
-            val cachedResult = cachedDirectiveExecutor.execute(sourceText, notes, cachedCurrentNote, noteOperations)
+            val cachedResult = cachedDirectiveExecutor.execute(sourceText, notes, currentNote, noteOperations)
             allMutations.addAll(cachedResult.mutations)
-            registerRefreshTriggersIfNeeded(sourceText, cachedCurrentNote?.id)
+            registerRefreshTriggersIfNeeded(sourceText, currentNote?.id)
 
-            // Store in Firestore (skip view/alarm results)
             val resultValue = cachedResult.result.toValue()
             val isViewResult = resultValue is ViewVal
             val isAlarmResult = resultValue is AlarmVal
             if (!isViewResult && !isAlarmResult) {
                 val textHash = DirectiveResult.hashDirective(sourceText)
-                directiveResultRepository.saveResult(currentNoteId, textHash, cachedResult.result)
+                directiveResultRepository.saveResult(noteId, textHash, cachedResult.result)
                     .onFailure { e ->
                         Log.e(TAG, "Failed to save directive result: $textHash", e)
+                        _saveWarning.postValue("Failed to save directive result: ${e.message}")
                     }
             }
         }
         processMutations(allMutations, skipEditorCallback = true)
 
-        _directiveCacheGeneration.postValue((_directiveCacheGeneration.value ?: 0) + 1)
+        // Only bump generation if still on the same note — avoids triggering
+        // stale directive re-computation on a different note after tab switch.
+        if (noteId == currentNoteId) {
+            _directiveCacheGeneration.postValue((_directiveCacheGeneration.value ?: 0) + 1)
+        }
     }
 
     /**
@@ -1298,6 +1295,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      * @param sourceText The original directive source text to re-parse for execution
      */
     fun executeButton(directiveKey: String, buttonVal: ButtonVal, sourceText: String? = null) {
+        val capturedNoteId = currentNoteId
         viewModelScope.launch {
             ensureNotesLoaded()
 
@@ -1309,8 +1307,8 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 // This ensures mutations are properly captured
                 val env = Environment(
                     NoteContext(
-                        notes = cachedNotes ?: emptyList(),
-                        currentNote = cachedCurrentNote,
+                        notes = NoteStore.notes.value,
+                        currentNote = NoteStore.getNoteById(capturedNoteId),
                         noteOperations = noteOperations
                     )
                 )
@@ -1384,10 +1382,10 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      * Applies collapsed state from [expandedDirectiveHashes].
      * When notes haven't loaded yet, still returns alarm results (trivial pure functions).
      */
-    fun computeDirectiveResults(content: String): Map<String, DirectiveResult> {
-        val notes = cachedNotes
-        val currentNote = cachedCurrentNote
-
+    fun computeDirectiveResults(content: String, noteId: String? = null): Map<String, DirectiveResult> {
+        val effectiveNoteId = noteId ?: currentNoteId
+        val notes = NoteStore.notes.value.takeIf { it.isNotEmpty() }
+        val currentNote = NoteStore.getNoteById(effectiveNoteId)
         val hashResults = mutableMapOf<String, DirectiveResult>()
         for (line in content.lines()) {
             for (directive in DirectiveFinder.findDirectives(line)) {
@@ -1444,6 +1442,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             return
         }
 
+        val capturedNoteId = currentNoteId
         viewModelScope.launch {
             val notes = ensureNotesLoaded()
 
@@ -1454,7 +1453,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                     if (results.containsKey(hash)) continue
                     try {
                         val cachedResult = cachedDirectiveExecutor.execute(
-                            directive.sourceText, notes, cachedCurrentNote, null
+                            directive.sourceText, notes, NoteStore.getNoteById(capturedNoteId), null
                         )
                         results[hash] = cachedResult.result
                     } catch (e: Exception) {
@@ -1476,10 +1475,11 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      * @param onResult Callback with the result when execution completes
      */
     fun executeSingleDirective(sourceText: String, onResult: (DirectiveResult) -> Unit) {
+        val capturedNoteId = currentNoteId
         viewModelScope.launch {
             val notes = ensureNotesLoaded()
             val cachedResult = cachedDirectiveExecutor.execute(
-                sourceText, notes, cachedCurrentNote, null // null noteOperations = read-only
+                sourceText, notes, NoteStore.getNoteById(capturedNoteId), null // null noteOperations = read-only
             )
             Log.d(TAG, "executeSingleDirective: executed '$sourceText'")
             onResult(cachedResult.result)
@@ -1547,7 +1547,15 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         Log.d("InlineEditCache", "noteId=$noteId")
         Log.d("InlineEditCache", "content has ${lines.size} lines, first='${lines.firstOrNull()}'")
         Log.d("InlineEditCache", "full content: '${newContent.take(100).replace("\n", "\\n")}...'")
-        Log.d("InlineEditCache", "cachedNotes was ${if (cachedNotes == null) "NULL" else "${cachedNotes?.size} notes"}")
+        Log.d("InlineEditCache", "storeNotes=${NoteStore.notes.value.size}")
+
+        // Optimistic update immediately so tab-switching shows the edit
+        // before the async Firestore save completes (persist = false because
+        // saveNoteWithFullContent below does a more appropriate save)
+        val existing = NoteStore.getNoteById(noteId)
+        if (existing != null) {
+            NoteStore.updateNote(noteId, existing.copy(content = newContent), persist = false)
+        }
 
         viewModelScope.launch {
             startInlineEditSession(noteId)
@@ -1564,28 +1572,12 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 .onSuccess {
                     Log.d("InlineEditCache", "=== saveInlineNoteContent SUCCESS for $noteId ===")
 
-                    // OPTIMISTIC UPDATE: Replace the saved note's content in the cache
-                    // instead of clearing entirely. This prevents UI from showing stale
-                    // content if it re-renders before forceRefreshAllDirectives completes.
-                    Log.d("InlineEditCache", "saveInlineNoteContent: OPTIMISTIC UPDATE of cachedNotes...")
-                    cachedNotes = cachedNotes?.map { note ->
-                        if (note.id == noteId) {
-                            Log.d("InlineEditCache", "  Updated note $noteId in cache with new content")
-                            note.copy(content = newContent)
-                        } else note
-                    }
-                    // Clear directive cache so they re-execute with the optimistic content
+                    // NoteStore was already updated synchronously before the coroutine.
+                    // Just clear directive caches so they re-execute with the new content.
                     MetadataHasher.invalidateCache()
                     directiveCacheManager.clearAll()
-                    Log.d("InlineEditCache", "saveInlineNoteContent: directive caches cleared, notes cache has optimistic content")
-
-                    // DO NOT end session here - the caller must end it AFTER
-                    // forceRefreshAllDirectives completes to avoid stale content.
-                    // See the onComplete callback in forceRefreshAllDirectives.
-                    Log.d("InlineEditCache", "saveInlineNoteContent: NOT ending session here (caller will end after refresh)")
 
                     onSuccess?.invoke()
-                    Log.d("InlineEditCache", "saveInlineNoteContent: onSuccess callback DONE")
                 }
                 .onFailure { e ->
                     Log.e("InlineEditCache", "=== saveInlineNoteContent FAILED for $noteId ===", e)
@@ -1645,7 +1637,6 @@ class CurrentNoteViewModel @JvmOverloads constructor(
 
     override fun onCleared() {
         super.onCleared()
-        snapshotListener?.remove()
         refreshScheduler.stop()
     }
 
@@ -1931,11 +1922,12 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      * Soft-deletes the current note.
      */
     fun deleteCurrentNote(onSuccess: () -> Unit) {
+        val capturedNoteId = currentNoteId
         viewModelScope.launch {
-            val result = repository.softDeleteNote(currentNoteId)
+            val result = repository.softDeleteNote(capturedNoteId)
             result.fold(
                 onSuccess = {
-                    Log.d(TAG, "Note deleted successfully: $currentNoteId")
+                    Log.d(TAG, "Note deleted successfully: $capturedNoteId")
                     _isNoteDeleted.value = true
                     onSuccess()
                 },
@@ -1951,11 +1943,12 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      * Restores the current note from deleted state.
      */
     fun undeleteCurrentNote(onSuccess: () -> Unit) {
+        val capturedNoteId = currentNoteId
         viewModelScope.launch {
-            val result = repository.undeleteNote(currentNoteId)
+            val result = repository.undeleteNote(capturedNoteId)
             result.fold(
                 onSuccess = {
-                    Log.d(TAG, "Note restored successfully: $currentNoteId")
+                    Log.d(TAG, "Note restored successfully: $capturedNoteId")
                     _isNoteDeleted.value = false
                     onSuccess()
                 },
@@ -1977,6 +1970,7 @@ sealed class SaveStatus {
 sealed class LoadStatus {
     object Loading : LoadStatus()
     data class Success(
+        val noteId: String,
         val content: String,
         val lineNoteIds: List<List<String>> = emptyList()
     ) : LoadStatus()

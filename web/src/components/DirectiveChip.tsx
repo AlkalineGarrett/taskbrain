@@ -74,9 +74,7 @@ export function DirectiveChip({
     return (
       <ViewDirectiveRenderer
         viewVal={value}
-        directiveResults={allResults ?? new Map()}
         onNoteSave={onViewNoteSave}
-        onDirectiveRefresh={onDirectiveRefresh}
         onEditDirective={onEditDirective}
       />
     )

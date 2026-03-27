@@ -303,12 +303,6 @@ private fun ViewDirectiveContent(
     val notes = viewVal?.notes ?: emptyList()
     val renderedContents = viewVal?.renderedContents
 
-    Log.d(TAG, "ViewDirectiveContent: notes.size=${notes.size}, renderedContents.size=${renderedContents?.size}")
-    notes.forEachIndexed { index, note ->
-        val content = renderedContents?.getOrNull(index) ?: note.content
-        Log.d(TAG, "  Note[$index]: id=${note.id}, contentPreview='${content.take(50)}...'")
-    }
-
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -331,15 +325,13 @@ private fun ViewDirectiveContent(
             )
         }
 
-        // Note content - either split by sections or as a single block
+        // Note content - full width, gear icon overlays top-right
         if (notes.isEmpty()) {
             // Empty view - show placeholder
             Text(
                 text = displayText,
                 style = textStyle.copy(color = DirectiveColors.ViewIndicator),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(end = ViewEditButtonSize)
+                modifier = Modifier.fillMaxWidth()
             )
         } else if (notes.size == 1) {
             // Single note - simple case
@@ -349,16 +341,13 @@ private fun ViewDirectiveContent(
                 note = note,
                 content = content,
                 textStyle = textStyle,
-                onTap = { onNoteTap(note.id, content) },
-                modifier = Modifier.padding(end = ViewEditButtonSize)
+                onTap = { onNoteTap(note.id, content) }
             )
         } else {
             // Multiple notes with separators
             Log.d(TAG, "ViewDirectiveContent: Rendering ${notes.size} notes in Column")
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(end = ViewEditButtonSize)
+                modifier = Modifier.fillMaxWidth()
             ) {
                 notes.forEachIndexed { index, note ->
                     // Separator before each note except first

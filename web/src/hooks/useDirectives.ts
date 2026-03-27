@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo } from 'react'
 import type { Note } from '@/data/Note'
 import type { NoteOperations } from '@/dsl/runtime/NoteOperations'
+import type { NoteMutation } from '@/dsl/runtime/NoteMutation'
 import type { EditorState } from '@/editor/EditorState'
 import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
 import { findDirectives, directiveHash } from '@/dsl/directives/DirectiveFinder'
@@ -33,27 +34,30 @@ export function useDirectives({ noteId, editorState, notes, currentNote, noteOpe
   // Cache hits return instantly; misses execute and cache for next time.
   // noteId here is loadedNoteId — it only changes after the editor has been populated,
   // guaranteeing editorState.text reflects the correct note.
-  const results = useMemo(() => {
-    if (!noteId || notes.length === 0) return new Map<string, DirectiveResult>()
+  const { results, mutations } = useMemo(() => {
+    const empty = { results: new Map<string, DirectiveResult>(), mutations: [] as NoteMutation[] }
+    if (!noteId || notes.length === 0) return empty
 
     const content = editorState.text
-    if (!content) return new Map<string, DirectiveResult>()
+    if (!content) return empty
 
     const hashResults = new Map<string, DirectiveResult>()
+    const allMutations: NoteMutation[] = []
     const lines = content.split('\n')
 
     for (const line of lines) {
       for (const directive of findDirectives(line)) {
         const hash = directiveHash(directive.sourceText)
         if (hashResults.has(hash)) continue
-        const { result } = cachedExecutor.execute(
+        const { result, mutations: directiveMutations } = cachedExecutor.execute(
           directive.sourceText, notes, currentNote, noteOperations,
         )
         hashResults.set(hash, result)
+        allMutations.push(...directiveMutations)
       }
     }
 
-    return hashResults
+    return { results: hashResults, mutations: allMutations }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [noteId, notes, currentNote, noteOperations, cachedExecutor, generation])
 
@@ -78,6 +82,7 @@ export function useDirectives({ noteId, editorState, notes, currentNote, noteOpe
 
   return {
     results,
+    mutations,
     invalidateAndRecompute,
     refreshDirective,
   }

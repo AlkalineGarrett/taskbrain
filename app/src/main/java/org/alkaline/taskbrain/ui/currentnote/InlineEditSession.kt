@@ -28,7 +28,7 @@ import org.alkaline.taskbrain.dsl.directives.DirectiveResult
 @Stable
 class InlineEditSession(
     val noteId: String,
-    val originalContent: String,
+    var originalContent: String,
     val editorState: EditorState,
     val controller: EditorController
 ) {
@@ -37,6 +37,14 @@ class InlineEditSession(
      */
     val isDirty: Boolean
         get() = editorState.text != originalContent
+
+    /**
+     * Mark the current content as saved, resetting the dirty state.
+     * Called after a successful save so [isDirty] becomes false.
+     */
+    fun markSaved() {
+        originalContent = editorState.text
+    }
 
     /**
      * The current content of the editor.

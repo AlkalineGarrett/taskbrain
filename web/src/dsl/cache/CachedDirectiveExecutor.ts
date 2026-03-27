@@ -14,7 +14,8 @@ import { computeContentHashes } from './ContentHasher'
 import { computeMetadataHashes } from './MetadataHasher'
 import { Lexer } from '../language/Lexer'
 import { Parser } from '../language/Parser'
-import { executeDirective } from '../directives/DirectiveExecutor'
+import { executeDirectiveWithMutations } from '../directives/DirectiveExecutor'
+import type { NoteMutation } from '../runtime/NoteMutation'
 import { directiveHash } from '../directives/DirectiveFinder'
 import { deserializeValue } from '../runtime/DslValue'
 
@@ -24,6 +25,7 @@ export interface CachedExecutionResult {
   result: DirectiveResult
   cacheHit: boolean
   dependencies: DirectiveDependencies
+  mutations: NoteMutation[]
 }
 
 /**
@@ -66,6 +68,7 @@ export class CachedDirectiveExecutor {
           result: this.cachedToDirectiveResult(cached),
           cacheHit: true,
           dependencies: cached.dependencies,
+          mutations: [],
         }
       }
     }
@@ -80,6 +83,7 @@ export class CachedDirectiveExecutor {
         result: this.cachedToDirectiveResult(cached),
         cacheHit: true,
         dependencies: cached.dependencies,
+        mutations: [],
       }
     }
 
@@ -110,8 +114,8 @@ export class CachedDirectiveExecutor {
     noteOperations?: NoteOperations,
     viewStack: string[] = [],
   ): CachedExecutionResult {
-    const result = executeDirective(sourceText, notes, currentNote, noteOperations, viewStack)
-    return { result, cacheHit: false, dependencies: EMPTY_DEPENDENCIES }
+    const { result, mutations } = executeDirectiveWithMutations(sourceText, notes, currentNote, noteOperations, viewStack)
+    return { result, cacheHit: false, dependencies: EMPTY_DEPENDENCIES, mutations }
   }
 
   private executeFreshWithCaching(
@@ -123,7 +127,7 @@ export class CachedDirectiveExecutor {
     cacheKey: string,
     baseDependencies: DirectiveDependencies,
   ): CachedExecutionResult {
-    const result = executeDirective(sourceText, notes, currentNote, noteOperations, viewStack)
+    const { result, mutations } = executeDirectiveWithMutations(sourceText, notes, currentNote, noteOperations, viewStack)
     const noteId = currentNote?.id ?? GLOBAL_CACHE_PLACEHOLDER
 
     // Enrich dependencies with viewed note IDs
@@ -152,7 +156,7 @@ export class CachedDirectiveExecutor {
       this.cacheManager.put(cacheKey, noteId, cached)
     }
 
-    return { result, cacheHit: false, dependencies: finalDependencies }
+    return { result, cacheHit: false, dependencies: finalDependencies, mutations }
   }
 
   private buildCachedResult(

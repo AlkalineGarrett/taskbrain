@@ -28,6 +28,8 @@ fun NoteScreenDialogs(
     notificationPermissionWarning: Boolean,
     schedulingWarning: String?,
     redoRollbackWarning: RedoRollbackWarning?,
+    saveWarning: String?,
+    onClearSaveWarning: () -> Unit,
     onClearSaveError: () -> Unit,
     onClearLoadError: () -> Unit,
     onClearTabsError: () -> Unit,
@@ -88,6 +90,15 @@ fun NoteScreenDialogs(
             title = stringResource(R.string.error_alarm),
             throwable = throwable,
             onDismiss = onClearAlarmError
+        )
+    }
+
+    saveWarning?.let { warning ->
+        WarningDialog(
+            title = stringResource(R.string.warning_save_failed_title),
+            message = "$warning\n\n${stringResource(R.string.warning_save_failed)}",
+            selectable = true,
+            onDismiss = onClearSaveWarning
         )
     }
 

@@ -193,5 +193,12 @@ export const SCHEDULE_FAILED = 'Failed'
 export const DIRECTIVE_PLACEHOLDER = 'Directive source...'
 export const EMPTY_VIEW = '[empty view]'
 
+// Save error banner (Android: warning_save_failed, action_dismiss)
+export const SAVE_ERROR_BANNER = 'Your changes may not have been saved'
+export const SAVE_ERROR_DISMISS = 'Dismiss'
+
+// Sync error (Android: warning_sync_error)
+export const SYNC_ERROR_BANNER = 'Note sync interrupted — changes from other devices may not appear'
+
 // Tabs
 export const EMPTY_TAB = '(empty)'

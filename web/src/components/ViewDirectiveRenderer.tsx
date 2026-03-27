@@ -1,20 +1,16 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import type { Note } from '@/data/Note'
 import type { ViewVal } from '@/dsl/runtime/DslValue'
-import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
 import { directiveResultToValue } from '@/dsl/directives/DirectiveResult'
-import { EMPTY_VIEW } from '@/strings'
-import { DirectiveLineContent } from './DirectiveLineContent'
+import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
+import { EMPTY_VIEW, SAVE, SAVING, SAVE_ERROR_BANNER, SAVE_ERROR_DISMISS } from '@/strings'
+import { isViewNoteDirty } from './viewNoteDirty'
 import styles from './ViewDirectiveRenderer.module.css'
 
 interface ViewDirectiveRendererProps {
   viewVal: ViewVal
-  /** Directive results for rendering nested directives within viewed notes */
-  directiveResults: Map<string, DirectiveResult>
   /** Called to save edited note content; returns a promise that resolves when done */
   onNoteSave?: (noteId: string, newContent: string) => Promise<void>
-  /** Called when a directive in a viewed note is refreshed */
-  onDirectiveRefresh?: (key: string, sourceText: string) => void
   /** Called when the gear icon is clicked to switch to directive editing mode */
   onEditDirective?: () => void
 }
@@ -25,13 +21,36 @@ interface ViewDirectiveRendererProps {
  */
 export function ViewDirectiveRenderer({
   viewVal,
-  directiveResults,
   onNoteSave,
-  onDirectiveRefresh,
   onEditDirective,
 }: ViewDirectiveRendererProps) {
-  const { notes, renderedContents } = viewVal
-  const [editingNoteId, setEditingNoteId] = useState<string | null>(null)
+  const { notes } = viewVal
+  const [dirtyNoteId, setDirtyNoteId] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const saveRef = useRef<(() => Promise<void>) | null>(null)
+
+  // Track per-note dirty callbacks so only one save button shows at a time
+  const dirtyCallbacks = useRef(new Map<string, (dirty: boolean) => void>())
+  const getDirtyCallback = useCallback((noteId: string) => {
+    let cb = dirtyCallbacks.current.get(noteId)
+    if (!cb) {
+      cb = (dirty: boolean) => {
+        setDirtyNoteId(prev => dirty ? noteId : (prev === noteId ? null : prev))
+      }
+      dirtyCallbacks.current.set(noteId, cb)
+    }
+    return cb
+  }, [])
+
+  const handleOverlaySave = useCallback(async () => {
+    if (!saveRef.current) return
+    setSaving(true)
+    try {
+      await saveRef.current()
+    } finally {
+      setSaving(false)
+    }
+  }, [])
 
   if (notes.length === 0) {
     return <div className={styles.emptyView}>{EMPTY_VIEW}</div>
@@ -39,6 +58,16 @@ export function ViewDirectiveRenderer({
 
   return (
     <div className={styles.viewContainer}>
+      {dirtyNoteId && (
+        <button
+          className={styles.inlineSaveButton}
+          onClick={(e) => { e.stopPropagation(); e.preventDefault(); void handleOverlaySave() }}
+          onMouseDown={(e) => e.preventDefault()}
+          disabled={saving}
+        >
+          {saving ? SAVING : SAVE}
+        </button>
+      )}
       {onEditDirective && (
         <button
           className={styles.editButton}
@@ -54,16 +83,11 @@ export function ViewDirectiveRenderer({
           {noteIndex > 0 && <hr className={styles.separator} />}
           <ViewNoteSection
             note={note}
-            renderedContent={renderedContents?.[noteIndex] ?? null}
-            directiveResults={directiveResults}
-            isEditing={editingNoteId === note.id}
-            onStartEditing={() => setEditingNoteId(note.id)}
             onSave={onNoteSave ? async (content) => {
               await onNoteSave(note.id, content)
-              setEditingNoteId(null)
             } : undefined}
-            onCancel={() => setEditingNoteId(null)}
-            onDirectiveRefresh={onDirectiveRefresh}
+            onDirtyChange={getDirtyCallback(note.id)}
+            saveRef={dirtyNoteId === note.id ? saveRef : undefined}
           />
         </div>
       ))}
@@ -73,116 +97,139 @@ export function ViewDirectiveRenderer({
 
 interface ViewNoteSectionProps {
   note: Note
-  renderedContent: string | null
-  directiveResults: Map<string, DirectiveResult>
-  isEditing: boolean
-  onStartEditing: () => void
   onSave?: (newContent: string) => Promise<void>
-  onCancel: () => void
-  onDirectiveRefresh?: (key: string, sourceText: string) => void
+  onDirtyChange?: (dirty: boolean) => void
+  saveRef?: React.MutableRefObject<(() => Promise<void>) | null>
 }
+
+const PENDING_VIEW_SAVE_ERROR_KEY = 'pendingViewSaveError'
 
 function ViewNoteSection({
   note,
-  renderedContent,
-  directiveResults,
-  isEditing,
-  onStartEditing,
   onSave,
-  onCancel,
-  onDirectiveRefresh,
+  onDirtyChange,
+  saveRef,
 }: ViewNoteSectionProps) {
-  const displayContent = renderedContent ?? note.content
   const [editContent, setEditContent] = useState(note.content)
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const lastSavedContentRef = useRef<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  // Reset edit content when entering edit mode
-  useEffect(() => {
-    if (isEditing) {
-      setEditContent(note.content)
-    }
-  }, [isEditing, note.content])
+  // Refs for unmount save — must always point to latest values
+  const editContentRef = useRef(editContent)
+  editContentRef.current = editContent
+  const noteContentRef = useRef(note.content)
+  noteContentRef.current = note.content
+  const onSaveRef = useRef(onSave)
+  onSaveRef.current = onSave
 
-  // Auto-focus and auto-size textarea
+  // Check for save errors persisted from a previous unmount
   useEffect(() => {
-    if (isEditing && textareaRef.current) {
-      textareaRef.current.focus()
+    try {
+      const raw = sessionStorage.getItem(PENDING_VIEW_SAVE_ERROR_KEY)
+      if (raw) {
+        sessionStorage.removeItem(PENDING_VIEW_SAVE_ERROR_KEY)
+        const { noteId } = JSON.parse(raw) as { noteId: string; message: string }
+        if (noteId === note.id) {
+          setSaveError(SAVE_ERROR_BANNER)
+        }
+      }
+    } catch { /* sessionStorage may be unavailable */ }
+  }, [note.id])
+
+  // Sync with external content changes (e.g., after save reloads data)
+  useEffect(() => {
+    setEditContent(note.content)
+    lastSavedContentRef.current = null
+  }, [note.content])
+
+  // Auto-size textarea to fit content
+  useEffect(() => {
+    if (textareaRef.current) {
       resizeTextarea(textareaRef.current)
     }
-  }, [isEditing])
+  }, [editContent])
+
+  // Report dirty state to parent
+  const isDirty = isViewNoteDirty(editContent, note.content, lastSavedContentRef.current)
+  useEffect(() => {
+    onDirtyChange?.(isDirty)
+  }, [isDirty, onDirtyChange])
+
+  // Fire-and-forget save on unmount (e.g., navigation away)
+  useEffect(() => {
+    const noteId = note.id
+    return () => {
+      const content = editContentRef.current
+      const original = noteContentRef.current
+      const save = onSaveRef.current
+      if (save && isViewNoteDirty(content, original, lastSavedContentRef.current)) {
+        void save(content).catch((err) => {
+          const msg = err instanceof Error ? err.message : SAVE_ERROR_BANNER
+          try { sessionStorage.setItem(PENDING_VIEW_SAVE_ERROR_KEY, JSON.stringify({ noteId, message: msg })) } catch { /* ignore */ }
+        })
+      }
+    }
+  }, [note.id])
 
   const handleSave = useCallback(async () => {
     if (!onSave) return
-    if (editContent === note.content) {
-      onCancel()
-      return
-    }
+    if (editContent === note.content) return
+    // Mark as saved eagerly so unmount cleanup won't duplicate the save
+    lastSavedContentRef.current = editContent
     setSaving(true)
+    setSaveError(null)
     try {
       await onSave(editContent)
     } catch (e) {
-      console.error('Failed to save inline edit:', e)
+      const msg = e instanceof Error ? e.message : SAVE_ERROR_BANNER
+      setSaveError(msg)
+      lastSavedContentRef.current = null // Reset on failure so retry is possible
     } finally {
       setSaving(false)
     }
-  }, [editContent, note.content, onSave, onCancel])
+  }, [editContent, note.content, onSave])
+
+  useEffect(() => {
+    if (saveRef) saveRef.current = handleSave
+    return () => { if (saveRef) saveRef.current = null }
+  }, [saveRef, handleSave])
+
+  const handleBlur = useCallback(() => void handleSave(), [handleSave])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onCancel()
-      } else if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault()
         void handleSave()
       }
     },
-    [onCancel, handleSave],
+    [handleSave],
   )
 
-  const handleBlur = useCallback(() => {
-    void handleSave()
-  }, [handleSave])
-
-  if (isEditing) {
-    return (
-      <div className={styles.noteSectionEditing}>
-        <textarea
-          ref={textareaRef}
-          className={styles.inlineTextarea}
-          value={editContent}
-          onChange={(e) => {
-            setEditContent(e.target.value)
-            resizeTextarea(e.target)
-          }}
-          onKeyDown={handleKeyDown}
-          onBlur={handleBlur}
-          disabled={saving}
-          spellCheck={false}
-        />
-      </div>
-    )
-  }
-
-  const lines = displayContent.split('\n')
   return (
-    <div
-      className={styles.noteSection}
-      onClick={onSave ? onStartEditing : undefined}
-      role={onSave ? 'button' : undefined}
-      tabIndex={onSave ? 0 : undefined}
-    >
-      {lines.map((line, lineIndex) => (
-        <div key={lineIndex} className={styles.noteLine}>
-          <DirectiveLineContent
-            content={line}
-            lineId={`view:${lineIndex}`}
-            results={directiveResults}
-            onDirectiveRefresh={onDirectiveRefresh}
-          />
+    <div className={styles.noteSection}>
+      {saveError && (
+        <div className={styles.inlineSaveError}>
+          <span>{SAVE_ERROR_BANNER}</span>
+          <button className={styles.inlineSaveErrorDismiss} onClick={() => setSaveError(null)}>{SAVE_ERROR_DISMISS}</button>
         </div>
-      ))}
+      )}
+      <textarea
+        ref={textareaRef}
+        className={styles.inlineTextarea}
+        value={editContent}
+        onChange={(e) => {
+          setEditContent(e.target.value)
+          resizeTextarea(e.target)
+        }}
+        onKeyDown={handleKeyDown}
+        onBlur={handleBlur}
+        disabled={saving}
+        readOnly={!onSave}
+        spellCheck={false}
+      />
     </div>
   )
 }
