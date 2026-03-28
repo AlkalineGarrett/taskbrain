@@ -344,7 +344,14 @@ private class LineInputConnection(
 
     override fun endBatchEdit(): Boolean = state.endBatchEdit()
 
-    override fun performEditorAction(editorAction: Int): Boolean = true
+    override fun performEditorAction(editorAction: Int): Boolean {
+        // Some IMEs (e.g., Samsung Keyboard) send Enter as performEditorAction
+        // rather than commitText("\n") or sendKeyEvent(KEYCODE_ENTER).
+        // We configure IME_ACTION_NONE with MULTI_LINE, so any action here
+        // means the user pressed Enter.
+        state.handleEnter()
+        return true
+    }
 
     override fun performContextMenuAction(id: Int): Boolean {
         return when (id) {

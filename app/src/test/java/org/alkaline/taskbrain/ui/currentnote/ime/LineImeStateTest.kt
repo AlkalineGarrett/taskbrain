@@ -262,6 +262,192 @@ class LineImeStateTest {
         assertEquals(" wo", result)
     }
 
+    // ==================== Composition Preservation (Samsung Keyboard Fix) ====================
+
+    /**
+     * Documents the root cause of the Samsung autocomplete bug:
+     * reset() unconditionally clears composition, even when text/cursor match.
+     *
+     * In the app, syncFromController() is called on every recomposition. Before the fix,
+     * it always called reset(), which cleared the IME's composing region. Samsung Keyboard
+     * interpreted this as "composition finalized" and committed its autocomplete suggestion.
+     */
+    @Test
+    fun `reset clears composition even when text and cursor match`() {
+        val buffer = EditingBuffer("hel", 3)
+        buffer.setComposition(0, 3)
+        assertTrue(buffer.hasComposition())
+
+        // Simulate round-trip: same content comes back from controller
+        buffer.reset("hel", 3)
+
+        // Composition is gone — this is why Samsung Keyboard auto-completed
+        assertFalse(buffer.hasComposition())
+        assertEquals("hel", buffer.text)
+        assertEquals(3, buffer.cursor)
+    }
+
+    /**
+     * Tests the fix pattern: check text/cursor match before calling reset,
+     * so composition is preserved during round-trips.
+     */
+    @Test
+    fun `skip reset when content matches preserves composition`() {
+        val buffer = EditingBuffer("hel", 3)
+        buffer.setComposition(0, 3)
+
+        // This is the pattern used in the fixed syncFromController()
+        val incomingText = "hel"
+        val incomingCursor = 3
+        if (buffer.text == incomingText && buffer.cursor == incomingCursor) {
+            // Skip reset — composition preserved
+        } else {
+            buffer.reset(incomingText, incomingCursor)
+        }
+
+        assertTrue(buffer.hasComposition())
+        assertEquals(0, buffer.compositionStart)
+        assertEquals(3, buffer.compositionEnd)
+    }
+
+    /**
+     * When content genuinely changes (external edit), reset must clear composition.
+     */
+    @Test
+    fun `reset clears composition when content changes externally`() {
+        val buffer = EditingBuffer("hel", 3)
+        buffer.setComposition(0, 3)
+
+        // Simulate external change (e.g., undo)
+        val incomingText = "he"
+        val incomingCursor = 2
+        if (buffer.text == incomingText && buffer.cursor == incomingCursor) {
+            // Would skip, but texts differ
+        } else {
+            buffer.reset(incomingText, incomingCursor)
+        }
+
+        assertFalse(buffer.hasComposition())
+        assertEquals("he", buffer.text)
+        assertEquals(2, buffer.cursor)
+    }
+
+    // ==================== Enter Key with Composition (Samsung Keyboard Fix) ====================
+
+    /**
+     * Samsung Keyboard sends Enter via sendKeyEvent(KEYCODE_ENTER) instead of
+     * commitText("\n"). The handler must finish any active composition first,
+     * then insert the newline.
+     */
+    @Test
+    fun `enter with active composition finishes composition then inserts newline`() {
+        val buffer = EditingBuffer("hel", 3)
+        buffer.setComposition(0, 3)
+        assertTrue(buffer.hasComposition())
+
+        // Simulate handleEnter: finish composition, then insert "\n"
+        buffer.commitComposition()
+        assertFalse(buffer.hasComposition())
+
+        // Insert newline at cursor (simulating commitText("\n", 1))
+        val start = buffer.cursor
+        buffer.replace(start, start, "\n")
+        buffer.cursor = start + 1
+
+        assertEquals("hel\n", buffer.text)
+        assertEquals(4, buffer.cursor)
+        assertFalse(buffer.hasComposition())
+    }
+
+    /**
+     * Enter without active composition just inserts newline.
+     */
+    @Test
+    fun `enter without composition inserts newline directly`() {
+        val buffer = EditingBuffer("hello", 5)
+        assertFalse(buffer.hasComposition())
+
+        val start = buffer.cursor
+        buffer.replace(start, start, "\n")
+        buffer.cursor = start + 1
+
+        assertEquals("hello\n", buffer.text)
+        assertEquals(6, buffer.cursor)
+    }
+
+    // ==================== Replace with Composition Adjustment ====================
+
+    @Test
+    fun `replace before composition leaves composition unchanged`() {
+        val buffer = EditingBuffer("ab cde", 6)
+        buffer.setComposition(3, 6)  // "cde" is composing
+
+        // Replace before composition: "ab" -> "xyz"
+        buffer.replace(0, 2, "xyz")
+
+        assertEquals("xyz cde", buffer.text)
+        assertTrue(buffer.hasComposition())
+        // Composition should shift by delta (+1: "xyz" is 3 chars, replaced 2)
+        assertEquals(4, buffer.compositionStart)
+        assertEquals(7, buffer.compositionEnd)
+    }
+
+    @Test
+    fun `replace after composition leaves composition unchanged`() {
+        val buffer = EditingBuffer("abc de", 6)
+        buffer.setComposition(0, 3)  // "abc" is composing
+
+        // Replace after composition: "de" -> "xyz"
+        buffer.replace(4, 6, "xyz")
+
+        assertEquals("abc xyz", buffer.text)
+        assertTrue(buffer.hasComposition())
+        assertEquals(0, buffer.compositionStart)
+        assertEquals(3, buffer.compositionEnd)
+    }
+
+    @Test
+    fun `replace overlapping composition clears composition`() {
+        val buffer = EditingBuffer("abcde", 5)
+        buffer.setComposition(1, 4)  // "bcd" is composing
+
+        // Replace overlapping the composition
+        buffer.replace(2, 5, "XY")
+
+        assertEquals("abXY", buffer.text)
+        assertFalse(buffer.hasComposition())
+    }
+
+    @Test
+    fun `delete before composition shifts composition left`() {
+        val buffer = EditingBuffer("ab cde", 6)
+        buffer.setComposition(3, 6)
+
+        // Delete "ab" (before composition)
+        buffer.delete(0, 2)
+
+        assertEquals(" cde", buffer.text)
+        assertTrue(buffer.hasComposition())
+        assertEquals(1, buffer.compositionStart)
+        assertEquals(4, buffer.compositionEnd)
+    }
+
+    // ==================== Snapshot ====================
+
+    @Test
+    fun `snapshot captures all buffer state`() {
+        val buffer = EditingBuffer("hello", 3)
+        buffer.setSelection(1, 4)
+        buffer.setComposition(1, 4)
+
+        val snap = buffer.snapshot()
+        assertEquals("hello", snap.text)
+        assertEquals(1, snap.cursor)
+        assertEquals(4, snap.selectionEnd)
+        assertEquals(1, snap.compositionStart)
+        assertEquals(4, snap.compositionEnd)
+    }
+
     // ==================== Edge Cases ====================
 
     @Test

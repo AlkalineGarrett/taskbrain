@@ -163,6 +163,15 @@ class LineImeState(
         suppressNextCommit = false
         val content = controller.getLineContent(lineIndex)
         val cursor = controller.getContentCursor(lineIndex)
+
+        // If the buffer already has this text and cursor, skip the reset to preserve
+        // composition state. This happens when our own edit round-trips through the
+        // controller back to us via recomposition. Resetting would clear the IME's
+        // composing region, causing autocomplete to commit on every keystroke.
+        if (buffer.text == content && buffer.cursor == cursor) {
+            return
+        }
+
         buffer.reset(content, cursor)
         updateExposedComposition()
     }
@@ -412,9 +421,25 @@ class LineImeState(
                     deleteSurroundingText(0, 1)
                     return true
                 }
+                KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                    handleEnter()
+                    return true
+                }
             }
         }
         return false
+    }
+
+    /**
+     * Handle Enter key — finish any active composition, then insert a newline
+     * via commitText so it flows through the normal newline-detection path
+     * in updateLineContent.
+     */
+    fun handleEnter() {
+        if (buffer.hasComposition()) {
+            finishComposingText()
+        }
+        commitText("\n", 1)
     }
 
     // =========================================================================
