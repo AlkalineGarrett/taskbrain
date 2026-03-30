@@ -72,11 +72,9 @@ export function DirectiveLineContent({
               key={segment.key}
               sourceText={segment.sourceText}
               result={segment.result}
-              allResults={results}
               onClick={() => handleChipClick(segment.key)}
               onButtonClick={onButtonClick ? () => onButtonClick(segment.key) : undefined}
               onViewNoteSave={onViewNoteSave}
-              onDirectiveRefresh={onDirectiveRefresh}
               onEditDirective={() => handleChipClick(segment.key)}
             />
           )

@@ -7,12 +7,9 @@ import styles from './DirectiveChip.module.css'
 interface DirectiveChipProps {
   sourceText: string
   result: DirectiveResult | null
-  /** All directive results (needed for nested directives in views) */
-  allResults?: Map<string, DirectiveResult>
   onClick?: () => void
   onButtonClick?: () => void
   onViewNoteSave?: (noteId: string, newContent: string) => Promise<void>
-  onDirectiveRefresh?: (key: string, sourceText: string) => void
   /** Called when the gear icon on a view directive is clicked */
   onEditDirective?: () => void
 }
@@ -20,11 +17,9 @@ interface DirectiveChipProps {
 export function DirectiveChip({
   sourceText,
   result,
-  allResults,
   onClick,
   onButtonClick,
   onViewNoteSave,
-  onDirectiveRefresh,
   onEditDirective,
 }: DirectiveChipProps) {
   const [buttonState, setButtonState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')

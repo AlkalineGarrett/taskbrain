@@ -1,13 +1,32 @@
 import { useEffect, useState, useCallback, useRef, useLayoutEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { RecentTabsRepository, type RecentTab } from '@/data/RecentTabsRepository'
-import { addOrUpdateTabState, updateDisplayTextState, removeTabState } from '@/data/TabState'
+import { addOrUpdateTabState, updateDisplayTextState, removeTabState, extractDisplayText } from '@/data/TabState'
+import { noteStore } from '@/data/NoteStore'
 import { db, auth } from '@/firebase/config'
 import { EMPTY_TAB } from '@/strings'
 import styles from './RecentTabsBar.module.css'
 
 const repo = new RecentTabsRepository(db, auth)
 const TAB_ANIMATION_MS = 250
+
+/**
+ * Cross-references tab displayTexts with NoteStore content and fixes stale values.
+ * Persists corrections to Firestore in the background.
+ */
+function refreshDisplayTexts(tabs: RecentTab[]): RecentTab[] {
+  return tabs.map((tab) => {
+    const note = noteStore.getNoteById(tab.noteId)
+    if (!note) return tab
+    const freshDisplayText = extractDisplayText(note.content)
+    if (freshDisplayText !== tab.displayText) {
+      console.log(`[RecentTabs] refreshDisplayTexts: stale displayText for ${tab.noteId}: "${tab.displayText}" -> "${freshDisplayText}"`)
+      void repo.updateTabDisplayText(tab.noteId, freshDisplayText)
+      return { ...tab, displayText: freshDisplayText }
+    }
+    return tab
+  })
+}
 
 /**
  * Module-level refs so external functions can snapshot positions
@@ -50,7 +69,7 @@ export function RecentTabsBar() {
     const loadTabs = async () => {
       try {
         const openTabs = await repo.getOpenTabs()
-        setTabs(openTabs)
+        setTabs(refreshDisplayTexts(openTabs))
       } catch {
         // silently fail
       }

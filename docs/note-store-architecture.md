@@ -171,7 +171,35 @@ Inline edit blur → saveInlineNoteContent() → NoteStore.updateNote(persist=fa
 
 **Problem:** The `NoteStore.notes.collect` observer detected content changes and called `editorState.updateFromText()`. After save, the observer fired (save updates NoteStore), and since `isSaved` was now true, it applied the update — resetting the cursor.
 
-**Solution:** Skip the observer when `saveStatus` is `Saving` or `Success` — the change is from our own save, not external.
+**Solution:** Skip the observer when `saveStatus` is `Saving` or `Success(noteId)` for the currently displayed note — the change is from our own save, not external.
+
+### Bug 19: `SaveStatus.Success` blocked external change detector across tab switches
+
+**Problem:** `SaveStatus` was a global singleton (`Saving`, `Success`, `Error`) shared across all notes. After saving note A and switching to note B, `SaveStatus` remained `Success`. The external change detector (`NoteStore.notes.collect`) checked `saveStatus is Saving || saveStatus is Success` and skipped **all** NoteStore updates — even for note B. If NoteStore had stale content for note B, the editor was stuck showing wrong content until app restart.
+
+**Solution:**
+1. `SaveStatus.Success` now carries the `noteId` that was saved: `data class Success(val noteId: String)`
+2. `loadContent` resets `_saveStatus.value = null` when switching to a different note
+3. The external change detector only blocks for `Success` when `saveStatus.noteId == displayedNoteId`
+
+**Rule:** `SaveStatus` must be note-aware. Always check whether a `Success` applies to the currently displayed note before blocking updates.
+
+### Bug 20: `SaveStatus.Success` handler updated wrong tab's displayText
+
+**Problem:** The `ContentSyncEffects` `LaunchedEffect(saveStatus)` handler called `updateTabDisplayText(currentNoteId, userContent)` on `Success`. But if the user switched tabs before the save completed, `currentNoteId` and `userContent` belonged to the **new** note. This wrote the new note's displayText to the new note's tab (harmless), but the **old** note's tab displayText was never updated — leaving it stale from `onNoteOpened`. Over time, this caused "shifted" displayTexts where tab labels showed content from previous edits.
+
+**Solution:**
+1. `SaveStatus.Success(noteId)` carries the saved note's ID
+2. The handler only updates displayText if `saveStatus.noteId == currentNoteId` (still on the same note)
+3. `refreshDisplayTexts` on `loadTabs` cross-references all tab displayTexts with NoteStore content and fixes stale values, both locally and in Firestore
+
+**Rule:** Post-save handlers that reference `currentNoteId` or `userContent` must verify the user is still on the same note. Use the noteId from `SaveStatus.Success`, not the ViewModel's mutable `currentNoteId`.
+
+### Bug 21: Background Firestore refresh silently discarded fresh content
+
+**Problem:** In `loadContent` path 2 (NoteStore), a background Firestore refresh compared `freshContent == content`. If they differed, the code assumed "Firestore is stale (optimistic edit pending)" and did nothing. But when switching to a note with no pending edits, NoteStore could be the stale party (e.g., collection listener hadn't delivered the latest snapshot yet). The fresh Firestore content was silently discarded.
+
+**Solution:** Check `NoteStore.isHot(noteId)` (made public). If the note is hot, NoteStore is authoritative (pending local edit). If not hot, trust Firestore and update the editor via `_loadStatus`.
 
 ---
 
@@ -213,6 +241,9 @@ Inline edit blur → saveInlineNoteContent() → NoteStore.updateNote(persist=fa
 2. **Invalidate `MetadataHasher` on tab switch** — ensures directive cache staleness is detected
 3. **Don't flush every keystroke** — only on tab switch (avoids cursor reset from StateFlow emissions)
 4. **`LoadStatus.Success` must carry noteId** — guard against stale loads from previous tabs
+5. **`SaveStatus.Success` must carry noteId** — post-save handlers must verify they're still on the saved note before updating tab displayText or blocking external change detection
+6. **Reset `_saveStatus` in `loadContent`** — prevents stale `Success` from a previous note's save from blocking the new note's external change detector
+7. **`refreshDisplayTexts` on tab load** — cross-references Firestore displayTexts with NoteStore content to fix stale values from past bugs
 
 ---
 

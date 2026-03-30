@@ -88,12 +88,8 @@ class RecentTabsRepository(
     suspend fun updateTabDisplayText(noteId: String, displayText: String): Result<Unit> = runCatching {
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
-            val ref = tabRef(userId, noteId)
-            val doc = ref.get().await()
-            if (doc.exists()) {
-                ref.update("displayText", displayText).await()
-                Log.d(TAG, "Tab display text updated: $noteId")
-            }
+            tabRef(userId, noteId).update("displayText", displayText).await()
+            Log.d(TAG, "Tab display text updated: $noteId")
             Unit
         }
     }.onFailure { Log.e(TAG, "Error updating tab display text", it) }

@@ -760,11 +760,14 @@ private fun DataLoadingEffects(
         NoteStore.notes.collect {
             if (isFirstEmission) { isFirstEmission = false; return@collect }
             if (!isSaved) return@collect // local edits take priority
-            // Skip if a save is in progress or just completed — the NoteStore change
-            // is from our own save, not an external source. Without this, the save's
-            // NoteStore update triggers editorState.updateFromText which resets the cursor.
+            // Skip if a save is in progress or just completed for THIS note — the
+            // NoteStore change is from our own save, not an external source. Without
+            // this, the save's NoteStore update triggers editorState.updateFromText
+            // which resets the cursor. Only block for the note being saved, not for
+            // a different note's save that completed after a tab switch.
             val currentSaveStatus = currentNoteViewModel.saveStatus.value
-            if (currentSaveStatus is SaveStatus.Saving || currentSaveStatus is SaveStatus.Success) return@collect
+            if (currentSaveStatus is SaveStatus.Saving) return@collect
+            if (currentSaveStatus is SaveStatus.Success && currentSaveStatus.noteId == displayedNoteId) return@collect
             val storeNote = NoteStore.getNoteById(displayedNoteId) ?: return@collect
             if (storeNote.content != userContent) {
                 onContentLoaded(storeNote.content)
@@ -895,13 +898,10 @@ private fun ContentSyncEffects(
         if (saveStatus is SaveStatus.Success) {
             onSavedChanged(true)
             currentNoteViewModel.markAsSaved()
-            // Guard: during note switches, userContent is reset to "" before currentNoteId
-            // updates via LiveData. Skip tab/cache updates to avoid writing "New Note" for
-            // the old note using the new note's empty content.
-            if (userContent.isNotEmpty()) {
-                currentNoteId?.let { noteId ->
-                    recentTabsViewModel.updateTabDisplayText(noteId, userContent)
-                }
+            // Use saveStatus.noteId (not currentNoteId) because a tab switch
+            // may have changed currentNoteId before the save completed.
+            if (saveStatus.noteId == currentNoteId && userContent.isNotEmpty()) {
+                recentTabsViewModel.updateTabDisplayText(saveStatus.noteId, userContent)
             }
         }
     }

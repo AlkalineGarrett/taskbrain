@@ -116,7 +116,6 @@ function ViewNoteSection({
   saveRef,
 }: ViewNoteSectionProps) {
   const { activateSession, deactivateSession, activeSession, notifyActiveChange } = useActiveEditor()
-  const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [, setRenderVersion] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -188,7 +187,6 @@ function ViewNoteSection({
     if (!onSave || !s || !s.isDirty) return
     const content = s.getText()
     lastSavedContentRef.current = content
-    setSaving(true)
     setSaveError(null)
     try {
       await onSave(content)
@@ -196,8 +194,6 @@ function ViewNoteSection({
       const msg = e instanceof Error ? e.message : SAVE_ERROR_BANNER
       setSaveError(msg)
       lastSavedContentRef.current = null
-    } finally {
-      setSaving(false)
     }
   }, [onSave])
 
@@ -272,7 +268,7 @@ function ViewNoteSection({
       )}
       {(() => {
         const selRange = displayState.hasSelection ? displayState.getSelectedLineRange() : null
-        return displayLines.map((line, i) => {
+        return displayLines.map((_line, i) => {
         const isLineSelected = selRange ? (i >= selRange[0] && i <= selRange[1]) : false
         return (
           <div key={i} data-view-line-index={i} data-view-note-id={note.id} className={styles.viewLineRow}>

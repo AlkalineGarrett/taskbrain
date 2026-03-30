@@ -1,4 +1,4 @@
-import { findDirectives, directiveKey, directiveHash } from './DirectiveFinder'
+import { findDirectives, directiveHash } from './DirectiveFinder'
 import type { DirectiveResult } from './DirectiveResult'
 import { directiveResultToValue, isComputed } from './DirectiveResult'
 import { toDisplayString } from '../runtime/DslValue'

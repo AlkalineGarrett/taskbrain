@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.launch
 import org.alkaline.taskbrain.data.NoteLine
+import org.alkaline.taskbrain.data.NoteStore
 import org.alkaline.taskbrain.data.RecentTab
 import org.alkaline.taskbrain.data.RecentTabsRepository
 import org.alkaline.taskbrain.data.TabState
@@ -80,7 +81,7 @@ class RecentTabsViewModel : ViewModel() {
                     // onNoteOpened() wrote a correct displayText optimistically but before
                     // the Firestore write from onNoteOpened() is visible to the read.
                     val optimisticMap = _tabs.value?.associateBy { it.noteId }.orEmpty()
-                    _tabs.value = tabList.map { loaded ->
+                    val merged = tabList.map { loaded ->
                         val existing = optimisticMap[loaded.noteId]
                         if (existing != null && existing.displayText.isNotEmpty() && loaded.displayText.isEmpty()) {
                             loaded.copy(displayText = existing.displayText)
@@ -88,6 +89,7 @@ class RecentTabsViewModel : ViewModel() {
                             loaded
                         }
                     }
+                    _tabs.value = refreshDisplayTexts(merged)
                     Log.d(TAG, "Loaded ${tabList.size} tabs")
                 },
                 onFailure = { e ->
@@ -182,6 +184,27 @@ class RecentTabsViewModel : ViewModel() {
                     // Don't show error for display text updates - non-critical
                 }
             )
+        }
+    }
+
+    /**
+     * Cross-references tab displayTexts with NoteStore content and fixes stale values.
+     * Persists corrections to Firestore in the background.
+     */
+    private fun refreshDisplayTexts(tabs: List<RecentTab>): List<RecentTab> {
+        return tabs.map { tab ->
+            val note = NoteStore.getNoteById(tab.noteId) ?: return@map tab
+            val freshDisplayText = TabState.extractDisplayText(note.content)
+            if (freshDisplayText != tab.displayText) {
+                Log.d(TAG, "refreshDisplayTexts: stale displayText for ${tab.noteId}: " +
+                    "\"${tab.displayText}\" -> \"$freshDisplayText\"")
+                viewModelScope.launch {
+                    repository.updateTabDisplayText(tab.noteId, freshDisplayText)
+                }
+                tab.copy(displayText = freshDisplayText)
+            } else {
+                tab
+            }
         }
     }
 

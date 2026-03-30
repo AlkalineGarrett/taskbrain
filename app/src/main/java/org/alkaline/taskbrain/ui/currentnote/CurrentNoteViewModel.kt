@@ -268,7 +268,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 }
                 if (newIdsMap.isNotEmpty()) _newlyAssignedNoteIds.tryEmit(newIdsMap)
                 syncAlarmLineContent(trackedLines)
-                _saveStatus.value = SaveStatus.Success
+                _saveStatus.value = SaveStatus.Success(noteId)
                 _saveCompleted.tryEmit(Unit)
                 markAsSaved()
             },
@@ -359,6 +359,10 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         currentNoteId = resolvedId
         _currentNoteIdLiveData.value = currentNoteId
 
+        // A leftover SaveStatus.Success from the old note blocks the external
+        // change detector (NoteStore collector) for the new note.
+        _saveStatus.value = null
+
         // Capture noteId for all coroutines in this method. currentNoteId is a mutable
         // field that changes on the next loadContent call, so coroutines MUST NOT read it.
         val noteId = resolvedId
@@ -439,8 +443,9 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             loadAlarmStates()
 
             // Background refresh from Firestore for proper noteId mappings.
-            // Only update noteId mappings (line tracker) — never overwrite displayed
-            // content, which may contain an optimistic edit not yet saved to Firestore.
+            // If content matches, just update noteId mappings.
+            // If content differs and the note is NOT hot (no pending local edits),
+            // NoteStore is stale — update the editor with Firestore content.
             viewModelScope.launch {
                 repository.loadNoteWithChildren(noteId).onSuccess { freshLines ->
                     if (noteId != currentNoteId) return@onSuccess
@@ -448,10 +453,15 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                     if (freshContent == content) {
                         // Content matches — safe to update noteId mappings
                         lineTracker.setTrackedLines(freshLines)
+                    } else if (!NoteStore.isHot(noteId)) {
+                        // NoteStore content is stale (e.g., collection listener hasn't
+                        // delivered the latest data yet). Update with Firestore content.
+                        Log.d(TAG, "loadContent: NoteStore stale for $noteId, updating from Firestore")
+                        lineTracker.setTrackedLines(freshLines)
+                        _loadStatus.value = LoadStatus.Success(noteId, freshContent, noteLinesToNoteIds(freshLines))
                     }
-                    // If content differs, Firestore is stale (optimistic edit pending).
-                    // Don't overwrite. The collection listener will deliver the
-                    // correct content once the save completes.
+                    // else: note is hot (pending local edit) — NoteStore has the correct
+                    // content. The collection listener will deliver it once the save completes.
                 }
             }
             return
@@ -1963,7 +1973,8 @@ class CurrentNoteViewModel @JvmOverloads constructor(
 
 sealed class SaveStatus {
     object Saving : SaveStatus()
-    object Success : SaveStatus()
+    /** @param noteId the note that was saved (may differ from currentNoteId after a tab switch) */
+    data class Success(val noteId: String) : SaveStatus()
     data class Error(val throwable: Throwable) : SaveStatus()
 }
 

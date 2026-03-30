@@ -1,7 +1,6 @@
 import { EditorState } from './EditorState'
 import { EditorController } from './EditorController'
 import { UndoManager } from './UndoManager'
-import { LineState } from './LineState'
 
 /**
  * Encapsulates a self-contained editing session for a view note.

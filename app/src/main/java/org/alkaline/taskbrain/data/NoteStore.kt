@@ -52,7 +52,7 @@ object NoteStore {
     }
 
     /** Returns true if the note was locally modified within the cooldown window. */
-    private fun isHot(noteId: String): Boolean {
+    fun isHot(noteId: String): Boolean {
         val timestamp = hotNotes[noteId] ?: return false
         if (System.currentTimeMillis() - timestamp < HOT_COOLDOWN_MS) return true
         hotNotes.remove(noteId)

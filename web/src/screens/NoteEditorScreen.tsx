@@ -1,6 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { useEffect, useCallback, useState, useRef, useMemo } from 'react'
-import type { Note } from '@/data/Note'
 import { NoteRepository } from '@/data/NoteRepository'
 import { noteStore } from '@/data/NoteStore'
 import { useAllNotes, useNoteStoreError } from '@/hooks/useNoteStore'
@@ -164,7 +163,6 @@ export function NoteEditorScreen() {
       const directive = directives.find((d) => d.sourceText === oldSourceText)
       if (directive) {
         controller.confirmDirectiveEdit(lineIndex, directive.startOffset, directive.endOffset, newSourceText)
-        const content = editorState.text
         invalidateAndRecompute()
         return
       }

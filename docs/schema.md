@@ -69,7 +69,7 @@ Path: `/users/{userId}/openTabs/{noteId}`
 
 ### Field Explanations
 - **noteId**: References the note document. Used as document ID for easy lookup/update.
-- **displayText**: Cached first line of note content for quick display without loading full note.
+- **displayText**: Cached first line of note content for quick display without loading full note. Can become stale if a save completes after a tab switch (the post-save handler misses the update). Both platforms run `refreshDisplayTexts` on tab load to cross-reference with NoteStore and fix stale values.
 - **lastAccessedAt**: Used to order tabs (most recent first) and enforce 5-tab limit.
 
 ## Collection: `alarms` (per user)
