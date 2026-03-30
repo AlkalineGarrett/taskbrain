@@ -129,6 +129,8 @@ function ViewNoteSection({
   // but only if we're not currently editing this note.
   const sessionRef = useRef<InlineEditSession | null>(null)
   const isActiveHere = activeSession?.noteId === note.id
+  const isActiveHereRef = useRef(isActiveHere)
+  isActiveHereRef.current = isActiveHere
 
   // Derive per-line noteIds from NoteStore's tree structure
   const lineNoteIds = useMemo(() => {
@@ -139,19 +141,34 @@ function ViewNoteSection({
 
   const getOrCreateSession = useCallback(() => {
     if (!sessionRef.current || sessionRef.current.noteId !== note.id) {
-      sessionRef.current = new InlineEditSession(note.id, note.content, lineNoteIds)
+      const s = new InlineEditSession(note.id, note.content, lineNoteIds)
+      // Connect change handlers immediately so clicks trigger re-renders
+      // even before the session is activated via the ActiveEditorContext.
+      s.editorState.onTextChange = () => {
+        sessionRef.current?.updateHiddenIndices()
+        setRenderVersion(v => v + 1)
+      }
+      s.editorState.onSelectionChange = () => {
+        setRenderVersion(v => v + 1)
+        notifyActiveChange()
+      }
+      sessionRef.current = s
     }
     return sessionRef.current
-  }, [note.id, note.content, lineNoteIds])
+  }, [note.id, note.content, lineNoteIds, notifyActiveChange])
 
-  // Sync with external content changes when not actively editing
+  // Sync with external content changes when not actively editing.
+  // Only trigger on note.content changes — NOT on isActiveHere changes.
+  // If isActiveHere were in deps, deactivation would null the session, force
+  // a new session with focusedLineIndex=0, and its focus effect would steal
+  // DOM focus from wherever the user just clicked.
   useEffect(() => {
-    if (!isActiveHere) {
-      sessionRef.current = null // Force recreate on next focus
+    if (!isActiveHereRef.current) {
+      sessionRef.current = null // Force recreate on next render
       lastSavedContentRef.current = null
       setRenderVersion(v => v + 1)
     }
-  }, [note.content, isActiveHere])
+  }, [note.content])
 
   // Check for save errors persisted from a previous unmount
   useEffect(() => {
@@ -166,22 +183,6 @@ function ViewNoteSection({
       }
     } catch { /* sessionStorage may be unavailable */ }
   }, [note.id])
-
-  // Wire up editor state callbacks when active.
-  // notifyActiveChange bumps NoteEditorScreen's version so CommandBar re-renders.
-  useEffect(() => {
-    if (!isActiveHere || !sessionRef.current) return
-    const state = sessionRef.current.editorState
-    state.onTextChange = () => {
-      sessionRef.current?.updateHiddenIndices()
-      setRenderVersion(v => v + 1)
-    }
-    state.onSelectionChange = () => { setRenderVersion(v => v + 1); notifyActiveChange() }
-    return () => {
-      state.onTextChange = null
-      state.onSelectionChange = null
-    }
-  }, [isActiveHere, notifyActiveChange])
 
   // Report dirty state to parent
   const session = sessionRef.current
@@ -198,6 +199,7 @@ function ViewNoteSection({
     setSaveError(null)
     try {
       await onSave(content)
+      s.markSaved(content)
     } catch (e) {
       const msg = e instanceof Error ? e.message : SAVE_ERROR_BANNER
       setSaveError(msg)
@@ -237,8 +239,10 @@ function ViewNoteSection({
     containerRef, dropCursorRef, getState, getController, 'data-view-line-index',
   )
 
-  // Focus management: activate session on focus, save+deactivate on blur
-  const handleContainerFocus = useCallback(() => {
+  // Focus management: activate session on mouseDown (capture phase fires before
+  // EditorLine's mouseDown, ensuring the session is active when setCursorFromGlobalOffset
+  // runs), on focus (fallback for keyboard/Tab navigation), save+deactivate on blur.
+  const handleActivate = useCallback(() => {
     const s = getOrCreateSession()
     activateSession(s)
   }, [getOrCreateSession, activateSession])
@@ -249,10 +253,14 @@ function ViewNoteSection({
     // case — only deactivate when focus explicitly moved to an element outside.
     if (!e.relatedTarget) return
     if (containerRef.current?.contains(e.relatedTarget as Node)) return
-    const prev = deactivateSession()
-    if (prev?.isDirty && onSave) {
-      void onSave(prev.getText()).catch(() => { /* handled by unmount fallback */ })
+    // Always save dirty content on blur
+    const s = sessionRef.current
+    if (s?.isDirty && onSave) {
+      void onSave(s.getText()).catch(() => { /* handled by unmount fallback */ })
     }
+    // Only deactivate if this section's session is still the active one —
+    // a sibling ViewNoteSection may have already activated its own session.
+    deactivateSession(s ?? undefined)
   }, [deactivateSession, onSave])
 
   const activeOrFallback = (isActiveHere ? session : null) ?? getOrCreateSession()
@@ -264,7 +272,8 @@ function ViewNoteSection({
     <div
       ref={containerRef}
       className={styles.noteSection}
-      onFocus={handleContainerFocus}
+      onMouseDownCapture={handleActivate}
+      onFocus={handleActivate}
       onBlur={handleContainerBlur}
     >
       <div ref={dropCursorRef} className={styles.dropCursor} style={{ display: 'none' }} />
@@ -287,6 +296,7 @@ function ViewNoteSection({
               onGutterDragUpdate={handleGutterDragUpdate}
               onMoveStart={handleMoveStart}
               hideNoteId
+              allowAutoFocus={isActiveHere}
             />
           </div>
         </div>

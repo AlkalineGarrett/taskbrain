@@ -7,6 +7,7 @@ import { hasDirectives, segmentLine } from '@/dsl/directives/DirectiveSegmenter'
 import { directiveResultToValue } from '@/dsl/directives/DirectiveResult'
 import { DirectiveLineContent } from './DirectiveLineContent'
 import { getCharOffsetFromPoint, getCharOffsetHidingTextarea, getWordBoundsAt, isOnFirstVisualRow, isOnLastVisualRow, mapDisplayOffsetToSource, mapSourceOffsetToDisplay } from '@/editor/TextMeasure'
+import { computeFocusHighlight } from '@/editor/FocusHighlight'
 import styles from './EditorLine.module.css'
 
 /**
@@ -36,6 +37,13 @@ interface EditorLineProps {
   hideNoteId?: boolean
   /** Hide selectionGutter (used for lines inside view directives that render their own gutter). */
   hideGutter?: boolean
+  /** When false, the focus effect won't call focus() on the textarea. Used by embedded
+   *  editors (views) to prevent stealing focus when the view session isn't active. */
+  allowAutoFocus?: boolean
+  /** When false, the focused-line highlight is hidden even if the line is focused in state.
+   *  Defaults to `allowAutoFocus !== false`. Main editor passes this separately so it can
+   *  suppress the highlight when a view is active without blocking focus transitions. */
+  showFocusHighlight?: boolean
 }
 
 export function EditorLine({
@@ -53,6 +61,8 @@ export function EditorLine({
   onMoveStart,
   hideNoteId,
   hideGutter,
+  allowAutoFocus,
+  showFocusHighlight: showFocusHighlightProp,
 }: EditorLineProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
@@ -61,7 +71,10 @@ export function EditorLine({
   const line = editorState.lines[lineIndex]
   if (!line) return null
 
-  const isFocused = lineIndex === editorState.focusedLineIndex
+  const isFocusedInState = lineIndex === editorState.focusedLineIndex
+  const { highlight: isFocused, autoFocus: autoFocusAllowed } = computeFocusHighlight(
+    isFocusedInState, allowAutoFocus, showFocusHighlightProp,
+  )
   const prefix = line.prefix
   const content = line.content
   const indentLevel = prefix.match(/^\t*/)?.[0].length ?? 0
@@ -176,9 +189,14 @@ export function EditorLine({
     return () => observer.disconnect()
   }, [])
 
-  // Focus management — sets native textarea selection for focused line
+  // Focus management — sets native textarea selection for focused line.
+  // Uses isFocusedInState so the effect fires even when the visual highlight is
+  // suppressed (e.g., clicking a main editor line while a view is active —
+  // the highlight won't show until deactivation, but focus must transfer immediately).
+  // allowAutoFocus===false (view editors when inactive) prevents stealing focus.
   useEffect(() => {
-    if (!isFocused || !inputRef.current) return
+    if (!isFocusedInState || !inputRef.current) return
+    if (!autoFocusAllowed) return
     if (document.activeElement !== inputRef.current) {
       inputRef.current.focus({ preventScroll: true })
     }
@@ -188,7 +206,7 @@ export function EditorLine({
       const cursor = line.contentCursorPosition
       inputRef.current.setSelectionRange(cursor, cursor)
     }
-  }, [isFocused, editorState.stateVersion])
+  }, [isFocusedInState, editorState.stateVersion, autoFocusAllowed])
 
   const handleChange = useCallback(
     (e: ChangeEvent<HTMLTextAreaElement>) => {

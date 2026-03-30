@@ -282,14 +282,25 @@ export function NoteEditorScreen() {
   const [, setActiveSessionVersion] = useState(0)
 
   const activateSession = useCallback((session: InlineEditSession) => {
+    const prev = activeSessionRef.current
+    if (prev !== session) {
+      // Mutual exclusivity: clear selections in all other editors when switching
+      editorState.clearSelection()
+      if (prev) prev.editorState.clearSelection()
+    }
     activeSessionRef.current = session
     setActiveSession(session)
     // Bump version so CommandBar re-evaluates disabled states immediately
     setActiveSessionVersion(v => v + 1)
-  }, [])
+  }, [editorState])
 
-  const deactivateSession = useCallback((): InlineEditSession | null => {
+  const deactivateSession = useCallback((expectedSession?: InlineEditSession): InlineEditSession | null => {
     const prev = activeSessionRef.current
+    // If caller specifies which session it expects to deactivate, only proceed if it matches.
+    // This prevents a blurring ViewNoteSection from deactivating a sibling that just activated.
+    if (expectedSession && prev !== expectedSession) return null
+    // Clear the departing session's selection for mutual exclusivity
+    if (prev) prev.editorState.clearSelection()
     activeSessionRef.current = null
     setActiveSession(null)
     return prev
@@ -369,8 +380,10 @@ export function NoteEditorScreen() {
         return
       }
     }
+    // Parent gutter: deactivate any active view session so commands route to parent
+    if (activeSessionRef.current) deactivateSession()
     baseGutterDragStart(lineIndex)
-  }, [baseGutterDragStart, resolveViewLineAtY, activateSession, gutterAnchorRef])
+  }, [baseGutterDragStart, resolveViewLineAtY, activateSession, deactivateSession, gutterAnchorRef])
 
   const handleGutterDragUpdate = useCallback((lineIndex: number, clientY?: number) => {
     if (clientY != null) {
@@ -531,6 +544,7 @@ export function NoteEditorScreen() {
                 onGutterDragStart={handleGutterDragStart}
                 onGutterDragUpdate={handleGutterDragUpdate}
                 onMoveStart={handleMoveStart}
+                showFocusHighlight={!activeSession}
               />
             </div>
           ),

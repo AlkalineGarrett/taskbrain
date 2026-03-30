@@ -12,8 +12,10 @@ export interface ActiveEditorContextValue {
   activeSession: InlineEditSession | null
   /** Called by a ViewNoteSection when it gains focus. */
   activateSession: (session: InlineEditSession) => void
-  /** Called when focus leaves a view section. Returns the old session for saving. */
-  deactivateSession: () => InlineEditSession | null
+  /** Called when focus leaves a view section. Returns the old session for saving.
+   *  If expectedSession is provided, only deactivates if it matches the current active session
+   *  (prevents a blurring section from deactivating a newly-activated sibling). */
+  deactivateSession: (expectedSession?: InlineEditSession) => InlineEditSession | null
   /** Notify that the active session's state changed (triggers CommandBar re-render). */
   notifyActiveChange: () => void
 }

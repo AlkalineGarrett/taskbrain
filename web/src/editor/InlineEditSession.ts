@@ -12,7 +12,7 @@ export class InlineEditSession {
   readonly editorState: EditorState
   readonly controller: EditorController
   readonly undoManager: UndoManager
-  private readonly originalContent: string
+  private originalContent: string
 
   constructor(noteId: string, content: string, lineNoteIds?: string[][]) {
     this.noteId = noteId
@@ -51,6 +51,12 @@ export class InlineEditSession {
 
   get isDirty(): boolean {
     return this.getText() !== this.originalContent
+  }
+
+  /** Update the baseline content after a successful save.
+   *  Accepts optional pre-computed content to avoid redundant getText() calls. */
+  markSaved(savedContent?: string): void {
+    this.originalContent = savedContent ?? this.getText()
   }
 
   /**
