@@ -22,6 +22,12 @@
   overflow: hidden;
 }
 
+/* On view directive lines, pad the noteId text right so it ends before
+   the embedded noteId column (10rem to the left of the gutter). */
+.noteIdCellNarrow {
+  padding-right: calc(10rem + 0.375rem);
+}
+
 .selectionGutter {
   width: 1.25rem;
   flex-shrink: 0;

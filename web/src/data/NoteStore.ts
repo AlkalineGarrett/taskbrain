@@ -7,7 +7,8 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore'
 import type { Auth } from 'firebase/auth'
-import { noteFromFirestore, type Note } from './Note'
+import { noteFromFirestore, type Note, type NoteLine } from './Note'
+import { flattenTreeToLines } from './NoteTree'
 import { rebuildAllNotes, rebuildAffectedNotes } from './NoteReconstruction'
 
 /**
@@ -198,6 +199,33 @@ export class NoteStore {
 
   getNoteById(noteId: string): Note | undefined {
     return this.reconstructedNotes.find(n => n.id === noteId)
+  }
+
+  /** Returns per-line NoteLines for a note, using the tree structure for correct noteId mapping. */
+  getNoteLinesById(noteId: string): NoteLine[] | undefined {
+    const note = this.rawNotes.get(noteId)
+    if (!note) return undefined
+    if (note.containedNotes.length === 0) {
+      return [{ content: note.content, noteId: note.id }]
+    }
+    const descendants: Note[] = []
+    for (const raw of this.rawNotes.values()) {
+      if (raw.rootNoteId === noteId) descendants.push(raw)
+    }
+    if (descendants.length > 0) {
+      return flattenTreeToLines(note, descendants)
+    }
+    // Old format fallback
+    const lines: NoteLine[] = [{ content: note.content, noteId: note.id }]
+    for (const childId of note.containedNotes) {
+      if (childId !== '') {
+        const child = this.rawNotes.get(childId)
+        lines.push({ content: child?.content ?? '', noteId: childId })
+      } else {
+        lines.push({ content: '', noteId: null })
+      }
+    }
+    return lines
   }
 
   /** Track an in-flight save so loaders can await it before reading from Firestore. */

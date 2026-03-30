@@ -14,7 +14,7 @@ export class InlineEditSession {
   readonly undoManager: UndoManager
   private readonly originalContent: string
 
-  constructor(noteId: string, content: string) {
+  constructor(noteId: string, content: string, lineNoteIds?: string[][]) {
     this.noteId = noteId
     this.originalContent = content
     this.editorState = new EditorState()
@@ -24,7 +24,10 @@ export class InlineEditSession {
     // Split content into lines and initialize the editor.
     // Append a trailing empty line for typing (matches main editor convention).
     const rawLines = content.split('\n')
-    const noteLines = rawLines.map((text) => ({ text, noteIds: [] as string[] }))
+    const noteLines = rawLines.map((text, i) => ({
+      text,
+      noteIds: lineNoteIds?.[i] ?? [],
+    }))
     if (noteLines.length === 0 || noteLines[noteLines.length - 1]!.text !== '') {
       noteLines.push({ text: '', noteIds: [] })
     }

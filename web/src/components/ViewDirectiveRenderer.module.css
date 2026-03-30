@@ -50,36 +50,39 @@
   position: relative;
 }
 
+/* Pull the entire row left so the embedded gutter aligns with the main gutter.
+   Offset = noteId cell (10rem) + main gutter width (1.25rem) + 2x --view-gutter-offset.
+   The second --view-gutter-offset compensates for viewLineContent's padding-left
+   which pushes the gutter right. */
 .viewLineRow {
   display: flex;
   align-items: stretch;
+  margin-left: calc(-10rem - 1.25rem - 2 * var(--view-gutter-offset, 7px));
 }
 
-/* Gutter cell pulled left to align with the main gutter column.
-   --view-gutter-offset is set by the parent EditorLine's content wrapper. */
-.viewGutterCell {
+.viewNoteIdCell {
   flex-shrink: 0;
-  width: 1.25rem;
-  margin-left: calc(-1.25rem - var(--view-gutter-offset, 7px));
-  background: var(--color-gutter-bg);
-  border-bottom: 1px solid var(--color-gutter-border);
-  border-right: 1px solid var(--color-border);
-  cursor: pointer;
-  user-select: none;
-}
-
-.viewGutterSelected {
-  background: var(--color-gutter-selected);
+  width: 10rem;
+  font-family: monospace;
+  font-size: 0.6875rem;
+  line-height: 1.5rem;
+  color: #bbb;
+  text-align: right;
+  white-space: nowrap;
+  user-select: text;
+  cursor: text;
+  padding: 0 0.375rem 0 0;
+  overflow: hidden;
 }
 
 .viewLineContent {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  /* Offset content right of the view border line.
-     The gutter's negative margin pulls the row left past the border,
-     so we need padding to push content back to the right of it. */
+  /* Push content right past the view border that the negative margin pulled us past. */
   padding-left: calc(var(--view-gutter-offset, 7px));
+  /* EditorLine's indent div reads this to shift text past the viewContainer border+padding
+     without moving the gutter (which is a sibling of the indent div). */
+  --view-border-inset: 7px; /* viewContainer border-left (3px) + padding-left (4px) */
 }
 
 .dropCursor {

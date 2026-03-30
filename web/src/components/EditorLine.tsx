@@ -32,7 +32,9 @@ interface EditorLineProps {
   onGutterDragStart?: (lineIndex: number, clientY?: number) => void
   onGutterDragUpdate?: (lineIndex: number, clientY?: number) => void
   onMoveStart?: () => void
-  /** Hide noteIdCell and selectionGutter (used for lines inside view directives). */
+  /** Hide noteIdCell (used for lines inside view directives that render their own noteId column). */
+  hideNoteId?: boolean
+  /** Hide selectionGutter (used for lines inside view directives that render their own gutter). */
   hideGutter?: boolean
 }
 
@@ -49,6 +51,7 @@ export function EditorLine({
   onGutterDragStart,
   onGutterDragUpdate,
   onMoveStart,
+  hideNoteId,
   hideGutter,
 }: EditorLineProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -578,13 +581,13 @@ export function EditorLine({
     <div
       className={`${styles.line} ${isFocused ? styles.focused : ''}`}
     >
-      {!hideGutter && <div className={styles.noteIdCell}>{noteIdText || '\u00A0'}</div>}
+      {!hideNoteId && !hideGutter && <div className={`${styles.noteIdCell}${hasViewDirective ? ` ${styles.noteIdCellNarrow}` : ''}`}>{noteIdText || '\u00A0'}</div>}
       {!hideGutter && <div
         className={`${styles.selectionGutter}${isLineSelected ? ` ${styles.selected}` : ''}${hasViewDirective ? ` ${styles.selectionGutterHidden}` : ''}`}
         onMouseDown={handleGutterMouseDown}
         onMouseEnter={handleGutterMouseEnter}
       />}
-      <div style={{ paddingLeft: `${0.25 + indentLevel * 0.6}rem`, display: 'flex', flex: 1, minWidth: 0, ['--view-gutter-offset' as string]: `calc(${0.25 + indentLevel * 0.6}rem + 7px)` }}>
+      <div style={{ paddingLeft: `calc(${0.25 + indentLevel * 0.6}rem + var(--view-border-inset, 0px))`, display: 'flex', flex: 1, minWidth: 0, ['--view-gutter-offset' as string]: `calc(${0.25 + indentLevel * 0.6}rem + 7px)` }}>
       {displayPrefix ? (
         <div className={styles.gutter} onClick={handleGutterClick}>
           <span className={styles.prefix}>{displayPrefix}</span>

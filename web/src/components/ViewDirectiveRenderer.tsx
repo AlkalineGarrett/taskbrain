@@ -1,8 +1,9 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import type { Note } from '@/data/Note'
 import type { ViewVal } from '@/dsl/runtime/DslValue'
 import { directiveResultToValue } from '@/dsl/directives/DirectiveResult'
 import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
+import { noteStore } from '@/data/NoteStore'
 import { InlineEditSession } from '@/editor/InlineEditSession'
 import { useActiveEditor } from '@/editor/ActiveEditorContext'
 import { useEditorInteractions } from '@/editor/useEditorInteractions'
@@ -129,12 +130,19 @@ function ViewNoteSection({
   const sessionRef = useRef<InlineEditSession | null>(null)
   const isActiveHere = activeSession?.noteId === note.id
 
+  // Derive per-line noteIds from NoteStore's tree structure
+  const lineNoteIds = useMemo(() => {
+    const noteLines = noteStore.getNoteLinesById(note.id)
+    if (!noteLines) return undefined
+    return noteLines.map(nl => nl.noteId ? [nl.noteId] : [])
+  }, [note.id, note.content])
+
   const getOrCreateSession = useCallback(() => {
     if (!sessionRef.current || sessionRef.current.noteId !== note.id) {
-      sessionRef.current = new InlineEditSession(note.id, note.content)
+      sessionRef.current = new InlineEditSession(note.id, note.content, lineNoteIds)
     }
     return sessionRef.current
-  }, [note.id, note.content])
+  }, [note.id, note.content, lineNoteIds])
 
   // Sync with external content changes when not actively editing
   useEffect(() => {
@@ -266,33 +274,23 @@ function ViewNoteSection({
           <button className={styles.inlineSaveErrorDismiss} onClick={() => setSaveError(null)}>{SAVE_ERROR_DISMISS}</button>
         </div>
       )}
-      {(() => {
-        const selRange = displayState.hasSelection ? displayState.getSelectedLineRange() : null
-        return displayLines.map((_line, i) => {
-        const isLineSelected = selRange ? (i >= selRange[0] && i <= selRange[1]) : false
-        return (
-          <div key={i} data-view-line-index={i} data-view-note-id={note.id} className={styles.viewLineRow}>
-            <div
-              className={`${styles.viewGutterCell}${isLineSelected ? ` ${styles.viewGutterSelected}` : ''}`}
-              onMouseDown={(e) => { e.preventDefault(); handleContainerFocus(); handleGutterDragStart(i) }}
-              onMouseEnter={(e) => { if (e.buttons === 1) handleGutterDragUpdate(i) }}
+      {displayLines.map((line, i) => (
+        <div key={i} data-view-line-index={i} data-view-note-id={note.id} className={styles.viewLineRow}>
+          <div className={styles.viewNoteIdCell}>{line.noteIds.join(', ') || '\u00A0'}</div>
+          <div className={styles.viewLineContent}>
+            <EditorLine
+              lineIndex={i}
+              controller={displayController}
+              editorState={displayState}
+              onDragStart={handleDragStart}
+              onGutterDragStart={handleGutterDragStart}
+              onGutterDragUpdate={handleGutterDragUpdate}
+              onMoveStart={handleMoveStart}
+              hideNoteId
             />
-            <div className={styles.viewLineContent}>
-              <EditorLine
-                lineIndex={i}
-                controller={displayController}
-                editorState={displayState}
-                onDragStart={handleDragStart}
-                onGutterDragStart={handleGutterDragStart}
-                onGutterDragUpdate={handleGutterDragUpdate}
-                onMoveStart={handleMoveStart}
-                hideGutter
-              />
-            </div>
           </div>
-        )
-      })
-      })()}
+        </div>
+      ))}
     </div>
   )
 }
