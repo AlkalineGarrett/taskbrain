@@ -87,6 +87,8 @@ internal fun ControlledLineView(
     buttonCallbacks: ButtonCallbacks = ButtonCallbacks(),
     onSymbolTap: ((lineIndex: Int, charOffsetInLine: Int) -> Unit)? = null,
     symbolOverlays: List<SymbolOverlay> = emptyList(),
+    /** Called before a tap changes cursor/focus — used by inline editors to track pending focus. */
+    onTapStarting: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val prefix = lineState.prefix
@@ -126,7 +128,8 @@ internal fun ControlledLineView(
     }
 
     // Hide cursor whenever there's ANY selection in the editor (not just on this line)
-    val hasExternalSelection = controller.hasSelection()
+    val coordinatorForCursor = org.alkaline.taskbrain.ui.currentnote.LocalSelectionCoordinator.current
+    val hasExternalSelection = coordinatorForCursor?.hasAnySelection() ?: controller.hasSelection()
 
     // Track content TextLayoutResult for drawing selection
     var contentTextLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
@@ -214,6 +217,7 @@ internal fun ControlledLineView(
                 buttonCallbacks = buttonCallbacks,
                 onSymbolTap = onSymbolTap,
                 symbolOverlays = symbolOverlays,
+                onTapStarting = onTapStarting,
                 modifier = Modifier.fillMaxWidth()
             )
         }

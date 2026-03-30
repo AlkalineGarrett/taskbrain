@@ -210,7 +210,12 @@ fun CurrentNoteScreen(
         }
     }
 
-    val activeController = inlineEditState.activeController ?: controller
+    // SelectionCoordinator — single source of truth for focus/selection mutual exclusivity
+    val coordinator = remember(editorState, controller) {
+        SelectionCoordinator(editorState, controller)
+    }
+    coordinator.inlineEditState = inlineEditState
+    val activeController = coordinator.activeController
     val context = LocalContext.current
     val currentNoteId by currentNoteViewModel.currentNoteIdLiveData.observeAsState()
 
@@ -525,6 +530,7 @@ fun CurrentNoteScreen(
                 errors = buttonErrors
             )
 
+            androidx.compose.runtime.CompositionLocalProvider(LocalSelectionCoordinator provides coordinator) {
             ProvideInlineEditState(inlineEditState) {
                 key(displayedNoteId) {
                     NoteTextField(
@@ -574,33 +580,40 @@ fun CurrentNoteScreen(
                 }
             }
         }
+        } // CompositionLocalProvider
+
+        fun guarded(action: () -> Unit) {
+            coordinator.withFocusGuard { action() }
+        }
 
         CommandBar(
-            onToggleBullet = { activeController.toggleBullet() },
-            onToggleCheckbox = { activeController.toggleCheckbox() },
-            onIndent = { activeController.indent() },
-            onUnindent = { activeController.unindent() },
+            onToggleBullet = { guarded { activeController.toggleBullet() } },
+            onToggleCheckbox = { guarded { activeController.toggleCheckbox() } },
+            onIndent = { guarded { activeController.indent() } },
+            onUnindent = { guarded { activeController.unindent() } },
             onMoveUp = {
-                inlineEditState.activeSession?.let { it.isMoveInProgress = true }
-                if (activeController.moveUp()) {
-                    if (!inlineEditState.isActive) {
-                        updateContent(editorState.text)
-                        isSaved = false
+                guarded {
+                    if (activeController.moveUp()) {
+                        if (!inlineEditState.isActive) {
+                            updateContent(editorState.text)
+                            isSaved = false
+                        }
                     }
                 }
             },
             onMoveDown = {
-                inlineEditState.activeSession?.let { it.isMoveInProgress = true }
-                if (activeController.moveDown()) {
-                    if (!inlineEditState.isActive) {
-                        updateContent(editorState.text)
-                        isSaved = false
+                guarded {
+                    if (activeController.moveDown()) {
+                        if (!inlineEditState.isActive) {
+                            updateContent(editorState.text)
+                            isSaved = false
+                        }
                     }
                 }
             },
             moveUpState = activeController.getMoveUpState(),
             moveDownState = activeController.getMoveDownState(),
-            onPaste = { clipText, html -> activeController.paste(clipText, html) },
+            onPaste = { clipText, html -> guarded { activeController.paste(clipText, html) } },
             isPasteEnabled = (isMainContentFocused || inlineEditState.isActive) &&
                 !(inlineEditState.activeSession?.editorState?.hasSelection ?: editorState.hasSelection),
             onAddAlarm = {

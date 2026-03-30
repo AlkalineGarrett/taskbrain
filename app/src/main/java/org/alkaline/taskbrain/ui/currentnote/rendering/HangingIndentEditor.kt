@@ -13,6 +13,10 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
+import org.alkaline.taskbrain.ui.currentnote.EditorId
+import org.alkaline.taskbrain.ui.currentnote.InlineEditState
+import org.alkaline.taskbrain.ui.currentnote.LocalInlineEditState
+import org.alkaline.taskbrain.ui.currentnote.LocalSelectionCoordinator
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -158,9 +162,9 @@ fun HangingIndentEditor(
     // SINGLE callback for all selection completion events
     // This ensures consistent behavior regardless of how selection was made
     // (long-press drag, gutter tap, gutter drag, etc.)
+    val coordinatorForMenu = LocalSelectionCoordinator.current
     val onSelectionCompleted: () -> Unit = {
-        if (state.hasSelection) {
-            // Position doesn't matter - menu positioning uses selectionBounds
+        if (coordinatorForMenu?.hasAnySelection() == true || state.hasSelection) {
             contextMenuState.show(Offset.Zero)
         }
     }
@@ -327,6 +331,15 @@ private fun EditorRow(
         CompletedLineUtils.computeEffectiveHidden(hiddenIndices, recentlyCheckedSnapshot, lineTexts)
     }
 
+    // Find lines with view directives — parent gutter renders per-view-line boxes instead
+    val inlineEditState = LocalInlineEditState.current
+    val gutterCoordinator = LocalSelectionCoordinator.current
+    val inlineEditLineIndices = remember(directiveResults, lineTexts) {
+        state.lines.indices.filter { lineIdx ->
+            findViewNoteIdForLine(lineIdx, state, directiveResults) != null
+        }.toSet()
+    }
+
     Row(modifier = Modifier.fillMaxWidth()) {
         if (showGutter) {
             LineGutter(
@@ -335,24 +348,40 @@ private fun EditorRow(
                 hiddenIndices = effectiveHidden,
                 directiveResults = directiveResults,
                 directiveEditHeights = directiveEditHeights,
-                onLineSelected = { lineIndex ->
-                    if (lineIndex in effectiveHidden) {
-                        selectHiddenBlock(lineIndex, effectiveHidden, gutterSelectionState, state)
+                inlineEditLineIndices = inlineEditLineIndices,
+                onLineSelected = { lineIndex, yPosition ->
+                    val coordinator = gutterCoordinator
+                    if (lineIndex in inlineEditLineIndices) {
+                        coordinator?.activate(EditorId.View(findViewNoteIdForLine(lineIndex, state, directiveResults) ?: ""))
+                        applyViewGutterAction(lineIndex, yPosition, lineLayouts, inlineEditState, state, directiveResults) { gutter, idx, s -> gutter.selectLine(idx, s) }
                     } else {
-                        gutterSelectionState.selectLine(lineIndex, state)
+                        coordinator?.activate(EditorId.Parent)
+                        if (lineIndex in effectiveHidden) {
+                            selectHiddenBlock(lineIndex, effectiveHidden, gutterSelectionState, state)
+                        } else {
+                            gutterSelectionState.selectLine(lineIndex, state)
+                        }
                     }
                     onSelectionCompleted()
                 },
-                onLineDragStart = { lineIndex ->
-                    if (lineIndex in effectiveHidden) {
-                        selectHiddenBlock(lineIndex, effectiveHidden, gutterSelectionState, state)
+                onLineDragStart = { lineIndex, yPosition ->
+                    val coordinator = gutterCoordinator
+                    if (lineIndex in inlineEditLineIndices) {
+                        coordinator?.activate(EditorId.View(findViewNoteIdForLine(lineIndex, state, directiveResults) ?: ""))
+                        applyViewGutterAction(lineIndex, yPosition, lineLayouts, inlineEditState, state, directiveResults) { gutter, idx, s -> gutter.startDrag(idx, s) }
                     } else {
-                        gutterSelectionState.startDrag(lineIndex, state)
+                        coordinator?.activate(EditorId.Parent)
+                        if (lineIndex in effectiveHidden) {
+                            selectHiddenBlock(lineIndex, effectiveHidden, gutterSelectionState, state)
+                        } else {
+                            gutterSelectionState.startDrag(lineIndex, state)
+                        }
                     }
                 },
-                onLineDragUpdate = { lineIndex ->
-                    if (lineIndex in effectiveHidden) {
-                        // Extend selection to cover the entire hidden block
+                onLineDragUpdate = { lineIndex, yPosition ->
+                    if (lineIndex in inlineEditLineIndices) {
+                        applyViewGutterAction(lineIndex, yPosition, lineLayouts, inlineEditState, state, directiveResults) { gutter, idx, s -> gutter.extendSelectionToLine(idx, s) }
+                    } else if (lineIndex in effectiveHidden) {
                         val blockEnd = findHiddenBlockEnd(lineIndex, effectiveHidden, state.lines.size)
                         gutterSelectionState.extendSelectionToLine(blockEnd, state)
                     } else {
@@ -361,6 +390,7 @@ private fun EditorRow(
                 },
                 onLineDragEnd = {
                     gutterSelectionState.endDrag()
+                    inlineEditState?.viewGutterStates?.values?.forEach { it.endDrag() }
                     onSelectionCompleted()
                 }
             )
@@ -485,13 +515,18 @@ private fun SelectionOverlay(
         computeFallbackSelectionBounds(state, lineLayouts)
     } else null
 
+    // Route context menu actions to the active editor via SelectionCoordinator
+    val coordinatorForOverlay = LocalSelectionCoordinator.current
+    val menuState = coordinatorForOverlay?.activeState ?: state
+    val menuController = coordinatorForOverlay?.activeController ?: controller
+
     SelectionContextMenu(
         expanded = contextMenuState.isVisible,
         onDismissRequest = contextMenuState::dismiss,
         menuOffset = contextMenuState.position,
         actions = createMenuActions(
-            state = state,
-            controller = controller,
+            state = menuState,
+            controller = menuController,
             clipboardManager = clipboardManager,
             onDismiss = { contextMenuState.isVisible = false }
         ),
@@ -723,6 +758,7 @@ private fun ControlledLineViewWrapper(
     symbolOverlays: List<SymbolOverlay> = emptyList(),
     alpha: Float = 1f
 ) {
+    val wrapperCoordinator = LocalSelectionCoordinator.current
     val lineSelection = state.getLineSelection(index)
     val lineEndOffset = state.getLineStartOffset(index) + lineState.text.length
     val selectionIncludesNewline = state.hasSelection &&
@@ -740,6 +776,7 @@ private fun ControlledLineViewWrapper(
         selectionIncludesNewline = selectionIncludesNewline,
         onFocusChanged = { isFocused ->
             if (isFocused) {
+                wrapperCoordinator?.activate(EditorId.Parent)
                 controller.focusLine(index)
                 onEditorFocusChanged?.invoke(true)
             }
@@ -773,5 +810,57 @@ private fun ControlledLineViewWrapper(
                 }
             }
     )
+}
+
+/** Resolve Y position within a view-directive parent line to a view-line index. */
+private data class ViewLineResolution(
+    val viewLineIndex: Int,
+    val sessionState: EditorState,
+    val sessionGutter: org.alkaline.taskbrain.ui.currentnote.selection.GutterSelectionState
+)
+
+/** Resolve Y position within a view-directive parent line to a view-line index. */
+private fun resolveViewLineAtY(
+    parentLineIndex: Int,
+    yPosition: Float,
+    parentLineLayouts: List<LineLayoutInfo>,
+    inlineEditState: InlineEditState?,
+    directiveResults: Map<String, DirectiveResult>,
+    parentState: EditorState,
+    defaultLineHeight: Float = 57f
+): ViewLineResolution? {
+    if (inlineEditState == null) return null
+    val viewNoteId = findViewNoteIdForLine(parentLineIndex, parentState, directiveResults) ?: return null
+    val viewLayouts = inlineEditState.viewLineLayouts[viewNoteId] ?: return null
+    val viewGutter = inlineEditState.viewGutterStates[viewNoteId] ?: return null
+    val viewState = (inlineEditState.viewSessions[viewNoteId] ?: return null).editorState
+
+    val parentLayout = parentLineLayouts.getOrNull(parentLineIndex) ?: return null
+    val relativeY = yPosition - parentLayout.yOffset
+    val totalViewHeight = viewLayouts.sumOf { (it.height.takeIf { h -> h > 0f } ?: 0f).toDouble() }.toFloat()
+    val topGap = (parentLayout.height - totalViewHeight).coerceAtLeast(0f) / 2f
+    val adjustedY = relativeY - topGap
+
+    var viewLineIndex = 0
+    var accumulatedY = 0f
+    for (i in viewState.lines.indices) {
+        val h = viewLayouts.getOrNull(i)?.height?.takeIf { it > 0f } ?: defaultLineHeight
+        if (adjustedY < accumulatedY + h) { viewLineIndex = i; break }
+        accumulatedY += h
+        viewLineIndex = i
+    }
+    return ViewLineResolution(viewLineIndex, viewState, viewGutter)
+}
+
+/** Resolve and apply a view gutter action (select, start drag, or extend). */
+private fun applyViewGutterAction(
+    parentLineIndex: Int, yPosition: Float,
+    parentLineLayouts: List<LineLayoutInfo>,
+    inlineEditState: InlineEditState?, parentState: EditorState,
+    directiveResults: Map<String, DirectiveResult>,
+    action: (GutterSelectionState, Int, EditorState) -> Unit
+) {
+    val res = resolveViewLineAtY(parentLineIndex, yPosition, parentLineLayouts, inlineEditState, directiveResults, parentState) ?: return
+    action(res.sessionGutter, res.viewLineIndex, res.sessionState)
 }
 

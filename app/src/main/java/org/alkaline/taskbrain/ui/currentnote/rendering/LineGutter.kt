@@ -26,6 +26,8 @@ import org.alkaline.taskbrain.ui.currentnote.gestures.LineLayoutInfo
 // Layout constants for directive edit row gaps
 private val DirectiveEditRowGapHeightFallback = 40.dp  // Fallback if no measured height available
 private val DefaultLineHeight = 24.dp
+/** Y-movement threshold (px) for distinguishing tap from drag within a single parent line. */
+private const val GUTTER_DRAG_THRESHOLD_PX = 20f
 
 // =============================================================================
 // Gutter Gesture Handling
@@ -35,9 +37,9 @@ private val DefaultLineHeight = 24.dp
  * Callbacks for gutter gesture events.
  */
 internal class GutterGestureCallbacks(
-    val onLineSelected: (Int) -> Unit,
-    val onLineDragStart: (Int) -> Unit,
-    val onLineDragUpdate: (Int) -> Unit,
+    val onLineSelected: (lineIndex: Int, yPosition: Float) -> Unit,
+    val onLineDragStart: (lineIndex: Int, yPosition: Float) -> Unit,
+    val onLineDragUpdate: (lineIndex: Int, yPosition: Float) -> Unit,
     val onLineDragEnd: () -> Unit
 )
 
@@ -46,26 +48,35 @@ internal class GutterGestureCallbacks(
  */
 private class GutterGestureTracker(
     private val startLineIndex: Int,
+    private val startY: Float,
     private val callbacks: GutterGestureCallbacks
 ) {
     private var isDragging = false
     private var currentLineIndex = startLineIndex
+    private var currentY = startY
 
     fun start() {
-        callbacks.onLineDragStart(startLineIndex)
+        callbacks.onLineDragStart(startLineIndex, startY)
     }
 
-    fun onLineChanged(newLineIndex: Int) {
+    fun onLineChanged(newLineIndex: Int, y: Float) {
+        currentY = y
         if (newLineIndex != currentLineIndex) {
             isDragging = true
             currentLineIndex = newLineIndex
-            callbacks.onLineDragUpdate(currentLineIndex)
+            callbacks.onLineDragUpdate(currentLineIndex, y)
+        } else {
+            // Same parent line — still fire update for view-line sub-resolution.
+            // Only set isDragging if significant Y movement (preserves tap detection).
+            val yDelta = kotlin.math.abs(y - startY)
+            if (yDelta > GUTTER_DRAG_THRESHOLD_PX) isDragging = true
+            callbacks.onLineDragUpdate(currentLineIndex, y)
         }
     }
 
     fun complete() {
         if (!isDragging) {
-            callbacks.onLineSelected(startLineIndex)
+            callbacks.onLineSelected(startLineIndex, startY)
         }
         callbacks.onLineDragEnd()
     }
@@ -171,7 +182,7 @@ private suspend fun AwaitPointerEventScope.awaitGutterGestureStartWithLayouts(
         return null
     }
 
-    return GutterGestureTracker(startLineIndex, callbacks)
+    return GutterGestureTracker(startLineIndex, y, callbacks)
 }
 
 private suspend fun AwaitPointerEventScope.trackGutterDragWithLayouts(
@@ -194,7 +205,7 @@ private suspend fun AwaitPointerEventScope.trackGutterDragWithLayouts(
                 maxLineIndex,
                 defaultLineHeight
             )
-            tracker.onLineChanged(newLineIndex)
+            tracker.onLineChanged(newLineIndex, y)
             change.consume()
         }
     } while (event.changes.any { it.pressed })
@@ -304,9 +315,11 @@ internal fun LineGutter(
     hiddenIndices: Set<Int> = emptySet(),
     directiveResults: Map<String, DirectiveResult> = emptyMap(),
     directiveEditHeights: Map<String, Int> = emptyMap(),
-    onLineSelected: (Int) -> Unit,
-    onLineDragStart: (Int) -> Unit,
-    onLineDragUpdate: (Int) -> Unit,
+    /** Lines whose gutter is rendered using the inline session's per-line data. */
+    inlineEditLineIndices: Set<Int> = emptySet(),
+    onLineSelected: (lineIndex: Int, yPosition: Float) -> Unit,
+    onLineDragStart: (lineIndex: Int, yPosition: Float) -> Unit,
+    onLineDragUpdate: (lineIndex: Int, yPosition: Float) -> Unit,
     onLineDragEnd: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -346,6 +359,7 @@ internal fun LineGutter(
             hiddenIndices = hiddenIndices,
             directiveResults = directiveResults,
             directiveEditHeights = directiveEditHeights,
+            inlineEditLineIndices = inlineEditLineIndices,
             defaultLineHeight = defaultLineHeight,
             fallbackGapHeight = fallbackGapHeightPx,
             gutterWidthPx = gutterWidthPx,
@@ -362,6 +376,7 @@ private fun GutterContent(
     hiddenIndices: Set<Int>,
     directiveResults: Map<String, DirectiveResult>,
     directiveEditHeights: Map<String, Int>,
+    inlineEditLineIndices: Set<Int>,
     defaultLineHeight: Float,
     fallbackGapHeight: Float,
     gutterWidthPx: Float,
@@ -389,14 +404,64 @@ private fun GutterContent(
 
         val layoutInfo = lineLayouts.getOrNull(index)
         val lineHeight = layoutInfo?.height?.takeIf { it > 0f } ?: defaultLineHeight
-        val isSelected = isLineInSelection(index, state)
 
-        GutterBox(
-            height = with(density) { lineHeight.toDp() },
-            width = EditorConfig.GutterWidth,
-            isSelected = isSelected,
-            gutterWidthPx = gutterWidthPx
-        )
+        if (index in inlineEditLineIndices) {
+            // Look up view line layouts from InlineEditState (decoupled from session)
+            val inlineEditStateLocal = org.alkaline.taskbrain.ui.currentnote.LocalInlineEditState.current
+            val viewNoteId = findViewNoteIdForLine(index, state, directiveResults)
+            val viewLayouts = viewNoteId?.let { inlineEditStateLocal?.viewLineLayouts?.get(it) }
+            val viewGutter = viewNoteId?.let { inlineEditStateLocal?.viewGutterStates?.get(it) }
+            val viewSession = inlineEditStateLocal?.viewSessions?.get(viewNoteId)
+            val viewState = viewSession?.editorState
+            if (viewLayouts != null && viewLayouts.isNotEmpty() && viewState != null) {
+                val totalViewHeight = viewLayouts.sumOf { (it.height.takeIf { h -> h > 0f } ?: defaultLineHeight).toDouble() }.toFloat()
+                val topGap = (lineHeight - totalViewHeight).coerceAtLeast(0f) / 2f
+                if (topGap > 1f) {
+                    GutterGap(height = with(density) { topGap.toDp() }, width = EditorConfig.GutterWidth)
+                }
+                for (viewLineIdx in viewState.lines.indices) {
+                    val viewLayout = viewLayouts.getOrNull(viewLineIdx)
+                    val viewLineHeight = viewLayout?.height?.takeIf { it > 0f } ?: defaultLineHeight
+                    val viewSelected = isLineInSelection(viewLineIdx, viewState)
+                    GutterBox(
+                        height = with(density) { viewLineHeight.toDp() },
+                        width = EditorConfig.GutterWidth,
+                        isSelected = viewSelected,
+                        gutterWidthPx = gutterWidthPx
+                    )
+                }
+            } else {
+                // No active session — split the parent line height evenly across view lines
+                val lineContent = state.lines.getOrNull(index)?.content ?: ""
+                val viewLineCount = getViewLineCount(lineContent, directiveResults)
+                if (viewLineCount > 0) {
+                    val perLineHeight = lineHeight / viewLineCount
+                    for (viewLineIdx in 0 until viewLineCount) {
+                        GutterBox(
+                            height = with(density) { perLineHeight.toDp() },
+                            width = EditorConfig.GutterWidth,
+                            isSelected = false,
+                            gutterWidthPx = gutterWidthPx
+                        )
+                    }
+                } else {
+                    GutterBox(
+                        height = with(density) { lineHeight.toDp() },
+                        width = EditorConfig.GutterWidth,
+                        isSelected = false,
+                        gutterWidthPx = gutterWidthPx
+                    )
+                }
+            }
+        } else {
+            val isSelected = isLineInSelection(index, state)
+            GutterBox(
+                height = with(density) { lineHeight.toDp() },
+                width = EditorConfig.GutterWidth,
+                isSelected = isSelected,
+                gutterWidthPx = gutterWidthPx
+            )
+        }
 
         // Add gaps for expanded directive edit rows on this line
         val lineContent = state.lines.getOrNull(index)?.content ?: ""
@@ -413,6 +478,45 @@ private fun GutterContent(
         }
         index++
     }
+}
+
+/** Find the noteId for a view-directive line's first note. */
+internal fun findViewNoteIdForLine(
+    lineIndex: Int,
+    state: EditorState,
+    directiveResults: Map<String, DirectiveResult>
+): String? {
+    val lineContent = state.lines.getOrNull(lineIndex)?.content ?: return null
+    for (found in DirectiveFinder.findDirectives(lineContent)) {
+        val key = DirectiveResult.hashDirective(found.sourceText)
+        val result = directiveResults[key]
+        val viewVal = result?.toValue()
+        if (viewVal is org.alkaline.taskbrain.dsl.runtime.values.ViewVal && viewVal.notes.isNotEmpty()) {
+            return viewVal.notes.first().id
+        }
+    }
+    return null
+}
+
+/** Count view lines from a line's content and directive results. */
+private fun getViewLineCount(
+    lineContent: String,
+    directiveResults: Map<String, DirectiveResult>
+): Int {
+    for (found in DirectiveFinder.findDirectives(lineContent)) {
+        val key = DirectiveResult.hashDirective(found.sourceText)
+        val result = directiveResults[key]
+        val viewVal = result?.toValue()
+        if (viewVal is org.alkaline.taskbrain.dsl.runtime.values.ViewVal) {
+            // Count lines across all notes in the view + trailing empty line per note
+            return viewVal.notes.sumOf { note ->
+                val rendered = viewVal.renderedContents
+                val content = rendered?.getOrNull(viewVal.notes.indexOf(note)) ?: note.content
+                content.split('\n').size + 1 // +1 for trailing empty line
+            }
+        }
+    }
+    return 0
 }
 
 /**
@@ -444,17 +548,21 @@ private fun GutterBox(
         modifier = Modifier
             .width(width)
             .height(height)
-            .drawBehind {
-                drawRect(
-                    color = if (isSelected) EditorConfig.GutterSelectionColor else EditorConfig.GutterBackgroundColor,
-                    size = Size(gutterWidthPx, size.height)
-                )
-                drawLine(
-                    color = EditorConfig.GutterLineColor,
-                    start = Offset(0f, size.height),
-                    end = Offset(gutterWidthPx, size.height),
-                    strokeWidth = 1f
-                )
-            }
+            .drawGutterBox(isSelected, gutterWidthPx)
     )
 }
+
+
+private fun Modifier.drawGutterBox(isSelected: Boolean, gutterWidthPx: Float): Modifier =
+    this.drawBehind {
+        drawRect(
+            color = if (isSelected) EditorConfig.GutterSelectionColor else EditorConfig.GutterBackgroundColor,
+            size = Size(gutterWidthPx, size.height)
+        )
+        drawLine(
+            color = EditorConfig.GutterLineColor,
+            start = Offset(0f, size.height),
+            end = Offset(gutterWidthPx, size.height),
+            strokeWidth = 1f
+        )
+    }

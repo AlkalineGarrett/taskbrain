@@ -161,7 +161,7 @@ class InlineEditStateTest {
         val state = InlineEditState()
         assertFalse(state.isActive)
         assertNull(state.activeSession)
-        assertNull(state.activeController)
+        assertNull(state.activeSession)
     }
 
     @Test
@@ -208,10 +208,80 @@ class InlineEditStateTest {
         assertFalse(state.isEditingNote("note1"))
     }
 
+    // --- activateExistingSession ---
+
     @Test
-    fun `activeController returns controller from active session`() {
-        val state = InlineEditState()
-        val session = state.startSession("note1", "Content")
-        assertEquals(session.controller, state.activeController)
+    fun `activateExistingSession registers session as active`() {
+        val inlineState = InlineEditState()
+        val editorState = EditorState()
+        editorState.updateFromText("Hello\nWorld")
+        val controller = EditorController(editorState)
+        val session = InlineEditSession(
+            noteId = "note1",
+            originalContent = "Hello\nWorld",
+            editorState = editorState,
+            controller = controller
+        )
+
+        inlineState.activateExistingSession(session)
+
+        assertTrue(inlineState.isActive)
+        assertEquals(session, inlineState.activeSession)
+        assertEquals("note1", inlineState.activeSession?.noteId)
+    }
+
+    @Test
+    fun `activateExistingSession reuses same EditorState`() {
+        val inlineState = InlineEditState()
+        val editorState = EditorState()
+        editorState.updateFromText("Content")
+        val controller = EditorController(editorState)
+        val session = InlineEditSession(
+            noteId = "note1",
+            originalContent = "Content",
+            editorState = editorState,
+            controller = controller
+        )
+
+        // Modify state before activation
+        controller.updateLineContent(0, "Modified", 8)
+
+        inlineState.activateExistingSession(session)
+
+        // Active session should have the same (modified) state
+        assertEquals("Modified", inlineState.activeSession?.editorState?.lines?.get(0)?.text)
+    }
+
+    // --- viewLineLayouts and viewGutterStates ---
+
+    @Test
+    fun `viewLineLayouts persists across session changes`() {
+        val inlineState = InlineEditState()
+
+        // Store layouts
+        val layouts = listOf(
+            org.alkaline.taskbrain.ui.currentnote.gestures.LineLayoutInfo(0, 0f, 57f, null),
+            org.alkaline.taskbrain.ui.currentnote.gestures.LineLayoutInfo(1, 57f, 57f, null)
+        )
+        inlineState.viewLineLayouts["note1"] = layouts
+
+        // Start and end a session — layouts should survive
+        inlineState.startSession("note1", "Content")
+        inlineState.endSession()
+
+        assertEquals(2, inlineState.viewLineLayouts["note1"]?.size)
+        assertEquals(57f, inlineState.viewLineLayouts["note1"]?.get(0)?.height)
+    }
+
+    @Test
+    fun `viewGutterStates persists across session changes`() {
+        val inlineState = InlineEditState()
+        val gutterState = org.alkaline.taskbrain.ui.currentnote.selection.GutterSelectionState()
+        inlineState.viewGutterStates["note1"] = gutterState
+
+        inlineState.startSession("note1", "Content")
+        inlineState.endSession()
+
+        assertEquals(gutterState, inlineState.viewGutterStates["note1"])
     }
 }

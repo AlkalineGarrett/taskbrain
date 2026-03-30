@@ -81,12 +81,6 @@ class InlineEditSession(
      */
     var isCollapsingDirective: Boolean by mutableStateOf(false)
 
-    /**
-     * Flag indicating a move operation is in progress.
-     * When true, focus loss should not trigger edit mode exit.
-     * This is set before moving and cleared after the move completes.
-     */
-    var isMoveInProgress: Boolean by mutableStateOf(false)
 
     /**
      * Update directive results (called after execution completes).
@@ -159,17 +153,42 @@ class InlineEditState {
         private set
 
     /**
+     * Display-mode sessions for view lines, keyed by noteId.
+     * Always populated so the gutter can render per-line boxes regardless of focus state.
+     */
+    internal val viewSessions = mutableMapOf<String, InlineEditSession>()
+
+    /**
+     * Line layouts for view notes, keyed by noteId.
+     * Decoupled from the editing session so they survive session transitions.
+     * Updated by InlineNoteEditor/ViewNoteDisplayLines via onGloballyPositioned.
+     */
+    internal val viewLineLayouts = mutableMapOf<String, List<org.alkaline.taskbrain.ui.currentnote.gestures.LineLayoutInfo>>()
+
+    /**
+     * Gutter selection states for view notes, keyed by noteId.
+     * Decoupled from the editing session so they survive session transitions.
+     */
+    internal val viewGutterStates = mutableMapOf<String, org.alkaline.taskbrain.ui.currentnote.selection.GutterSelectionState>()
+
+    /**
+     * Register an existing session as the active session (no new EditorState created).
+     * Selection clearing is handled by SelectionCoordinator.activate().
+     */
+    fun activateExistingSession(session: InlineEditSession) {
+        activeSession = session
+        // Execute directives for the content
+        onExecuteDirectives?.invoke(session.currentContent) { results ->
+            session.updateDirectiveResults(results)
+        }
+    }
+
+    /** Clear selections on all view sessions (called when parent gutter is used). */
+    /**
      * Whether an inline edit session is currently active.
      */
     val isActive: Boolean
         get() = activeSession != null
-
-    /**
-     * The EditorController for the active session, or null if none.
-     * Use this to route CommandBar actions when inline editing is active.
-     */
-    val activeController: EditorController?
-        get() = activeSession?.controller
 
     /**
      * Callback to execute directives for content.
