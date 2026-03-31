@@ -352,8 +352,11 @@ private fun EditorRow(
                 onLineSelected = { lineIndex, yPosition ->
                     val coordinator = gutterCoordinator
                     if (lineIndex in inlineEditLineIndices) {
-                        coordinator?.activate(EditorId.View(findViewNoteIdForLine(lineIndex, state, directiveResults) ?: ""))
-                        applyViewGutterAction(lineIndex, yPosition, lineLayouts, inlineEditState, state, directiveResults) { gutter, idx, s -> gutter.selectLine(idx, s) }
+                        val res = resolveViewLineAtY(lineIndex, yPosition, lineLayouts, inlineEditState, directiveResults, state)
+                        if (res != null) {
+                            coordinator?.activate(EditorId.View(res.noteId))
+                            res.sessionGutter.selectLine(res.viewLineIndex, res.sessionState)
+                        }
                     } else {
                         coordinator?.activate(EditorId.Parent)
                         if (lineIndex in effectiveHidden) {
@@ -367,8 +370,11 @@ private fun EditorRow(
                 onLineDragStart = { lineIndex, yPosition ->
                     val coordinator = gutterCoordinator
                     if (lineIndex in inlineEditLineIndices) {
-                        coordinator?.activate(EditorId.View(findViewNoteIdForLine(lineIndex, state, directiveResults) ?: ""))
-                        applyViewGutterAction(lineIndex, yPosition, lineLayouts, inlineEditState, state, directiveResults) { gutter, idx, s -> gutter.startDrag(idx, s) }
+                        val res = resolveViewLineAtY(lineIndex, yPosition, lineLayouts, inlineEditState, directiveResults, state)
+                        if (res != null) {
+                            coordinator?.activate(EditorId.View(res.noteId))
+                            res.sessionGutter.startDrag(res.viewLineIndex, res.sessionState)
+                        }
                     } else {
                         coordinator?.activate(EditorId.Parent)
                         if (lineIndex in effectiveHidden) {
@@ -380,7 +386,10 @@ private fun EditorRow(
                 },
                 onLineDragUpdate = { lineIndex, yPosition ->
                     if (lineIndex in inlineEditLineIndices) {
-                        applyViewGutterAction(lineIndex, yPosition, lineLayouts, inlineEditState, state, directiveResults) { gutter, idx, s -> gutter.extendSelectionToLine(idx, s) }
+                        val res = resolveViewLineAtY(lineIndex, yPosition, lineLayouts, inlineEditState, directiveResults, state)
+                        if (res != null) {
+                            res.sessionGutter.extendSelectionToLine(res.viewLineIndex, res.sessionState)
+                        }
                     } else if (lineIndex in effectiveHidden) {
                         val blockEnd = findHiddenBlockEnd(lineIndex, effectiveHidden, state.lines.size)
                         gutterSelectionState.extendSelectionToLine(blockEnd, state)
@@ -816,10 +825,12 @@ private fun ControlledLineViewWrapper(
 private data class ViewLineResolution(
     val viewLineIndex: Int,
     val sessionState: EditorState,
-    val sessionGutter: org.alkaline.taskbrain.ui.currentnote.selection.GutterSelectionState
+    val sessionGutter: org.alkaline.taskbrain.ui.currentnote.selection.GutterSelectionState,
+    val noteId: String
 )
 
-/** Resolve Y position within a view-directive parent line to a view-line index. */
+/** Resolve Y position within a view-directive parent line to a view-line index.
+ *  Iterates all notes in the view to find which note the Y position falls in. */
 private fun resolveViewLineAtY(
     parentLineIndex: Int,
     yPosition: Float,
@@ -830,37 +841,59 @@ private fun resolveViewLineAtY(
     defaultLineHeight: Float = 57f
 ): ViewLineResolution? {
     if (inlineEditState == null) return null
-    val viewNoteId = findViewNoteIdForLine(parentLineIndex, parentState, directiveResults) ?: return null
-    val viewLayouts = inlineEditState.viewLineLayouts[viewNoteId] ?: return null
-    val viewGutter = inlineEditState.viewGutterStates[viewNoteId] ?: return null
-    val viewState = (inlineEditState.viewSessions[viewNoteId] ?: return null).editorState
+    val viewNotes = findViewNotesForLine(parentLineIndex, parentState, directiveResults)
+    if (viewNotes.isNullOrEmpty()) return null
 
     val parentLayout = parentLineLayouts.getOrNull(parentLineIndex) ?: return null
     val relativeY = yPosition - parentLayout.yOffset
-    val totalViewHeight = viewLayouts.sumOf { (it.height.takeIf { h -> h > 0f } ?: 0f).toDouble() }.toFloat()
-    val topGap = (parentLayout.height - totalViewHeight).coerceAtLeast(0f) / 2f
-    val adjustedY = relativeY - topGap
+    // Approximate dp→px using the ratio between measured and nominal default line height (24dp)
+    val separatorHeightPx = EditorConfig.NoteSeparatorHeight.value * (defaultLineHeight / 24f)
+    val metrics = computeViewLayoutMetrics(viewNotes, inlineEditState, parentLayout.height, separatorHeightPx, defaultLineHeight)
+    var adjustedY = relativeY - metrics.topGap
 
-    var viewLineIndex = 0
-    var accumulatedY = 0f
-    for (i in viewState.lines.indices) {
-        val h = viewLayouts.getOrNull(i)?.height?.takeIf { it > 0f } ?: defaultLineHeight
-        if (adjustedY < accumulatedY + h) { viewLineIndex = i; break }
-        accumulatedY += h
-        viewLineIndex = i
+    for ((noteIdx, note) in viewNotes.withIndex()) {
+        if (noteIdx > 0) {
+            if (adjustedY < separatorHeightPx) {
+                val prevNote = viewNotes[noteIdx - 1]
+                return resolveToLastLine(prevNote, inlineEditState)
+            }
+            adjustedY -= separatorHeightPx
+        }
+
+        val layouts = inlineEditState.viewLineLayouts[note.id]
+        val session = inlineEditState.viewSessions[note.id] ?: continue
+        val gutter = inlineEditState.viewGutterStates[note.id] ?: continue
+        val noteState = session.editorState
+
+        if (adjustedY < metrics.noteHeights[noteIdx]) {
+            var viewLineIndex = 0
+            var accumulatedY = 0f
+            for (i in noteState.lines.indices) {
+                val h = layouts?.getOrNull(i)?.height?.takeIf { it > 0f } ?: defaultLineHeight
+                if (adjustedY < accumulatedY + h) { viewLineIndex = i; break }
+                accumulatedY += h
+                viewLineIndex = i
+            }
+            return ViewLineResolution(viewLineIndex, noteState, gutter, note.id)
+        }
+        adjustedY -= metrics.noteHeights[noteIdx]
     }
-    return ViewLineResolution(viewLineIndex, viewState, viewGutter)
+
+    return resolveToLastLine(viewNotes.last(), inlineEditState)
 }
 
-/** Resolve and apply a view gutter action (select, start drag, or extend). */
-private fun applyViewGutterAction(
-    parentLineIndex: Int, yPosition: Float,
-    parentLineLayouts: List<LineLayoutInfo>,
-    inlineEditState: InlineEditState?, parentState: EditorState,
-    directiveResults: Map<String, DirectiveResult>,
-    action: (GutterSelectionState, Int, EditorState) -> Unit
-) {
-    val res = resolveViewLineAtY(parentLineIndex, yPosition, parentLineLayouts, inlineEditState, directiveResults, parentState) ?: return
-    action(res.sessionGutter, res.viewLineIndex, res.sessionState)
+private fun resolveToLastLine(
+    note: org.alkaline.taskbrain.data.Note,
+    inlineEditState: InlineEditState
+): ViewLineResolution? {
+    val session = inlineEditState.viewSessions[note.id] ?: return null
+    val gutter = inlineEditState.viewGutterStates[note.id] ?: return null
+    return ViewLineResolution(
+        session.editorState.lines.lastIndex.coerceAtLeast(0),
+        session.editorState,
+        gutter,
+        note.id
+    )
 }
+
 

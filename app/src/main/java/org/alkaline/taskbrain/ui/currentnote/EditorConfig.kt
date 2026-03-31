@@ -40,6 +40,9 @@ object EditorConfig {
     /** Width of the line number gutter */
     val GutterWidth: Dp = 21.dp
 
+    /** Height of the separator between notes in a multi-note view (matches NoteSeparator's 6.dp vertical padding × 2) */
+    val NoteSeparatorHeight: Dp = 12.dp
+
     /** Background color for the gutter */
     val GutterBackgroundColor = Color(0xFFE0E0E0) // Light gray
 

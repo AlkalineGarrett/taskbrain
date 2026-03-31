@@ -406,52 +406,58 @@ private fun GutterContent(
         val lineHeight = layoutInfo?.height?.takeIf { it > 0f } ?: defaultLineHeight
 
         if (index in inlineEditLineIndices) {
-            // Look up view line layouts from InlineEditState (decoupled from session)
+            // Look up view notes from InlineEditState — render gutter for ALL notes in the view
             val inlineEditStateLocal = org.alkaline.taskbrain.ui.currentnote.LocalInlineEditState.current
-            val viewNoteId = findViewNoteIdForLine(index, state, directiveResults)
-            val viewLayouts = viewNoteId?.let { inlineEditStateLocal?.viewLineLayouts?.get(it) }
-            val viewGutter = viewNoteId?.let { inlineEditStateLocal?.viewGutterStates?.get(it) }
-            val viewSession = inlineEditStateLocal?.viewSessions?.get(viewNoteId)
-            val viewState = viewSession?.editorState
-            if (viewLayouts != null && viewLayouts.isNotEmpty() && viewState != null) {
-                val totalViewHeight = viewLayouts.sumOf { (it.height.takeIf { h -> h > 0f } ?: defaultLineHeight).toDouble() }.toFloat()
-                val topGap = (lineHeight - totalViewHeight).coerceAtLeast(0f) / 2f
-                if (topGap > 1f) {
-                    GutterGap(height = with(density) { topGap.toDp() }, width = EditorConfig.GutterWidth)
+            val viewNotes = findViewNotesForLine(index, state, directiveResults)
+
+            if (viewNotes != null && viewNotes.isNotEmpty() && inlineEditStateLocal != null) {
+                val separatorHeightPx = with(density) { EditorConfig.NoteSeparatorHeight.toPx() }
+                val metrics = computeViewLayoutMetrics(viewNotes, inlineEditStateLocal, lineHeight, separatorHeightPx, defaultLineHeight)
+                if (metrics.topGap > 1f) {
+                    GutterGap(height = with(density) { metrics.topGap.toDp() }, width = EditorConfig.GutterWidth)
                 }
-                for (viewLineIdx in viewState.lines.indices) {
-                    val viewLayout = viewLayouts.getOrNull(viewLineIdx)
-                    val viewLineHeight = viewLayout?.height?.takeIf { it > 0f } ?: defaultLineHeight
-                    val viewSelected = isLineInSelection(viewLineIdx, viewState)
-                    GutterBox(
-                        height = with(density) { viewLineHeight.toDp() },
-                        width = EditorConfig.GutterWidth,
-                        isSelected = viewSelected,
-                        gutterWidthPx = gutterWidthPx
-                    )
+
+                viewNotes.forEachIndexed { noteIdx, note ->
+                    if (noteIdx > 0) {
+                        GutterGap(height = EditorConfig.NoteSeparatorHeight, width = EditorConfig.GutterWidth)
+                    }
+
+                    val layouts = inlineEditStateLocal.viewLineLayouts[note.id]
+                    val noteState = inlineEditStateLocal.viewSessions[note.id]?.editorState
+
+                    if (layouts != null && layouts.isNotEmpty() && noteState != null) {
+                        for (viewLineIdx in noteState.lines.indices) {
+                            val viewLayout = layouts.getOrNull(viewLineIdx)
+                            val viewLineHeight = viewLayout?.height?.takeIf { it > 0f } ?: defaultLineHeight
+                            val viewSelected = isLineInSelection(viewLineIdx, noteState)
+                            GutterBox(
+                                height = with(density) { viewLineHeight.toDp() },
+                                width = EditorConfig.GutterWidth,
+                                isSelected = viewSelected,
+                                gutterWidthPx = gutterWidthPx
+                            )
+                        }
+                    } else {
+                        val lineCountForNote = note.content.count { it == '\n' } + 2
+                        val perLineHeight = metrics.noteHeights[noteIdx] / lineCountForNote
+                        for (viewLineIdx in 0 until lineCountForNote) {
+                            GutterBox(
+                                height = with(density) { perLineHeight.toDp() },
+                                width = EditorConfig.GutterWidth,
+                                isSelected = false,
+                                gutterWidthPx = gutterWidthPx
+                            )
+                        }
+                    }
                 }
             } else {
-                // No active session — split the parent line height evenly across view lines
-                val lineContent = state.lines.getOrNull(index)?.content ?: ""
-                val viewLineCount = getViewLineCount(lineContent, directiveResults)
-                if (viewLineCount > 0) {
-                    val perLineHeight = lineHeight / viewLineCount
-                    for (viewLineIdx in 0 until viewLineCount) {
-                        GutterBox(
-                            height = with(density) { perLineHeight.toDp() },
-                            width = EditorConfig.GutterWidth,
-                            isSelected = false,
-                            gutterWidthPx = gutterWidthPx
-                        )
-                    }
-                } else {
-                    GutterBox(
-                        height = with(density) { lineHeight.toDp() },
-                        width = EditorConfig.GutterWidth,
-                        isSelected = false,
-                        gutterWidthPx = gutterWidthPx
-                    )
-                }
+                // No view notes found — render single gutter box
+                GutterBox(
+                    height = with(density) { lineHeight.toDp() },
+                    width = EditorConfig.GutterWidth,
+                    isSelected = false,
+                    gutterWidthPx = gutterWidthPx
+                )
             }
         } else {
             val isSelected = isLineInSelection(index, state)
@@ -480,43 +486,77 @@ private fun GutterContent(
     }
 }
 
-/** Find the noteId for a view-directive line's first note. */
-internal fun findViewNoteIdForLine(
+/**
+ * Computes the total pixel height of a single note's view lines.
+ * Uses measured layouts when available, falls back to line-count estimate.
+ */
+internal fun computeNoteViewHeight(
+    note: org.alkaline.taskbrain.data.Note,
+    inlineEditState: org.alkaline.taskbrain.ui.currentnote.InlineEditState,
+    defaultLineHeight: Float
+): Float {
+    val layouts = inlineEditState.viewLineLayouts[note.id]
+    val session = inlineEditState.viewSessions[note.id]
+    val noteState = session?.editorState
+    return if (layouts != null && layouts.isNotEmpty() && noteState != null) {
+        layouts.sumOf { (it.height.takeIf { h -> h > 0f } ?: defaultLineHeight).toDouble() }.toFloat()
+    } else {
+        val lineCountForNote = note.content.count { it == '\n' } + 2 // lines + trailing empty line
+        lineCountForNote * defaultLineHeight
+    }
+}
+
+/**
+ * Precomputed layout metrics for a multi-note view.
+ */
+internal data class ViewLayoutMetrics(
+    val noteHeights: List<Float>,
+    val totalViewHeight: Float,
+    val topGap: Float
+)
+
+/**
+ * Computes layout metrics (per-note heights, total height, centering gap) for a multi-note view.
+ */
+internal fun computeViewLayoutMetrics(
+    viewNotes: List<org.alkaline.taskbrain.data.Note>,
+    inlineEditState: org.alkaline.taskbrain.ui.currentnote.InlineEditState,
+    parentLineHeight: Float,
+    separatorHeightPx: Float,
+    defaultLineHeight: Float
+): ViewLayoutMetrics {
+    val noteHeights = viewNotes.map { computeNoteViewHeight(it, inlineEditState, defaultLineHeight) }
+    val totalSeparatorHeight = if (viewNotes.size > 1) separatorHeightPx * (viewNotes.size - 1) else 0f
+    val totalViewHeight = noteHeights.sum() + totalSeparatorHeight
+    val topGap = (parentLineHeight - totalViewHeight).coerceAtLeast(0f) / 2f
+    return ViewLayoutMetrics(noteHeights, totalViewHeight, topGap)
+}
+
+/** Find all notes for a view-directive line. */
+internal fun findViewNotesForLine(
     lineIndex: Int,
     state: EditorState,
     directiveResults: Map<String, DirectiveResult>
-): String? {
+): List<org.alkaline.taskbrain.data.Note>? {
     val lineContent = state.lines.getOrNull(lineIndex)?.content ?: return null
     for (found in DirectiveFinder.findDirectives(lineContent)) {
         val key = DirectiveResult.hashDirective(found.sourceText)
         val result = directiveResults[key]
         val viewVal = result?.toValue()
         if (viewVal is org.alkaline.taskbrain.dsl.runtime.values.ViewVal && viewVal.notes.isNotEmpty()) {
-            return viewVal.notes.first().id
+            return viewVal.notes
         }
     }
     return null
 }
 
-/** Count view lines from a line's content and directive results. */
-private fun getViewLineCount(
-    lineContent: String,
+/** Find the noteId for a view-directive line's first note. */
+internal fun findViewNoteIdForLine(
+    lineIndex: Int,
+    state: EditorState,
     directiveResults: Map<String, DirectiveResult>
-): Int {
-    for (found in DirectiveFinder.findDirectives(lineContent)) {
-        val key = DirectiveResult.hashDirective(found.sourceText)
-        val result = directiveResults[key]
-        val viewVal = result?.toValue()
-        if (viewVal is org.alkaline.taskbrain.dsl.runtime.values.ViewVal) {
-            // Count lines across all notes in the view + trailing empty line per note
-            return viewVal.notes.sumOf { note ->
-                val rendered = viewVal.renderedContents
-                val content = rendered?.getOrNull(viewVal.notes.indexOf(note)) ?: note.content
-                content.split('\n').size + 1 // +1 for trailing empty line
-            }
-        }
-    }
-    return 0
+): String? {
+    return findViewNotesForLine(lineIndex, state, directiveResults)?.firstOrNull()?.id
 }
 
 /**
