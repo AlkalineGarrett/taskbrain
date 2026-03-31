@@ -567,14 +567,19 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         }
         MetadataHasher.invalidateCache()
 
+        // Capture tracked lines NOW on the main thread — before any async loadContent
+        // from a newly-composed screen can overwrite lineTracker. Without this, the
+        // coroutine might read a different lineTracker that was reset by loadContent,
+        // causing noteId loss and spurious child-note soft-deletes.
+        val capturedLines = lineTracker.getTrackedLines()
+
         // persistCurrentNote does a structured save (with noteId mappings) — more
         // precise than the auto-persist callback, so we passed persist = false above.
         viewModelScope.launch {
-            val trackedLines = lineTracker.getTrackedLines()
-            val result = persistCurrentNote(savedNoteId, trackedLines)
+            val result = persistCurrentNote(savedNoteId, capturedLines)
 
             result.onSuccess {
-                syncAlarmNoteIds(trackedLines)
+                syncAlarmNoteIds(capturedLines)
                 executeAndStoreDirectives(content)
             }
         }

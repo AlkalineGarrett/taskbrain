@@ -320,9 +320,35 @@ class NoteRepository(
             // Fetch existing descendants for deletion tracking
             val existingDescendantIds = fetchExistingDescendantIds(noteId)
 
-            val result = db.runTransaction { transaction ->
-                val survivingIds = mutableSetOf<String>()
+            // Compute surviving IDs upfront for the content-drop guard
+            val survivingIds = mutableSetOf<String>()
+            for (i in 1 until linesToSave.size) {
+                val content = linesToSave[i].content.trimStart('\t')
+                if (content.isNotEmpty()) {
+                    survivingIds.add(effectiveId(i))
+                }
+            }
+            val toDelete = existingDescendantIds - survivingIds
 
+            // Content-drop guard: if saving would soft-delete most existing
+            // descendants, something has likely gone wrong (race condition,
+            // stale editor state, etc.). Abort to prevent data loss.
+            if (existingDescendantIds.size >= 3 && toDelete.size > existingDescendantIds.size / 2) {
+                val diagnostics = buildContentDropDiagnostics(
+                    noteId, trackedLines, linesToSave, existingDescendantIds, survivingIds, toDelete
+                )
+                Log.e(TAG, diagnostics)
+                throw ContentDropAbortException(
+                    "Save aborted: would delete ${toDelete.size} of " +
+                        "${existingDescendantIds.size} child notes " +
+                        "(saving ${linesToSave.size} lines). " +
+                        "This was blocked to prevent data loss. " +
+                        "Your note content is still safe — please save again. " +
+                        "Connect to a computer and check logcat tag '$TAG' for diagnostics."
+                )
+            }
+
+            val result = db.runTransaction { transaction ->
                 // Update root
                 val rootData = baseNoteData(userId, rootContent).apply {
                     put("containedNotes", childrenOfLine[0].toList())
@@ -336,7 +362,6 @@ class NoteRepository(
 
                     val id = effectiveId(i)
                     val parentId = effectiveId(parentOfLine[i])
-                    survivingIds.add(id)
 
                     if (linesToSave[i].noteId != null) {
                         transaction.set(
@@ -367,7 +392,7 @@ class NoteRepository(
                 }
 
                 // Soft-delete removed notes
-                for (id in existingDescendantIds - survivingIds) {
+                for (id in toDelete) {
                     transaction.update(
                         noteRef(id),
                         mapOf("state" to "deleted", "updatedAt" to FieldValue.serverTimestamp())
@@ -685,7 +710,59 @@ class NoteRepository(
         return trackedLines
     }
 
+    /**
+     * Builds a detailed diagnostic string for content-drop guard violations.
+     * Logged at ERROR level so it can be retrieved via logcat for debugging.
+     */
+    private fun buildContentDropDiagnostics(
+        noteId: String,
+        originalTrackedLines: List<NoteLine>,
+        linesToSave: List<NoteLine>,
+        existingDescendantIds: Set<String>,
+        survivingIds: Set<String>,
+        toDelete: Set<String>,
+    ): String = buildString {
+        appendLine("=== CONTENT DROP GUARD TRIGGERED ===")
+        appendLine("noteId: $noteId")
+        appendLine("originalTrackedLines: ${originalTrackedLines.size}")
+        appendLine("linesToSave (after trailing-empty drop): ${linesToSave.size}")
+        appendLine("existingDescendants: ${existingDescendantIds.size} $existingDescendantIds")
+        appendLine("survivingIds: ${survivingIds.size} $survivingIds")
+        appendLine("toDelete: ${toDelete.size} $toDelete")
+        appendLine("--- trackedLines detail ---")
+        for ((i, line) in originalTrackedLines.withIndex()) {
+            val preview = line.content.take(60).replace("\n", "\\n")
+            appendLine("  [$i] noteId=${line.noteId ?: "null"} content='$preview'")
+        }
+        appendLine("--- NoteStore state ---")
+        val storeNote = NoteStore.getNoteById(noteId)
+        if (storeNote != null) {
+            val storeLines = storeNote.content.lines()
+            appendLine("  NoteStore has ${storeLines.size} lines for this note")
+            for ((i, line) in storeLines.withIndex()) {
+                val preview = line.take(60).replace("\n", "\\n")
+                appendLine("  [$i] '$preview'")
+            }
+        } else {
+            appendLine("  NoteStore has NO entry for $noteId")
+        }
+        appendLine("--- Thread ---")
+        appendLine("  ${Thread.currentThread().name}")
+        appendLine("--- Stack trace ---")
+        for (frame in Thread.currentThread().stackTrace.drop(2).take(15)) {
+            appendLine("  at $frame")
+        }
+        appendLine("=== END CONTENT DROP GUARD ===")
+    }
+
     companion object {
         private const val TAG = "NoteRepository"
     }
 }
+
+/**
+ * Thrown when [NoteRepository.saveNoteWithChildren] aborts because the save
+ * would soft-delete an unreasonable number of descendant notes, indicating
+ * a likely race condition or stale editor state.
+ */
+class ContentDropAbortException(message: String) : Exception(message)

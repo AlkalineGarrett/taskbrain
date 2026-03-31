@@ -670,6 +670,12 @@ private fun LifecycleAutoSaveEffect(
     val currentIsNoteDeleted by rememberUpdatedState(isNoteDeleted)
     val currentNoteIdForPersistence by rememberUpdatedState(currentNoteId)
 
+    // Track whether the dirty-note save has already fired (ON_STOP or onDispose —
+    // whichever runs first). Without this guard, both fire saveContent with the same
+    // content, launching two concurrent persistCurrentNote coroutines that race on
+    // lineTracker and can produce duplicate or conflicting Firestore writes.
+    val alreadySaved = remember { mutableStateOf(false) }
+
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) {
@@ -677,7 +683,8 @@ private fun LifecycleAutoSaveEffect(
                 currentNoteIdForPersistence?.let { noteId ->
                     UndoStatePersistence.saveStateBlocking(context, noteId, controller.undoManager)
                 }
-                if (!currentIsSaved && currentUserContent.isNotEmpty()) {
+                if (!alreadySaved.value && !currentIsSaved && currentUserContent.isNotEmpty()) {
+                    alreadySaved.value = true
                     currentNoteViewModel.saveContent(currentUserContent, controller.state.lines.map { it.noteIds })
                 }
             }
@@ -699,7 +706,9 @@ private fun LifecycleAutoSaveEffect(
                     isDirty = true
                 )
                 recentTabsViewModel.updateTabDisplayText(currentNoteIdForPersistence!!, currentUserContent)
-                currentNoteViewModel.saveContent(currentUserContent, controller.state.lines.map { it.noteIds })
+                if (!alreadySaved.value) {
+                    currentNoteViewModel.saveContent(currentUserContent, controller.state.lines.map { it.noteIds })
+                }
             }
         }
     }
@@ -749,7 +758,16 @@ private fun DataLoadingEffects(
                 // else: NoteStore has different content from a direct edit — don't overwrite
             }
         }
-        currentNoteViewModel.loadContent(displayedNoteId, recentTabsViewModel)
+        // Skip the load if the ViewModel just resolved this noteId from a null→noteId
+        // transition (the LaunchedEffect(currentNoteId) sync). The first loadContent(null)
+        // already loaded this note; loading again would be redundant and races with the
+        // first load's background refresh coroutine.
+        val alreadyLoaded = displayedNoteId != null &&
+            displayedNoteId == currentNoteViewModel.getCurrentNoteId() &&
+            currentNoteViewModel.loadStatus.value.let { it is LoadStatus.Success && it.noteId == displayedNoteId }
+        if (!alreadyLoaded) {
+            currentNoteViewModel.loadContent(displayedNoteId, recentTabsViewModel)
+        }
     }
 
     // Detect external changes (e.g., from web app) via NoteStore's collection listener.
