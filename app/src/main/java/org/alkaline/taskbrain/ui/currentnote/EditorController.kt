@@ -653,8 +653,22 @@ class EditorController(
         if (cursor >= line.text.length) {
             var target = lineIndex + 1
             while (target < state.lines.size && target in hiddenIndices) target++
-            if (target < state.lines.size) {
-                mergeNextLine(lineIndex, target)
+            if (target >= state.lines.size) return
+            val nextLine = state.lines.getOrNull(target) ?: return
+
+            val currentHasContent = line.content.isNotEmpty()
+            val nextHasContent = nextLine.content.isNotEmpty()
+
+            when {
+                currentHasContent -> mergeNextLine(lineIndex, target)
+                nextHasContent -> deleteLineAndMergeIds(
+                    survivor = nextLine, other = line,
+                    removeIndex = lineIndex, focusIndex = lineIndex
+                )
+                else -> deleteLineAndMergeIds(
+                    survivor = line, other = nextLine,
+                    removeIndex = target, focusIndex = lineIndex
+                )
             }
             return
         }
@@ -673,9 +687,11 @@ class EditorController(
 
     /**
      * Gets the prefix for a new line based on the current line's prefix.
-     * Converts checked checkboxes to unchecked.
+     * When [preserveChecked] is false (splitting at end of line), converts checked → unchecked.
+     * When true (splitting mid-line), keeps the checked state.
      */
-    private fun getNewLinePrefix(currentPrefix: String): String {
+    private fun getNewLinePrefix(currentPrefix: String, preserveChecked: Boolean): String {
+        if (preserveChecked) return currentPrefix
         return currentPrefix.replace(LinePrefixes.CHECKBOX_CHECKED, LinePrefixes.CHECKBOX_UNCHECKED)
     }
 
@@ -718,9 +734,10 @@ class EditorController(
         lineIndex: Int,
         newLineContent: String,
         currentPrefix: String,
-        noteIds: List<String> = emptyList()
+        noteIds: List<String> = emptyList(),
+        preserveChecked: Boolean = false
     ) {
-        val newLinePrefix = getNewLinePrefix(currentPrefix)
+        val newLinePrefix = getNewLinePrefix(currentPrefix, preserveChecked)
         val newLineText = newLinePrefix + newLineContent
         val newLineCursor = newLinePrefix.length
 
@@ -762,9 +779,17 @@ class EditorController(
         line.updateFull(beforeCursor, beforeCursor.length)
         line.noteIds = currentNoteIds
 
-        // Create new line with prefix continuation (only if cursor was past the prefix)
+        // Whichever side of the split is empty gets unchecked.
+        // Both have content (mid-line split): both stay checked.
+        // Cursor at end: new line is empty → uncheck new line.
+        // Cursor at start of content: current line is empty → uncheck current, keep new checked.
         if (cursor >= prefix.length) {
-            createNewLineWithPrefix(lineIndex, afterCursor, prefix, newNoteIds)
+            val preserveChecked = afterHasContent
+            createNewLineWithPrefix(lineIndex, afterCursor, prefix, newNoteIds, preserveChecked)
+            if (!beforeHasContent && prefix.contains(LinePrefixes.CHECKBOX_CHECKED)) {
+                val uncheckedText = beforeCursor.replace(LinePrefixes.CHECKBOX_CHECKED, LinePrefixes.CHECKBOX_UNCHECKED)
+                line.updateFull(uncheckedText, uncheckedText.length)
+            }
         } else {
             // Cursor within prefix, don't continue prefix
             val newLine = LineState(afterCursor, 0, newNoteIds)
@@ -943,8 +968,10 @@ class EditorController(
             line.updateContent(beforeNewline, beforeNewline.length)
             line.noteIds = currentNoteIds
 
-            // Create new line with prefix continuation
-            createNewLineWithPrefix(lineIndex, afterNewline, line.prefix, newNoteIds)
+            // Create new line with prefix continuation.
+            // Preserve checked state when content follows the split point.
+            val preserveChecked = afterNewline.isNotEmpty()
+            createNewLineWithPrefix(lineIndex, afterNewline, line.prefix, newNoteIds, preserveChecked)
 
             // Continue pending state on new line (groups Enter + subsequent typing)
             undoManager.continueAfterStructuralChange(state.focusedLineIndex)

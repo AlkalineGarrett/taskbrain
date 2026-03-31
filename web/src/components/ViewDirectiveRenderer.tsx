@@ -60,8 +60,24 @@ export function ViewDirectiveRenderer({
   // Expose the save function so Ctrl+S can route through the same path (with saving UI)
   viewSaveRef.current = dirtyNoteId ? handleOverlaySave : null
 
+  const gearButton = onEditDirective ? (
+    <button
+      className={styles.editButton}
+      onClick={(e) => { e.stopPropagation(); onEditDirective() }}
+      title="Edit directive"
+      aria-label="Edit directive"
+    >
+      ⚙
+    </button>
+  ) : null
+
   if (notes.length === 0) {
-    return <div className={styles.emptyView}>{EMPTY_VIEW}</div>
+    return (
+      <div className={styles.viewWrapper}>
+        {gearButton}
+        <div className={styles.emptyView}>{EMPTY_VIEW}</div>
+      </div>
+    )
   }
 
   return (
@@ -76,16 +92,7 @@ export function ViewDirectiveRenderer({
           {saving ? SAVING : SAVE}
         </button>
       )}
-      {onEditDirective && (
-        <button
-          className={styles.editButton}
-          onClick={(e) => { e.stopPropagation(); onEditDirective() }}
-          title="Edit directive"
-          aria-label="Edit directive"
-        >
-          ⚙
-        </button>
-      )}
+      {gearButton}
       <div className={styles.viewContainer}>
       {notes.map((note, noteIndex) => (
         <div key={note.id}>

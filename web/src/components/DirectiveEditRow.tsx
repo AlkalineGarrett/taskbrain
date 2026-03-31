@@ -43,13 +43,17 @@ export function DirectiveEditRow({
       } else if (e.key === 'Escape') {
         e.preventDefault()
         onCancel()
+      } else if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
+        // Let the input handle Ctrl+A natively (select all within this input).
+        // Stop propagation to prevent the global handler from selecting all editor lines.
+        e.stopPropagation()
       }
     },
     [handleConfirm, onCancel],
   )
 
   return (
-    <div>
+    <div onMouseDown={(e) => e.stopPropagation()}>
       <div className={styles.editRow}>
         <input
           ref={inputRef}

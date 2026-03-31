@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
 import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
+import { isViewResult } from '@/dsl/directives/DirectiveResult'
 import { segmentLine } from '@/dsl/directives/DirectiveSegmenter'
 import { DirectiveChip } from './DirectiveChip'
 import { DirectiveEditRow } from './DirectiveEditRow'
@@ -55,8 +56,24 @@ export function DirectiveLineContent({
     setEditingKey(null)
   }, [])
 
+  // Build the edit row (if editing) and determine whether it's a view directive
+  const editSegment = editingKey
+    ? segments.find((s) => s.kind === 'Directive' && s.key === editingKey) ?? null
+    : null
+  const editRow = editSegment?.kind === 'Directive' ? (
+    <DirectiveEditRow
+      initialSourceText={editSegment.sourceText}
+      errorMessage={editSegment.result?.error}
+      onConfirm={(newText) => handleConfirm(editSegment.sourceText, newText)}
+      onCancel={handleCancel}
+      onRefresh={(text) => handleRefresh(editingKey!, text)}
+    />
+  ) : null
+  const isEditingView = editSegment?.kind === 'Directive' && isViewResult(editSegment.result)
+
   return (
     <div style={{ width: '100%' }}>
+      {isEditingView && editRow}
       <div className={styles.lineContent}>
         {segments.map((segment, i) => {
           if (segment.kind === 'Text') {
@@ -80,20 +97,7 @@ export function DirectiveLineContent({
           )
         })}
       </div>
-
-      {editingKey && (() => {
-        const editSegment = segments.find((s) => s.kind === 'Directive' && s.key === editingKey)
-        if (!editSegment || editSegment.kind !== 'Directive') return null
-        return (
-          <DirectiveEditRow
-            initialSourceText={editSegment.sourceText}
-            errorMessage={editSegment.result?.error}
-            onConfirm={(newText) => handleConfirm(editSegment.sourceText, newText)}
-            onCancel={handleCancel}
-            onRefresh={(text) => handleRefresh(editingKey, text)}
-          />
-        )
-      })()}
+      {!isEditingView && editRow}
     </div>
   )
 }

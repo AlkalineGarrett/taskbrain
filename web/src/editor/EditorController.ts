@@ -519,8 +519,22 @@ export class EditorController {
       // Skip hidden lines when merging forward
       let target = lineIndex + 1
       while (target < this.state.lines.length && this.hiddenIndices.has(target)) target++
-      if (target < this.state.lines.length) {
+      if (target >= this.state.lines.length) return
+      const nextLine = this.state.lines[target]
+      if (!nextLine) return
+
+      const currentHasContent = line.content.length > 0
+      const nextHasContent = nextLine.content.length > 0
+
+      if (currentHasContent) {
+        // Current line has content: merge next content into it
         this.mergeNextLine(lineIndex, target)
+      } else if (nextHasContent) {
+        // Next has content, current is empty: delete current, keep next (preserves next's prefix)
+        this.deleteLineAndMergeIds(nextLine, line, lineIndex, lineIndex)
+      } else {
+        // Neither has content: keep current, delete next
+        this.deleteLineAndMergeIds(line, nextLine, target, lineIndex)
       }
       return
     }
@@ -534,7 +548,8 @@ export class EditorController {
 
   // --- Line Operations ---
 
-  private getNewLinePrefix(currentPrefix: string): string {
+  private getNewLinePrefix(currentPrefix: string, preserveChecked: boolean): string {
+    if (preserveChecked) return currentPrefix
     return currentPrefix.replace(LP.CHECKBOX_CHECKED, LP.CHECKBOX_UNCHECKED)
   }
 
@@ -543,8 +558,9 @@ export class EditorController {
     newLineContent: string,
     currentPrefix: string,
     noteIds: string[] = [],
+    preserveChecked = false,
   ): void {
-    const newLinePrefix = this.getNewLinePrefix(currentPrefix)
+    const newLinePrefix = this.getNewLinePrefix(currentPrefix, preserveChecked)
     const newLineText = newLinePrefix + newLineContent
     const newLineCursor = newLinePrefix.length
     this.state.lines.splice(lineIndex + 1, 0, new LineState(newLineText, newLineCursor, noteIds))
@@ -579,7 +595,16 @@ export class EditorController {
     line.noteIds = currentNoteIds
 
     if (cursor >= prefix.length) {
-      this.createNewLineWithPrefix(lineIndex, afterCursor, prefix, newNoteIds)
+      // Whichever side of the split is empty gets unchecked.
+      // Both have content (mid-line split): both stay checked.
+      // Cursor at end: new line is empty → uncheck new line.
+      // Cursor at start of content: current line is empty → uncheck current, keep new checked.
+      const preserveChecked = afterHasContent
+      this.createNewLineWithPrefix(lineIndex, afterCursor, prefix, newNoteIds, preserveChecked)
+      if (!beforeHasContent && prefix.includes(LP.CHECKBOX_CHECKED)) {
+        const uncheckedText = beforeCursor.replace(LP.CHECKBOX_CHECKED, LP.CHECKBOX_UNCHECKED)
+        line.updateFull(uncheckedText, uncheckedText.length)
+      }
     } else {
       this.state.lines.splice(lineIndex + 1, 0, new LineState(afterCursor, 0, newNoteIds))
       this.state.focusedLineIndex = lineIndex + 1
@@ -719,7 +744,8 @@ export class EditorController {
 
       line.updateContent(beforeNewline, beforeNewline.length)
       line.noteIds = currentNoteIds
-      this.createNewLineWithPrefix(lineIndex, afterNewline, line.prefix, newNoteIds)
+      const preserveChecked = afterNewline.length > 0
+      this.createNewLineWithPrefix(lineIndex, afterNewline, line.prefix, newNoteIds, preserveChecked)
       this.undoManager.continueAfterStructuralChange(this.state.focusedLineIndex)
       return
     }

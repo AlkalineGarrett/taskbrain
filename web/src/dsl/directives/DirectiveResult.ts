@@ -27,6 +27,12 @@ export function directiveResultToValue(dr: DirectiveResult): DslValue | null {
   }
 }
 
+/** Returns true if the directive result resolved to a ViewVal. */
+export function isViewResult(dr: DirectiveResult | null | undefined): boolean {
+  if (!dr?.result) return false
+  return directiveResultToValue(dr)?.kind === 'ViewVal'
+}
+
 export function directiveResultToDisplayString(dr: DirectiveResult, fallback: string = '...'): string {
   if (dr.error) return `Error: ${dr.error}`
   if (dr.warning) return `Warning: ${dr.warning}`

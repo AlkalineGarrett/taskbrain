@@ -183,9 +183,11 @@ private fun handleEnterOnPrefixedLine(text: String, cursor: Int): Pair<String, I
             Pair(newText, prevLineStart)
         }
     } else {
-        // Line with content - add prefix to new line with same indentation
-        // For checkboxes, always add unchecked checkbox
-        val newPrefix = if (matchedPrefix == CHECKBOX_CHECKED) CHECKBOX_UNCHECKED else matchedPrefix
+        // Line with content - add prefix to new line with same indentation.
+        // Preserve checked state when splitting mid-line (content follows cursor);
+        // uncheck when cursor is at the end (new empty line after a checked item).
+        val atEnd = cursor >= text.length || text.substring(cursor).all { it == '\n' }
+        val newPrefix = if (matchedPrefix == CHECKBOX_CHECKED && atEnd) CHECKBOX_UNCHECKED else matchedPrefix
         val newLinePrefix = leadingTabs + newPrefix
         val newText = text.substring(0, cursor) + newLinePrefix + text.substring(cursor)
         Pair(newText, cursor + newLinePrefix.length)

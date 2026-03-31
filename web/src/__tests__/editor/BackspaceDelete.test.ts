@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { EditorState } from '../../editor/EditorState'
 import { EditorController } from '../../editor/EditorController'
 import { LineState } from '../../editor/LineState'
-import { BULLET, CHECKBOX_UNCHECKED } from '../../editor/LinePrefixes'
+import { BULLET, CHECKBOX_UNCHECKED, CHECKBOX_CHECKED } from '../../editor/LinePrefixes'
 
 // Mock navigator.clipboard
 Object.defineProperty(navigator, 'clipboard', {
@@ -307,5 +307,136 @@ describe('deleteForward (mergeNextLine)', () => {
     expect(state.lines.length).toBe(2)
     expect(state.lines[0]!.text).toBe('FirstSecond')
     expect(state.lines[1]!.text).toBe('Third')
+  })
+
+  it('adopts next line when current is empty (preserves next prefix)', () => {
+    // Empty unchecked checkbox + checked checkbox with content
+    const { controller, state } = controllerWithLines(`${CHECKBOX_UNCHECKED}`, `${CHECKBOX_CHECKED}done`)
+    state.focusedLineIndex = 0
+    state.lines[0]!.updateFull(`${CHECKBOX_UNCHECKED}`, `${CHECKBOX_UNCHECKED}`.length)
+
+    controller.deleteForward(0)
+
+    expect(state.lines.length).toBe(1)
+    expect(state.lines[0]!.text).toBe(`${CHECKBOX_CHECKED}done`)
+  })
+
+  it('adopts next line when current is empty bullet (preserves next prefix)', () => {
+    const { controller, state } = controllerWithLines(`${BULLET}`, `\t${BULLET}content`)
+    state.focusedLineIndex = 0
+    state.lines[0]!.updateFull(`${BULLET}`, `${BULLET}`.length)
+
+    controller.deleteForward(0)
+
+    expect(state.lines.length).toBe(1)
+    expect(state.lines[0]!.text).toBe(`\t${BULLET}content`)
+  })
+
+  it('keeps current when both lines are empty', () => {
+    const { controller, state } = controllerWithLines(`${CHECKBOX_UNCHECKED}`, `${CHECKBOX_CHECKED}`)
+    state.focusedLineIndex = 0
+    state.lines[0]!.updateFull(`${CHECKBOX_UNCHECKED}`, `${CHECKBOX_UNCHECKED}`.length)
+
+    controller.deleteForward(0)
+
+    expect(state.lines.length).toBe(1)
+    expect(state.lines[0]!.text).toBe(`${CHECKBOX_UNCHECKED}`)
+  })
+
+  it('merges next content into current when current has content', () => {
+    const { controller, state } = controllerWithLines(`${CHECKBOX_UNCHECKED}task`, `${CHECKBOX_CHECKED}done`)
+    state.focusedLineIndex = 0
+    state.lines[0]!.updateFull(`${CHECKBOX_UNCHECKED}task`, `${CHECKBOX_UNCHECKED}task`.length)
+
+    controller.deleteForward(0)
+
+    expect(state.lines.length).toBe(1)
+    expect(state.lines[0]!.text).toBe(`${CHECKBOX_UNCHECKED}taskdone`)
+  })
+})
+
+describe('splitLine (Enter) on checked checkbox', () => {
+  it('preserves checked state when splitting mid-line', () => {
+    const { controller, state } = controllerWithLines(`${CHECKBOX_CHECKED}hello world`)
+    state.focusedLineIndex = 0
+    state.lines[0]!.updateFull(`${CHECKBOX_CHECKED}hello world`, `${CHECKBOX_CHECKED}hello`.length)
+
+    controller.splitLine(0)
+
+    expect(state.lines.length).toBe(2)
+    expect(state.lines[0]!.text).toBe(`${CHECKBOX_CHECKED}hello`)
+    expect(state.lines[1]!.text).toBe(`${CHECKBOX_CHECKED} world`)
+  })
+
+  it('unchecks when splitting at end of line', () => {
+    const { controller, state } = controllerWithLines(`${CHECKBOX_CHECKED}done`)
+    state.focusedLineIndex = 0
+    state.lines[0]!.updateFull(`${CHECKBOX_CHECKED}done`, `${CHECKBOX_CHECKED}done`.length)
+
+    controller.splitLine(0)
+
+    expect(state.lines.length).toBe(2)
+    expect(state.lines[0]!.text).toBe(`${CHECKBOX_CHECKED}done`)
+    expect(state.lines[1]!.text).toBe(`${CHECKBOX_UNCHECKED}`)
+  })
+
+  it('unchecks on empty checked line (cursor at prefix end)', () => {
+    const { controller, state } = controllerWithLines(`${CHECKBOX_CHECKED}`)
+    state.focusedLineIndex = 0
+    state.lines[0]!.updateFull(`${CHECKBOX_CHECKED}`, `${CHECKBOX_CHECKED}`.length)
+
+    controller.splitLine(0)
+
+    expect(state.lines.length).toBe(2)
+    expect(state.lines[1]!.text).toBe(`${CHECKBOX_UNCHECKED}`)
+  })
+
+  it('unchecks current line when all content moves to new line (cursor at start of content)', () => {
+    const { controller, state } = controllerWithLines(`${CHECKBOX_CHECKED}all content here`)
+    state.focusedLineIndex = 0
+    // Cursor right after prefix — all content goes to new line
+    state.lines[0]!.updateFull(`${CHECKBOX_CHECKED}all content here`, `${CHECKBOX_CHECKED}`.length)
+
+    controller.splitLine(0)
+
+    expect(state.lines.length).toBe(2)
+    // Current line is now empty → unchecked
+    expect(state.lines[0]!.text).toBe(`${CHECKBOX_UNCHECKED}`)
+    // New line has all the content → checked
+    expect(state.lines[1]!.text).toBe(`${CHECKBOX_CHECKED}all content here`)
+  })
+
+  it('unchecks current line with indent when all content moves to new line', () => {
+    const { controller, state } = controllerWithLines(`\t${CHECKBOX_CHECKED}indented task`)
+    state.focusedLineIndex = 0
+    state.lines[0]!.updateFull(`\t${CHECKBOX_CHECKED}indented task`, `\t${CHECKBOX_CHECKED}`.length)
+
+    controller.splitLine(0)
+
+    expect(state.lines.length).toBe(2)
+    expect(state.lines[0]!.text).toBe(`\t${CHECKBOX_UNCHECKED}`)
+    expect(state.lines[1]!.text).toBe(`\t${CHECKBOX_CHECKED}indented task`)
+  })
+
+  it('unchecked checkbox stays unchecked regardless of cursor position', () => {
+    const { controller, state } = controllerWithLines(`${CHECKBOX_UNCHECKED}hello world`)
+    state.focusedLineIndex = 0
+    state.lines[0]!.updateFull(`${CHECKBOX_UNCHECKED}hello world`, `${CHECKBOX_UNCHECKED}hello`.length)
+
+    controller.splitLine(0)
+
+    expect(state.lines.length).toBe(2)
+    expect(state.lines[1]!.text).toBe(`${CHECKBOX_UNCHECKED} world`)
+  })
+
+  it('preserves checked with indent when splitting mid-line', () => {
+    const { controller, state } = controllerWithLines(`\t${CHECKBOX_CHECKED}task item`)
+    state.focusedLineIndex = 0
+    state.lines[0]!.updateFull(`\t${CHECKBOX_CHECKED}task item`, `\t${CHECKBOX_CHECKED}task`.length)
+
+    controller.splitLine(0)
+
+    expect(state.lines[0]!.text).toBe(`\t${CHECKBOX_CHECKED}task`)
+    expect(state.lines[1]!.text).toBe(`\t${CHECKBOX_CHECKED} item`)
   })
 })
