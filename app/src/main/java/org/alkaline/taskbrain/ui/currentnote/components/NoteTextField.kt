@@ -35,8 +35,8 @@ import kotlinx.coroutines.flow.StateFlow
 import org.alkaline.taskbrain.ui.currentnote.EditorConfig
 import org.alkaline.taskbrain.ui.currentnote.EditorController
 import org.alkaline.taskbrain.ui.currentnote.rendering.HangingIndentEditor
-import org.alkaline.taskbrain.ui.currentnote.HangingIndentEditorState
-import org.alkaline.taskbrain.ui.currentnote.rememberHangingIndentEditorState
+import org.alkaline.taskbrain.ui.currentnote.EditorState
+import org.alkaline.taskbrain.ui.currentnote.rememberEditorState
 import org.alkaline.taskbrain.dsl.directives.DirectiveResult
 import org.alkaline.taskbrain.ui.currentnote.rendering.ButtonCallbacks
 import org.alkaline.taskbrain.ui.currentnote.rendering.DirectiveCallbacks
@@ -47,7 +47,7 @@ import org.alkaline.taskbrain.ui.currentnote.util.SymbolOverlay
  * Uses HangingIndentEditor for proper wrapped line indentation.
  *
  * @param editorState State holder for the editor that exposes operations like indent/unindent.
- *        Create with rememberHangingIndentEditorState() and use for CommandBar operations.
+ *        Create with rememberEditorState() and use for CommandBar operations.
  * @param controller The EditorController for managing state modifications.
  *        Create with rememberEditorController(editorState) and use for undo/redo operations.
  */
@@ -57,7 +57,7 @@ fun NoteTextField(
     onTextFieldValueChange: (TextFieldValue) -> Unit,
     focusRequester: FocusRequester,
     onFocusChanged: (Boolean) -> Unit,
-    editorState: HangingIndentEditorState = rememberHangingIndentEditorState(),
+    editorState: EditorState = rememberEditorState(),
     controller: EditorController,
     isFingerDownFlow: StateFlow<Boolean>? = null,
     onSymbolTap: ((SymbolTapInfo) -> Unit)? = null,

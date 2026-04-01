@@ -89,7 +89,7 @@ describe('StringFunctions', () => {
     })
 
     it('should invoke zero-param lambda', () => {
-      expect(display('[run(lambda[add(1, 2)])]')).toBe('3')
+      expect(display('[run([add(1, 2)])]')).toBe('3')
     })
 
     it('should throw with no arguments', () => {

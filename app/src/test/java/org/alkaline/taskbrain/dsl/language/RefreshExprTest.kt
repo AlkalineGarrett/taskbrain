@@ -1,14 +1,14 @@
 package org.alkaline.taskbrain.dsl.language
 
-import org.alkaline.taskbrain.dsl.runtime.BooleanVal
-import org.alkaline.taskbrain.dsl.runtime.DateTimeVal
-import org.alkaline.taskbrain.dsl.runtime.DateVal
-import org.alkaline.taskbrain.dsl.runtime.DslValue
+import org.alkaline.taskbrain.dsl.runtime.values.BooleanVal
+import org.alkaline.taskbrain.dsl.runtime.values.DateTimeVal
+import org.alkaline.taskbrain.dsl.runtime.values.DateVal
+import org.alkaline.taskbrain.dsl.runtime.values.DslValue
 import org.alkaline.taskbrain.dsl.runtime.Environment
 import org.alkaline.taskbrain.dsl.runtime.Executor
-import org.alkaline.taskbrain.dsl.runtime.NumberVal
-import org.alkaline.taskbrain.dsl.runtime.StringVal
-import org.alkaline.taskbrain.dsl.runtime.TimeVal
+import org.alkaline.taskbrain.dsl.runtime.values.NumberVal
+import org.alkaline.taskbrain.dsl.runtime.values.StringVal
+import org.alkaline.taskbrain.dsl.runtime.values.TimeVal
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test

@@ -2,7 +2,7 @@ package org.alkaline.taskbrain.dsl.directives
 
 import android.util.Log
 import com.google.firebase.Timestamp
-import org.alkaline.taskbrain.dsl.runtime.DslValue
+import org.alkaline.taskbrain.dsl.runtime.values.DslValue
 
 /**
  * Types of warnings that can occur during directive execution.

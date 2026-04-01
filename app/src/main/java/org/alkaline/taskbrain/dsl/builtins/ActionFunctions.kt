@@ -1,17 +1,17 @@
 package org.alkaline.taskbrain.dsl.builtins
 
 import org.alkaline.taskbrain.dsl.language.StringLiteral
-import org.alkaline.taskbrain.dsl.runtime.BooleanVal
+import org.alkaline.taskbrain.dsl.runtime.values.BooleanVal
 import org.alkaline.taskbrain.dsl.runtime.BuiltinFunction
 import org.alkaline.taskbrain.dsl.runtime.BuiltinRegistry
-import org.alkaline.taskbrain.dsl.runtime.ButtonVal
+import org.alkaline.taskbrain.dsl.runtime.values.ButtonVal
 import org.alkaline.taskbrain.dsl.runtime.Environment
 import org.alkaline.taskbrain.dsl.runtime.ExecutionException
-import org.alkaline.taskbrain.dsl.runtime.LambdaVal
-import org.alkaline.taskbrain.dsl.runtime.ScheduleFrequency
-import org.alkaline.taskbrain.dsl.runtime.ScheduleVal
-import org.alkaline.taskbrain.dsl.runtime.AlarmVal
-import org.alkaline.taskbrain.dsl.runtime.StringVal
+import org.alkaline.taskbrain.dsl.runtime.values.LambdaVal
+import org.alkaline.taskbrain.dsl.runtime.values.ScheduleFrequency
+import org.alkaline.taskbrain.dsl.runtime.values.ScheduleVal
+import org.alkaline.taskbrain.dsl.runtime.values.AlarmVal
+import org.alkaline.taskbrain.dsl.runtime.values.StringVal
 
 /**
  * Action-related builtin functions: button, schedule, and alarm.

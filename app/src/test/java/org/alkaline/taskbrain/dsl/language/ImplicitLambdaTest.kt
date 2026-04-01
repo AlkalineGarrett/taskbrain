@@ -2,16 +2,16 @@ package org.alkaline.taskbrain.dsl.language
 
 import com.google.firebase.Timestamp
 import org.alkaline.taskbrain.data.Note
-import org.alkaline.taskbrain.dsl.runtime.BooleanVal
-import org.alkaline.taskbrain.dsl.runtime.DslValue
+import org.alkaline.taskbrain.dsl.runtime.values.BooleanVal
+import org.alkaline.taskbrain.dsl.runtime.values.DslValue
 import org.alkaline.taskbrain.dsl.runtime.Environment
 import org.alkaline.taskbrain.dsl.runtime.ExecutionException
 import org.alkaline.taskbrain.dsl.runtime.Executor
-import org.alkaline.taskbrain.dsl.runtime.LambdaVal
-import org.alkaline.taskbrain.dsl.runtime.ListVal
-import org.alkaline.taskbrain.dsl.runtime.NoteVal
-import org.alkaline.taskbrain.dsl.runtime.NumberVal
-import org.alkaline.taskbrain.dsl.runtime.StringVal
+import org.alkaline.taskbrain.dsl.runtime.values.LambdaVal
+import org.alkaline.taskbrain.dsl.runtime.values.ListVal
+import org.alkaline.taskbrain.dsl.runtime.values.NoteVal
+import org.alkaline.taskbrain.dsl.runtime.values.NumberVal
+import org.alkaline.taskbrain.dsl.runtime.values.StringVal
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -180,7 +180,7 @@ class ImplicitLambdaTest {
     fun `find with implicit lambda where clause`() {
         val env = Environment.withNotes(testNotes)
 
-        // Using implicit lambda syntax instead of lambda[...]
+        // Using implicit lambda syntax
         val result = execute("[find(where: [i.path.startsWith(\"inbox\")])]", env)
 
         assertTrue(result is ListVal)
@@ -216,7 +216,7 @@ class ImplicitLambdaTest {
         // Both should have a CallExpr with a LambdaExpr argument
         // (Note: the parser creates different structures, but semantically similar)
         // Let's just test execution works the same way
-        // Actually f[5] means f(lambda[5]), not f(5)
+        // Actually f[5] means f([5]), not f(5)
         // This is a lambda that ignores i and returns 5
     }
 
@@ -282,31 +282,6 @@ class ImplicitLambdaTest {
 
     // endregion
 
-    // region Legacy lambda[...] syntax still works
-
-    @Test
-    fun `legacy lambda syntax still works`() {
-        val directive = parse("[lambda[add(i, 1)]]")
-
-        assertTrue(directive.expression is LambdaExpr)
-        val lambda = directive.expression as LambdaExpr
-        assertEquals(listOf("i"), lambda.params)
-    }
-
-    @Test
-    fun `legacy lambda in find still works`() {
-        val env = Environment.withNotes(testNotes)
-
-        val result = execute(
-            "[find(where: lambda[i.path.startsWith(\"inbox\")])]",
-            env
-        )
-
-        assertTrue(result is ListVal)
-        assertEquals(2, (result as ListVal).size)
-    }
-
-    // endregion
 
     // region Static analysis for implicit lambdas
 

@@ -1,6 +1,13 @@
 package org.alkaline.taskbrain.dsl.runtime
 
 import org.alkaline.taskbrain.dsl.builtins.ComparisonFunctions
+import org.alkaline.taskbrain.dsl.runtime.values.BooleanVal
+import org.alkaline.taskbrain.dsl.runtime.values.DateTimeVal
+import org.alkaline.taskbrain.dsl.runtime.values.DateVal
+import org.alkaline.taskbrain.dsl.runtime.values.DslValue
+import org.alkaline.taskbrain.dsl.runtime.values.NumberVal
+import org.alkaline.taskbrain.dsl.runtime.values.StringVal
+import org.alkaline.taskbrain.dsl.runtime.values.TimeVal
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime

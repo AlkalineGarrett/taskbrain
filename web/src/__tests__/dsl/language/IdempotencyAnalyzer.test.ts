@@ -100,7 +100,7 @@ describe('IdempotencyAnalyzer', () => {
     })
 
     it('non-idempotent propagates through lambda body', () => {
-      const result = analyze(expr('[lambda[new()]]'))
+      const result = analyze(expr('[[new()]]'))
       expect(result.isIdempotent).toBe(false)
     })
 

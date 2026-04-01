@@ -44,8 +44,8 @@ describe('findDirectives - bracket escaping', () => {
 
   it('should handle nested brackets inside directive normally', () => {
     // Inside a directive, brackets are tracked normally (no escaping)
-    const result = findDirectives('[lambda[inner]]')
+    const result = findDirectives('[once[inner]]')
     expect(result).toHaveLength(1)
-    expect(result[0]!.sourceText).toBe('[lambda[inner]]')
+    expect(result[0]!.sourceText).toBe('[once[inner]]')
   })
 })

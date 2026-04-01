@@ -556,9 +556,3 @@ class EditorState {
 fun rememberEditorState(): EditorState {
     return remember { EditorState() }
 }
-
-// Backward compatibility alias
-typealias HangingIndentEditorState = EditorState
-
-@Composable
-fun rememberHangingIndentEditorState(): HangingIndentEditorState = rememberEditorState()

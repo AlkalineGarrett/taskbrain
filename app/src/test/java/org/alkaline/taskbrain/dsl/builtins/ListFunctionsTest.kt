@@ -4,19 +4,19 @@ import com.google.firebase.Timestamp
 import org.alkaline.taskbrain.data.Note
 import org.alkaline.taskbrain.dsl.language.Lexer
 import org.alkaline.taskbrain.dsl.language.Parser
-import org.alkaline.taskbrain.dsl.runtime.BooleanVal
-import org.alkaline.taskbrain.dsl.runtime.DateTimeVal
-import org.alkaline.taskbrain.dsl.runtime.DateVal
-import org.alkaline.taskbrain.dsl.runtime.DslValue
+import org.alkaline.taskbrain.dsl.runtime.values.BooleanVal
+import org.alkaline.taskbrain.dsl.runtime.values.DateTimeVal
+import org.alkaline.taskbrain.dsl.runtime.values.DateVal
+import org.alkaline.taskbrain.dsl.runtime.values.DslValue
 import org.alkaline.taskbrain.dsl.runtime.Environment
 import org.alkaline.taskbrain.dsl.runtime.ExecutionException
 import org.alkaline.taskbrain.dsl.runtime.Executor
-import org.alkaline.taskbrain.dsl.runtime.ListVal
-import org.alkaline.taskbrain.dsl.runtime.NoteVal
-import org.alkaline.taskbrain.dsl.runtime.NumberVal
-import org.alkaline.taskbrain.dsl.runtime.StringVal
-import org.alkaline.taskbrain.dsl.runtime.TimeVal
-import org.alkaline.taskbrain.dsl.runtime.UndefinedVal
+import org.alkaline.taskbrain.dsl.runtime.values.ListVal
+import org.alkaline.taskbrain.dsl.runtime.values.NoteVal
+import org.alkaline.taskbrain.dsl.runtime.values.NumberVal
+import org.alkaline.taskbrain.dsl.runtime.values.StringVal
+import org.alkaline.taskbrain.dsl.runtime.values.TimeVal
+import org.alkaline.taskbrain.dsl.runtime.values.UndefinedVal
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -122,7 +122,7 @@ class ListFunctionsTest {
     @Test
     fun `sort with key lambda extracts sort key`() {
         // Sort by path using key lambda (should give same result as default for notes)
-        val result = execute("[sort(find(), key: lambda[i.path])]", notes = testNotes)
+        val result = execute("[sort(find(), key: [i.path])]", notes = testNotes)
 
         assertTrue(result is ListVal)
         val list = result as ListVal
@@ -134,7 +134,7 @@ class ListFunctionsTest {
 
     @Test
     fun `sort with key lambda sorting by name`() {
-        val result = execute("[sort(find(), key: lambda[i.name])]", notes = testNotes)
+        val result = execute("[sort(find(), key: [i.name])]", notes = testNotes)
 
         assertTrue(result is ListVal)
         val list = result as ListVal
@@ -184,7 +184,7 @@ class ListFunctionsTest {
 
     @Test
     fun `sort with key lambda and order desc`() {
-        val result = execute("[sort(find(), key: lambda[i.path], order: descending)]", notes = testNotes)
+        val result = execute("[sort(find(), key: [i.path], order: descending)]", notes = testNotes)
 
         assertTrue(result is ListVal)
         val list = result as ListVal
@@ -420,7 +420,7 @@ class ListFunctionsTest {
     fun `full example - sort find by path descending`() {
         // The target example from the spec (simplified without parse_date)
         val result = execute(
-            "[sort(find(), key: lambda[i.path], order: descending)]",
+            "[sort(find(), key: [i.path], order: descending)]",
             notes = testNotes
         )
 
@@ -435,7 +435,7 @@ class ListFunctionsTest {
     @Test
     fun `first combined with sort gets most recent`() {
         val result = execute(
-            "[first(sort(find(), key: lambda[i.path], order: descending))]",
+            "[first(sort(find(), key: [i.path], order: descending))]",
             notes = testNotes
         )
 

@@ -1,6 +1,8 @@
 package org.alkaline.taskbrain.dsl.runtime
 
 import org.alkaline.taskbrain.data.Note
+import org.alkaline.taskbrain.dsl.runtime.values.DslValue
+import org.alkaline.taskbrain.dsl.runtime.values.NoteVal
 import java.time.LocalDateTime
 
 /**
@@ -21,16 +23,6 @@ class Environment private constructor(
      * Create a root environment with the given context.
      */
     constructor(context: NoteContext = NoteContext.EMPTY) : this(null, context)
-
-    /**
-     * Create a root environment with individual parameters.
-     * Convenience constructor for backward compatibility.
-     */
-    constructor(
-        notes: List<Note>? = null,
-        currentNote: Note? = null,
-        noteOperations: NoteOperations? = null
-    ) : this(NoteContext(notes, currentNote, noteOperations))
 
     private val variables = mutableMapOf<String, DslValue>()
 
@@ -313,21 +305,21 @@ class Environment private constructor(
         // Convenience factory methods for common use cases
 
         fun withNotes(notes: List<Note>): Environment =
-            Environment(notes = notes)
+            Environment(NoteContext(notes = notes))
 
         fun withCurrentNote(currentNote: Note): Environment =
-            Environment(currentNote = currentNote)
+            Environment(NoteContext(currentNote = currentNote))
 
         fun withNotesAndCurrentNote(notes: List<Note>, currentNote: Note): Environment =
-            Environment(notes = notes, currentNote = currentNote)
+            Environment(NoteContext(notes = notes, currentNote = currentNote))
 
         fun withNoteOperations(noteOperations: NoteOperations): Environment =
-            Environment(noteOperations = noteOperations)
+            Environment(NoteContext(noteOperations = noteOperations))
 
         fun withAll(
             notes: List<Note>,
             currentNote: Note,
             noteOperations: NoteOperations
-        ): Environment = Environment(notes = notes, currentNote = currentNote, noteOperations = noteOperations)
+        ): Environment = Environment(NoteContext(notes = notes, currentNote = currentNote, noteOperations = noteOperations))
     }
 }

@@ -2,8 +2,8 @@ package org.alkaline.taskbrain.dsl.builtins
 
 import org.alkaline.taskbrain.dsl.language.Lexer
 import org.alkaline.taskbrain.dsl.language.Parser
-import org.alkaline.taskbrain.dsl.runtime.DateVal
-import org.alkaline.taskbrain.dsl.runtime.DslValue
+import org.alkaline.taskbrain.dsl.runtime.values.DateVal
+import org.alkaline.taskbrain.dsl.runtime.values.DslValue
 import org.alkaline.taskbrain.dsl.runtime.Environment
 import org.alkaline.taskbrain.dsl.runtime.ExecutionException
 import org.alkaline.taskbrain.dsl.runtime.Executor

@@ -2,17 +2,17 @@ package org.alkaline.taskbrain.dsl.language
 
 import com.google.firebase.Timestamp
 import org.alkaline.taskbrain.data.Note
-import org.alkaline.taskbrain.dsl.runtime.BooleanVal
-import org.alkaline.taskbrain.dsl.runtime.DateVal
-import org.alkaline.taskbrain.dsl.runtime.DslValue
+import org.alkaline.taskbrain.dsl.runtime.values.BooleanVal
+import org.alkaline.taskbrain.dsl.runtime.values.DateVal
+import org.alkaline.taskbrain.dsl.runtime.values.DslValue
 import org.alkaline.taskbrain.dsl.runtime.Environment
 import org.alkaline.taskbrain.dsl.runtime.ExecutionException
 import org.alkaline.taskbrain.dsl.runtime.Executor
-import org.alkaline.taskbrain.dsl.runtime.LambdaVal
-import org.alkaline.taskbrain.dsl.runtime.ListVal
-import org.alkaline.taskbrain.dsl.runtime.NoteVal
-import org.alkaline.taskbrain.dsl.runtime.NumberVal
-import org.alkaline.taskbrain.dsl.runtime.StringVal
+import org.alkaline.taskbrain.dsl.runtime.values.LambdaVal
+import org.alkaline.taskbrain.dsl.runtime.values.ListVal
+import org.alkaline.taskbrain.dsl.runtime.values.NoteVal
+import org.alkaline.taskbrain.dsl.runtime.values.NumberVal
+import org.alkaline.taskbrain.dsl.runtime.values.StringVal
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -101,7 +101,7 @@ class LambdaTest {
 
     @Test
     fun `parses simple lambda`() {
-        val directive = parse("[lambda[i]]")
+        val directive = parse("[[i]]")
 
         assertTrue(directive.expression is LambdaExpr)
         val lambda = directive.expression as LambdaExpr
@@ -111,7 +111,7 @@ class LambdaTest {
 
     @Test
     fun `parses lambda with property access`() {
-        val directive = parse("[lambda[i.path]]")
+        val directive = parse("[[i.path]]")
 
         assertTrue(directive.expression is LambdaExpr)
         val lambda = directive.expression as LambdaExpr
@@ -120,7 +120,7 @@ class LambdaTest {
 
     @Test
     fun `parses lambda with function call`() {
-        val directive = parse("[lambda[parse_date i.path]]")
+        val directive = parse("[[parse_date i.path]]")
 
         assertTrue(directive.expression is LambdaExpr)
         val lambda = directive.expression as LambdaExpr
@@ -130,7 +130,7 @@ class LambdaTest {
 
     @Test
     fun `parses lambda with matches call`() {
-        val directive = parse("[lambda[matches(i.path, pattern(digit*4))]]")
+        val directive = parse("[[matches(i.path, pattern(digit*4))]]")
 
         assertTrue(directive.expression is LambdaExpr)
         val lambda = directive.expression as LambdaExpr
@@ -141,7 +141,7 @@ class LambdaTest {
     @Test
     fun `rejects lambda without closing bracket`() {
         val exception = assertThrows(ParseException::class.java) {
-            parse("[lambda[i.path")
+            parse("[[i.path")
         }
         assertTrue(exception.message!!.contains("Expected ']'"))
     }
@@ -152,7 +152,7 @@ class LambdaTest {
 
     @Test
     fun `evaluates lambda to LambdaVal`() {
-        val result = execute("[lambda[i]]")
+        val result = execute("[[i]]")
 
         assertTrue(result is LambdaVal)
         assertEquals(listOf("i"), (result as LambdaVal).params)
@@ -160,14 +160,14 @@ class LambdaTest {
 
     @Test
     fun `lambda displays correctly`() {
-        val result = execute("[lambda[i.path]]") as LambdaVal
+        val result = execute("[[i.path]]") as LambdaVal
 
         assertEquals("<lambda(i)>", result.toDisplayString())
     }
 
     @Test
     fun `lambda cannot be serialized`() {
-        val result = execute("[lambda[i]]") as LambdaVal
+        val result = execute("[[i]]") as LambdaVal
 
         assertThrows(UnsupportedOperationException::class.java) {
             result.serialize()
@@ -180,7 +180,7 @@ class LambdaTest {
 
     @Test
     fun `lambda invocation binds parameter correctly`() {
-        val lambdaVal = execute("[lambda[i]]") as LambdaVal
+        val lambdaVal = execute("[[i]]") as LambdaVal
 
         val result = executor.invokeLambda(lambdaVal, listOf(NumberVal(42.0)))
 
@@ -193,7 +193,7 @@ class LambdaTest {
         val note = Note(id = "1", path = "test/path", content = "Content")
         val noteVal = NoteVal(note)
 
-        val lambdaVal = execute("[lambda[i.path]]") as LambdaVal
+        val lambdaVal = execute("[[i.path]]") as LambdaVal
         val result = executor.invokeLambda(lambdaVal, listOf(noteVal))
 
         assertTrue(result is StringVal)
@@ -206,7 +206,7 @@ class LambdaTest {
         val env = Environment()
         env.define("x", NumberVal(10.0))
 
-        val lambdaVal = execute("[lambda[add(i, x)]]", env) as LambdaVal
+        val lambdaVal = execute("[[add(i, x)]]", env) as LambdaVal
         val result = executor.invokeLambda(lambdaVal, listOf(NumberVal(5.0)))
 
         assertTrue(result is NumberVal)
@@ -219,7 +219,7 @@ class LambdaTest {
 
     @Test
     fun `direct lambda invocation with variable`() {
-        val result = execute("[f: lambda[add(i, 1)]; f(5)]")
+        val result = execute("[f: [add(i, 1)]; f(5)]")
 
         assertTrue(result is NumberVal)
         assertEquals(6.0, (result as NumberVal).value, 0.001)
@@ -231,7 +231,7 @@ class LambdaTest {
         val env = Environment()
         env.define("n", NoteVal(note))
 
-        val result = execute("[f: lambda[i.path]; f(n)]", env)
+        val result = execute("[f: [i.path]; f(n)]", env)
 
         assertTrue(result is StringVal)
         assertEquals("test/path", (result as StringVal).value)
@@ -239,7 +239,7 @@ class LambdaTest {
 
     @Test
     fun `chained lambda calls`() {
-        val result = execute("[f: lambda[mul(i, 2)]; g: lambda[add(i, 10)]; f(g(5))]")
+        val result = execute("[f: [mul(i, 2)]; g: [add(i, 10)]; f(g(5))]")
 
         assertTrue(result is NumberVal)
         // g(5) = 5 + 10 = 15, f(15) = 15 * 2 = 30
@@ -249,7 +249,7 @@ class LambdaTest {
     @Test
     fun `lambda invocation with zero args errors`() {
         val exception = assertThrows(ExecutionException::class.java) {
-            execute("[f: lambda[add(i, 1)]; f]")
+            execute("[f: [add(i, 1)]; f]")
         }
         assertTrue(exception.message!!.contains("requires 1 argument"))
     }
@@ -257,7 +257,7 @@ class LambdaTest {
     @Test
     fun `lambda invocation with too many args errors`() {
         val exception = assertThrows(ExecutionException::class.java) {
-            execute("[f: lambda[add(i, 1)]; f(1, 2)]")
+            execute("[f: [add(i, 1)]; f(1, 2)]")
         }
         assertTrue(exception.message!!.contains("requires 1 argument"))
     }
@@ -272,7 +272,7 @@ class LambdaTest {
 
     @Test
     fun `lambda that ignores parameter works`() {
-        val result = execute("[f: lambda[42]; f(999)]")
+        val result = execute("[f: [42]; f(999)]")
 
         assertTrue(result is NumberVal)
         assertEquals(42.0, (result as NumberVal).value, 0.001)
@@ -280,8 +280,8 @@ class LambdaTest {
 
     @Test
     fun `inline lambda invocation`() {
-        // Can't do lambda[...](arg) directly due to parser, but can assign and call
-        val result = execute("[f: lambda[mul(i, i)]; f(7)]")
+        // Can't do [...](arg) directly due to parser, but can assign and call
+        val result = execute("[f: [mul(i, i)]; f(7)]")
 
         assertTrue(result is NumberVal)
         assertEquals(49.0, (result as NumberVal).value, 0.001)
@@ -326,7 +326,7 @@ class LambdaTest {
     fun `find with where lambda filters by path pattern`() {
         val env = Environment.withNotes(testNotes)
         val result = execute(
-            "[find(where: lambda[matches(i.path, pattern(digit*4 \"-\" digit*2 \"-\" digit*2))])]",
+            "[find(where: [matches(i.path, pattern(digit*4 \"-\" digit*2 \"-\" digit*2))])]",
             env
         )
 
@@ -343,7 +343,7 @@ class LambdaTest {
     fun `find with where lambda filters by name pattern`() {
         val env = Environment.withNotes(testNotes)
         val result = execute(
-            "[find(where: lambda[matches(i.name, pattern(\"Journal\" any*(0..)))])]",
+            "[find(where: [matches(i.name, pattern(\"Journal\" any*(0..)))])]",
             env
         )
 
@@ -360,7 +360,7 @@ class LambdaTest {
     fun `find with where lambda returns empty when no matches`() {
         val env = Environment.withNotes(testNotes)
         val result = execute(
-            "[find(where: lambda[matches(i.path, pattern(\"archive/\" any*(1..)))])]",
+            "[find(where: [matches(i.path, pattern(\"archive/\" any*(1..)))])]",
             env
         )
 
@@ -373,7 +373,7 @@ class LambdaTest {
         val env = Environment.withNotes(testNotes)
         // Path starts with "2026" AND where lambda checks name contains "15"
         val result = execute(
-            "[find(path: pattern(\"2026\" any*(0..)), where: lambda[matches(i.name, pattern(any*(0..) \"15\" any*(0..)))])]",
+            "[find(path: pattern(\"2026\" any*(0..)), where: [matches(i.name, pattern(any*(0..) \"15\" any*(0..)))])]",
             env
         )
 
@@ -388,7 +388,7 @@ class LambdaTest {
         val env = Environment.withNotes(testNotes)
         val exception = assertThrows(ExecutionException::class.java) {
             // Lambda returns a string, not boolean
-            execute("[find(where: lambda[i.path])]", env)
+            execute("[find(where: [i.path])]", env)
         }
         assertTrue(exception.message!!.contains("must return a boolean"))
     }
@@ -399,26 +399,26 @@ class LambdaTest {
 
     @Test
     fun `lambda is classified as static when body is static`() {
-        val directive = parse("[lambda[i.path]]")
+        val directive = parse("[[i.path]]")
         assertFalse(DynamicCallAnalyzer.containsDynamicCalls(directive.expression))
     }
 
     @Test
     fun `lambda is classified as dynamic when body is dynamic`() {
-        val directive = parse("[lambda[date]]")
+        val directive = parse("[[date]]")
         assertTrue(DynamicCallAnalyzer.containsDynamicCalls(directive.expression))
     }
 
     @Test
     fun `lambda is idempotent when body is idempotent`() {
-        val directive = parse("[lambda[i.path]]")
+        val directive = parse("[[i.path]]")
         val result = IdempotencyAnalyzer.analyze(directive.expression)
         assertTrue(result.isIdempotent)
     }
 
     @Test
     fun `lambda is non-idempotent when body is non-idempotent`() {
-        val directive = parse("[lambda[new(path: \"test\")]]")
+        val directive = parse("[[new(path: \"test\")]]")
         val result = IdempotencyAnalyzer.analyze(directive.expression)
         assertFalse(result.isIdempotent)
     }

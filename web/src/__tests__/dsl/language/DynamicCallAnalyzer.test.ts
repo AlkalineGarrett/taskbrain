@@ -111,11 +111,11 @@ describe('DynamicCallAnalyzer', () => {
     })
 
     it('dynamic call in lambda body propagates', () => {
-      expect(containsDynamicCalls(expr('[lambda[date]]'))).toBe(true)
+      expect(containsDynamicCalls(expr('[[date]]'))).toBe(true)
     })
 
     it('static lambda body is not dynamic', () => {
-      expect(containsDynamicCalls(expr('[lambda[42]]'))).toBe(false)
+      expect(containsDynamicCalls(expr('[[42]]'))).toBe(false)
     })
   })
 })

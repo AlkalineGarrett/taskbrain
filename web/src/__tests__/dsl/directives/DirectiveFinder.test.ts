@@ -65,12 +65,12 @@ describe('findDirectives', () => {
     expect(result).toHaveLength(0)
   })
 
-  it('handles nested brackets for lambda syntax', () => {
-    const result = findDirectives('[lambda[inner]]')
+  it('handles nested brackets for bracket body syntax', () => {
+    const result = findDirectives('[once[inner]]')
     expect(result).toHaveLength(1)
-    expect(result[0]!.sourceText).toBe('[lambda[inner]]')
+    expect(result[0]!.sourceText).toBe('[once[inner]]')
     expect(result[0]!.startOffset).toBe(0)
-    expect(result[0]!.endOffset).toBe(15)
+    expect(result[0]!.endOffset).toBe(13)
   })
 
   it('handles deeply nested brackets', () => {
@@ -223,14 +223,14 @@ describe('executeAllDirectives', () => {
 })
 
 describe('no-effect warnings', () => {
-  it('lambda at top level returns warning', () => {
-    const result = executeDirective('[lambda[i]]', [], null)
+  it('implicit lambda at top level returns warning', () => {
+    const result = executeDirective('[[i]]', [], null)
     expect(result.error).toBeNull()
     expect(result.warning).toBe(DirectiveWarningType.NO_EFFECT_LAMBDA)
   })
 
-  it('lambda with body at top level returns warning', () => {
-    const result = executeDirective('[lambda[i.path]]', [], null)
+  it('implicit lambda with body at top level returns warning', () => {
+    const result = executeDirective('[[i.path]]', [], null)
     expect(result.error).toBeNull()
     expect(result.warning).toBe(DirectiveWarningType.NO_EFFECT_LAMBDA)
   })

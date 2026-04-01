@@ -2,7 +2,7 @@ package org.alkaline.taskbrain.dsl.cache
 
 import com.google.firebase.Timestamp
 import org.alkaline.taskbrain.data.Note
-import org.alkaline.taskbrain.dsl.runtime.StringVal
+import org.alkaline.taskbrain.dsl.runtime.values.StringVal
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test

@@ -5,7 +5,7 @@ import org.alkaline.taskbrain.dsl.runtime.Environment
 
 /**
  * A lambda value that captures its defining environment.
- * Used for functional operations like filtering with find(where: lambda[...]).
+ * Used for functional operations like filtering with find(where: [...]).
  *
  * Lambdas cannot be serialized to Firestore - they are runtime-only values.
  */

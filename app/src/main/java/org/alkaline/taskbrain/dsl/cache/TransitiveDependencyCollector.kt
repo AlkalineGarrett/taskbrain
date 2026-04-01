@@ -1,6 +1,7 @@
 package org.alkaline.taskbrain.dsl.cache
 
 import org.alkaline.taskbrain.data.Note
+import org.alkaline.taskbrain.dsl.runtime.values.DslValue
 
 /**
  * Collects and merges transitive dependencies during directive execution.
@@ -373,7 +374,7 @@ class CachedResultBuilder(
     /**
      * Build a complete CachedDirectiveResult for a success case.
      */
-    fun buildSuccess(result: org.alkaline.taskbrain.dsl.runtime.DslValue): CachedDirectiveResult {
+    fun buildSuccess(result: DslValue): CachedDirectiveResult {
         return CachedDirectiveResult.success(
             result = result,
             dependencies = dependencies,

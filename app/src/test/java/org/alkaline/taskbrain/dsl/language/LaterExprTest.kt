@@ -1,11 +1,11 @@
 package org.alkaline.taskbrain.dsl.language
 
-import org.alkaline.taskbrain.dsl.runtime.DslValue
+import org.alkaline.taskbrain.dsl.runtime.values.DslValue
 import org.alkaline.taskbrain.dsl.runtime.Environment
 import org.alkaline.taskbrain.dsl.runtime.Executor
-import org.alkaline.taskbrain.dsl.runtime.LambdaVal
-import org.alkaline.taskbrain.dsl.runtime.NumberVal
-import org.alkaline.taskbrain.dsl.runtime.StringVal
+import org.alkaline.taskbrain.dsl.runtime.values.LambdaVal
+import org.alkaline.taskbrain.dsl.runtime.values.NumberVal
+import org.alkaline.taskbrain.dsl.runtime.values.StringVal
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test

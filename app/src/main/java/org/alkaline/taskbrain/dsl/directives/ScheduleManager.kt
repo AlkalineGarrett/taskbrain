@@ -438,11 +438,6 @@ object ScheduleManager {
     }
 
     /**
-     * Observe the count of pending missed executions.
-     */
-    fun observeMissedCount() = executionRepository.observeMissedCount()
-
-    /**
      * Get pending missed executions for the Schedules screen.
      */
     suspend fun getPendingMissedExecutions(): List<ScheduleExecution> {

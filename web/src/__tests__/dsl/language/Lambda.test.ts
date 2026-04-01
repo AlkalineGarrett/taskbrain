@@ -10,8 +10,8 @@ function expr(source: string): Expression {
 
 describe('Lambda expressions', () => {
   describe('parsing', () => {
-    it('parses lambda keyword with bracket body', () => {
-      const e = expr('[lambda[42]]')
+    it('parses implicit lambda with bracket body', () => {
+      const e = expr('[[42]]')
       expect(e.kind).toBe('LambdaExpr')
       if (e.kind === 'LambdaExpr') {
         expect(e.params).toEqual(['i'])
@@ -19,8 +19,8 @@ describe('Lambda expressions', () => {
       }
     })
 
-    it('lambda body contains the expression', () => {
-      const e = expr('[lambda["hello"]]')
+    it('implicit lambda body contains the expression', () => {
+      const e = expr('[["hello"]]')
       expect(e.kind).toBe('LambdaExpr')
       if (e.kind === 'LambdaExpr') {
         expect(e.body.kind).toBe('StringLiteral')
@@ -30,8 +30,8 @@ describe('Lambda expressions', () => {
       }
     })
 
-    it('lambda with function call body', () => {
-      const e = expr('[lambda[foo]]')
+    it('implicit lambda with function call body', () => {
+      const e = expr('[[foo]]')
       expect(e.kind).toBe('LambdaExpr')
       if (e.kind === 'LambdaExpr') {
         expect(e.body.kind).toBe('CallExpr')
@@ -43,8 +43,8 @@ describe('Lambda expressions', () => {
   })
 
   describe('invocation', () => {
-    it('parses lambda invocation with parentheses', () => {
-      const e = expr('[lambda[42]()]')
+    it('parses implicit lambda invocation with parentheses', () => {
+      const e = expr('[[42]()]')
       expect(e.kind).toBe('LambdaInvocation')
       if (e.kind === 'LambdaInvocation') {
         expect(e.lambda.kind).toBe('LambdaExpr')
@@ -52,8 +52,8 @@ describe('Lambda expressions', () => {
       }
     })
 
-    it('parses lambda invocation with arguments', () => {
-      const e = expr('[lambda[i](10)]')
+    it('parses implicit lambda invocation with arguments', () => {
+      const e = expr('[[i](10)]')
       expect(e.kind).toBe('LambdaInvocation')
       if (e.kind === 'LambdaInvocation') {
         expect(e.args).toHaveLength(1)

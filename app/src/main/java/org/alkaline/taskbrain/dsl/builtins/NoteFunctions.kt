@@ -3,18 +3,18 @@ package org.alkaline.taskbrain.dsl.builtins
 import kotlinx.coroutines.runBlocking
 import org.alkaline.taskbrain.dsl.directives.DirectiveFinder
 import org.alkaline.taskbrain.dsl.runtime.Arguments
-import org.alkaline.taskbrain.dsl.runtime.BooleanVal
+import org.alkaline.taskbrain.dsl.runtime.values.BooleanVal
 import org.alkaline.taskbrain.dsl.runtime.BuiltinFunction
 import org.alkaline.taskbrain.dsl.runtime.BuiltinRegistry
-import org.alkaline.taskbrain.dsl.runtime.DslValue
+import org.alkaline.taskbrain.dsl.runtime.values.DslValue
 import org.alkaline.taskbrain.dsl.runtime.Environment
 import org.alkaline.taskbrain.dsl.runtime.ExecutionException
-import org.alkaline.taskbrain.dsl.runtime.LambdaVal
-import org.alkaline.taskbrain.dsl.runtime.ListVal
+import org.alkaline.taskbrain.dsl.runtime.values.LambdaVal
+import org.alkaline.taskbrain.dsl.runtime.values.ListVal
 import org.alkaline.taskbrain.dsl.runtime.NoteOperationException
-import org.alkaline.taskbrain.dsl.runtime.NoteVal
-import org.alkaline.taskbrain.dsl.runtime.PatternVal
-import org.alkaline.taskbrain.dsl.runtime.StringVal
+import org.alkaline.taskbrain.dsl.runtime.values.NoteVal
+import org.alkaline.taskbrain.dsl.runtime.values.PatternVal
+import org.alkaline.taskbrain.dsl.runtime.values.StringVal
 import org.alkaline.taskbrain.dsl.runtime.values.ViewVal
 
 /**
@@ -50,13 +50,13 @@ object NoteFunctions {
      *   [find(path: pattern(digit*4 "-" digit*2 "-" digit*2))]  - Pattern match on path
      *   [find(name: "Shopping List")]                           - Exact name match
      *   [find(name: pattern("Meeting" any*(0..)))]              - Names starting with "Meeting"
-     *   [find(where: lambda[matches(i.path, pattern(digit*4))])] - Lambda filter
+     *   [find(where: [matches(i.path, pattern(digit*4))])] - Lambda filter
      *   [find(path: pattern("journal/" any*(1..)), name: pattern(digit*4 "-" digit*2 "-" digit*2))]
      *
      * Note: The notes must be pre-loaded and passed to the Environment before execution.
      * If no notes are available in the environment, returns an empty list.
      *
-     * Added where: lambda support.
+     * Supports where: lambda filtering.
      */
     private val findFunction = BuiltinFunction(
         name = "find",
@@ -249,7 +249,7 @@ object NoteFunctions {
      *
      * Examples:
      *   [view find(path: "inbox")]
-     *   [view sort(find(path: pattern(digit*4 "-" digit*2 "-" digit*2)), key: lambda[parse_date(i.path)], order: descending)]
+     *   [view sort(find(path: pattern(digit*4 "-" digit*2 "-" digit*2)), key: [parse_date(i.path)], order: descending)]
      */
     private val viewFunction = BuiltinFunction(
         name = "view",

@@ -11,11 +11,12 @@ import org.alkaline.taskbrain.dsl.runtime.CachedExecutorInterface
 import org.alkaline.taskbrain.dsl.runtime.Environment
 import org.alkaline.taskbrain.dsl.runtime.ExecutionException
 import org.alkaline.taskbrain.dsl.runtime.Executor
-import org.alkaline.taskbrain.dsl.runtime.LambdaVal
+import org.alkaline.taskbrain.dsl.runtime.values.DslValue
+import org.alkaline.taskbrain.dsl.runtime.values.LambdaVal
 import org.alkaline.taskbrain.dsl.runtime.NoteContext
 import org.alkaline.taskbrain.dsl.runtime.NoteMutation
 import org.alkaline.taskbrain.dsl.runtime.NoteOperations
-import org.alkaline.taskbrain.dsl.runtime.PatternVal
+import org.alkaline.taskbrain.dsl.runtime.values.PatternVal
 
 private const val TAG = "DirectiveFinder"
 
@@ -74,7 +75,7 @@ object DirectiveFinder {
 
     /**
      * Find all directives in the given content.
-     * Handles nested brackets for lambda syntax: [lambda[...]]
+     * Handles nested brackets for lambda syntax: [[...]]
      *
      * Updated to support nested brackets.
      *
@@ -228,7 +229,7 @@ object DirectiveFinder {
      * Check if a value is a no-effect value that produces a warning.
      * These are values that can't be meaningfully displayed or stored.
      */
-    private fun checkNoEffectValue(value: org.alkaline.taskbrain.dsl.runtime.DslValue): DirectiveWarningType? {
+    private fun checkNoEffectValue(value: DslValue): DirectiveWarningType? {
         return when (value) {
             is LambdaVal -> DirectiveWarningType.NO_EFFECT_LAMBDA
             is PatternVal -> DirectiveWarningType.NO_EFFECT_PATTERN

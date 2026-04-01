@@ -51,7 +51,6 @@ import org.alkaline.taskbrain.ui.currentnote.selection.createMenuActions
 import org.alkaline.taskbrain.ui.currentnote.EditorConfig
 import org.alkaline.taskbrain.ui.currentnote.EditorController
 import org.alkaline.taskbrain.ui.currentnote.EditorState
-import org.alkaline.taskbrain.ui.currentnote.HangingIndentEditorState
 import org.alkaline.taskbrain.ui.currentnote.gestures.editorPointerInput
 import org.alkaline.taskbrain.ui.currentnote.gestures.LineLayoutInfo
 import org.alkaline.taskbrain.ui.currentnote.LineState

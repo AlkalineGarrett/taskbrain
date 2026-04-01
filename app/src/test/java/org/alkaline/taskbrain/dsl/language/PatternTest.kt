@@ -1,10 +1,10 @@
 package org.alkaline.taskbrain.dsl.language
 
-import org.alkaline.taskbrain.dsl.runtime.BooleanVal
-import org.alkaline.taskbrain.dsl.runtime.DslValue
+import org.alkaline.taskbrain.dsl.runtime.values.BooleanVal
+import org.alkaline.taskbrain.dsl.runtime.values.DslValue
 import org.alkaline.taskbrain.dsl.runtime.ExecutionException
 import org.alkaline.taskbrain.dsl.runtime.Executor
-import org.alkaline.taskbrain.dsl.runtime.PatternVal
+import org.alkaline.taskbrain.dsl.runtime.values.PatternVal
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test

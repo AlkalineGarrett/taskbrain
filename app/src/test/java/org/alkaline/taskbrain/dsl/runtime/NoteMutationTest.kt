@@ -1,6 +1,10 @@
 package org.alkaline.taskbrain.dsl.runtime
 
 import com.google.firebase.Timestamp
+import org.alkaline.taskbrain.dsl.runtime.values.DslValue
+import org.alkaline.taskbrain.dsl.runtime.values.ListVal
+import org.alkaline.taskbrain.dsl.runtime.values.NoteVal
+import org.alkaline.taskbrain.dsl.runtime.values.NumberVal
 import org.alkaline.taskbrain.data.Note
 import org.alkaline.taskbrain.dsl.language.Lexer
 import org.alkaline.taskbrain.dsl.language.Parser
@@ -40,11 +44,11 @@ class NoteMutationTest {
     ): DslValue {
         val tokens = Lexer(source).tokenize()
         val directive = Parser(tokens, source).parseDirective()
-        val env = Environment(
+        val env = Environment(NoteContext(
             notes = notes,
             currentNote = currentNote,
             noteOperations = noteOps
-        )
+        ))
         return executor.execute(directive, env)
     }
 

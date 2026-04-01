@@ -293,11 +293,7 @@ class Parser(private val tokens: List<Token>, private val source: String) {
                 val name = token.literal as String
                 val position = token.position
 
-                // Legacy: lambda[...] creates a lambda expression (deprecated but supported)
-                // Must check BEFORE func[x] syntax to avoid treating lambda as a function name
-                if (name == "lambda" && check(TokenType.LBRACKET)) {
-                    parseLambdaExpression(position)
-                } else if (name == "once" && check(TokenType.LBRACKET)) {
+                if (name == "once" && check(TokenType.LBRACKET)) {
                     // once[...] creates a cached execution block
                     parseOnceExpression(position)
                 } else if (name == "refresh" && check(TokenType.LBRACKET)) {
@@ -659,24 +655,6 @@ class Parser(private val tokens: List<Token>, private val source: String) {
         consume(TokenType.RPAREN, "Expected ')' after range quantifier")
 
         return Quantifier.Range(min, max)
-    }
-
-    // ========================================================================
-    // Lambda Parsing
-    // ========================================================================
-
-    /**
-     * Parse a lambda expression: lambda[body]
-     * Called when 'lambda' identifier has been consumed and '[' is next.
-     *
-     * The lambda implicitly binds the parameter 'i'.
-     * Example: lambda[i.path] creates LambdaExpr(["i"], PropertyAccess(...))
-     */
-    private fun parseLambdaExpression(position: Int): LambdaExpr {
-        consume(TokenType.LBRACKET, "Expected '[' after 'lambda'")
-        val body = parseExpression()
-        consume(TokenType.RBRACKET, "Expected ']' to close lambda body")
-        return LambdaExpr(params = listOf("i"), body = body, position = position)
     }
 
     // ========================================================================

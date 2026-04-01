@@ -1,6 +1,6 @@
 package org.alkaline.taskbrain.dsl.cache
 
-import org.alkaline.taskbrain.dsl.runtime.DslValue
+import org.alkaline.taskbrain.dsl.runtime.values.DslValue
 
 /**
  * A cached directive execution result with its dependencies and hashes.

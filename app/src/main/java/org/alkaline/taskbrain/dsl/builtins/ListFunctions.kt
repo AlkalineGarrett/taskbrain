@@ -1,21 +1,21 @@
 package org.alkaline.taskbrain.dsl.builtins
 
 import org.alkaline.taskbrain.dsl.runtime.Arguments
-import org.alkaline.taskbrain.dsl.runtime.BooleanVal
+import org.alkaline.taskbrain.dsl.runtime.values.BooleanVal
 import org.alkaline.taskbrain.dsl.runtime.BuiltinFunction
 import org.alkaline.taskbrain.dsl.runtime.BuiltinRegistry
-import org.alkaline.taskbrain.dsl.runtime.DateTimeVal
-import org.alkaline.taskbrain.dsl.runtime.DateVal
-import org.alkaline.taskbrain.dsl.runtime.DslValue
+import org.alkaline.taskbrain.dsl.runtime.values.DateTimeVal
+import org.alkaline.taskbrain.dsl.runtime.values.DateVal
+import org.alkaline.taskbrain.dsl.runtime.values.DslValue
 import org.alkaline.taskbrain.dsl.runtime.Environment
 import org.alkaline.taskbrain.dsl.runtime.ExecutionException
-import org.alkaline.taskbrain.dsl.runtime.LambdaVal
-import org.alkaline.taskbrain.dsl.runtime.ListVal
-import org.alkaline.taskbrain.dsl.runtime.NoteVal
-import org.alkaline.taskbrain.dsl.runtime.NumberVal
-import org.alkaline.taskbrain.dsl.runtime.StringVal
-import org.alkaline.taskbrain.dsl.runtime.TimeVal
-import org.alkaline.taskbrain.dsl.runtime.UndefinedVal
+import org.alkaline.taskbrain.dsl.runtime.values.LambdaVal
+import org.alkaline.taskbrain.dsl.runtime.values.ListVal
+import org.alkaline.taskbrain.dsl.runtime.values.NoteVal
+import org.alkaline.taskbrain.dsl.runtime.values.NumberVal
+import org.alkaline.taskbrain.dsl.runtime.values.StringVal
+import org.alkaline.taskbrain.dsl.runtime.values.TimeVal
+import org.alkaline.taskbrain.dsl.runtime.values.UndefinedVal
 
 /**
  * List-related builtin functions.
@@ -71,8 +71,8 @@ object ListFunctions {
      *
      * Examples:
      *   [sort(find())]                                      - Sort notes by default (path/name/id)
-     *   [sort(find(), key: lambda[i.path])]                 - Sort by path
-     *   [sort(find(), key: lambda[i.path], order: descending)]  - Sort by path descending
+     *   [sort(find(), key: [i.path])]                 - Sort by path
+     *   [sort(find(), key: [i.path], order: descending)]  - Sort by path descending
      *   [sort(list(3, 1, 4), order: descending)]            - Sort numbers descending
      */
     private val sortFunction = BuiltinFunction(

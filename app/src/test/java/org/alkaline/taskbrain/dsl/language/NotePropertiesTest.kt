@@ -2,15 +2,15 @@ package org.alkaline.taskbrain.dsl.language
 
 import com.google.firebase.Timestamp
 import org.alkaline.taskbrain.data.Note
-import org.alkaline.taskbrain.dsl.runtime.DateTimeVal
-import org.alkaline.taskbrain.dsl.runtime.DslValue
+import org.alkaline.taskbrain.dsl.runtime.values.DateTimeVal
+import org.alkaline.taskbrain.dsl.runtime.values.DslValue
 import org.alkaline.taskbrain.dsl.runtime.Environment
 import org.alkaline.taskbrain.dsl.runtime.ExecutionException
 import org.alkaline.taskbrain.dsl.runtime.Executor
-import org.alkaline.taskbrain.dsl.runtime.ListVal
-import org.alkaline.taskbrain.dsl.runtime.NoteVal
-import org.alkaline.taskbrain.dsl.runtime.StringVal
-import org.alkaline.taskbrain.dsl.runtime.UndefinedVal
+import org.alkaline.taskbrain.dsl.runtime.values.ListVal
+import org.alkaline.taskbrain.dsl.runtime.values.NoteVal
+import org.alkaline.taskbrain.dsl.runtime.values.StringVal
+import org.alkaline.taskbrain.dsl.runtime.values.UndefinedVal
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test

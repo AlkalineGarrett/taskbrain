@@ -54,7 +54,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import org.alkaline.taskbrain.service.NotificationSyncer
-import org.alkaline.taskbrain.dsl.directives.ScheduleManager
+import org.alkaline.taskbrain.dsl.directives.ScheduleExecutionRepository
 import org.alkaline.taskbrain.ui.Dimens
 import org.alkaline.taskbrain.ui.alarms.AlarmsScreen
 import org.alkaline.taskbrain.ui.auth.GoogleSignInScreen
@@ -218,7 +218,7 @@ fun MainScreen(
         }
     ) { innerPadding ->
         // Observe missed schedules count for the banner
-        val missedCount by ScheduleManager.observeMissedCount().collectAsState(initial = 0)
+        val missedCount by remember(isUserSignedIn) { ScheduleExecutionRepository().observeMissedCount() }.collectAsState(initial = 0)
         val navBackStackEntry by navController.currentBackStackEntryAsState()
         val currentDestination = navBackStackEntry?.destination
         val showBanner = isUserSignedIn &&

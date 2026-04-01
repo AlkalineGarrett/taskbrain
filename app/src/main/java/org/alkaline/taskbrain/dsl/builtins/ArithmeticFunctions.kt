@@ -4,7 +4,7 @@ import org.alkaline.taskbrain.dsl.runtime.Arguments
 import org.alkaline.taskbrain.dsl.runtime.BuiltinFunction
 import org.alkaline.taskbrain.dsl.runtime.BuiltinRegistry
 import org.alkaline.taskbrain.dsl.runtime.ExecutionException
-import org.alkaline.taskbrain.dsl.runtime.NumberVal
+import org.alkaline.taskbrain.dsl.runtime.values.NumberVal
 
 /**
  * Arithmetic builtin functions.

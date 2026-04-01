@@ -15,7 +15,7 @@ import org.alkaline.taskbrain.dsl.language.RefreshExpr
 import org.alkaline.taskbrain.dsl.language.StatementList
 import org.alkaline.taskbrain.dsl.language.StringLiteral
 import org.alkaline.taskbrain.dsl.language.VariableRef
-import org.alkaline.taskbrain.dsl.runtime.DslValue
+import org.alkaline.taskbrain.dsl.runtime.values.DslValue
 import org.alkaline.taskbrain.dsl.runtime.Environment
 import org.alkaline.taskbrain.dsl.runtime.Executor
 import java.time.LocalDate

@@ -68,7 +68,7 @@ import org.alkaline.taskbrain.dsl.runtime.NoteContext
 import org.alkaline.taskbrain.dsl.runtime.NoteMutation
 import org.alkaline.taskbrain.dsl.runtime.NoteRepositoryOperations
 import org.alkaline.taskbrain.dsl.runtime.values.ButtonVal
-import org.alkaline.taskbrain.dsl.runtime.ViewVal
+import org.alkaline.taskbrain.dsl.runtime.values.ViewVal
 import org.alkaline.taskbrain.dsl.ui.ButtonExecutionState
 import org.alkaline.taskbrain.ui.currentnote.undo.AlarmSnapshot
 import org.alkaline.taskbrain.ui.currentnote.util.SymbolOverlay

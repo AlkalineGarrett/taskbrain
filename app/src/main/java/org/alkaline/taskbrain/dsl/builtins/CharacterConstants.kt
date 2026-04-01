@@ -3,7 +3,7 @@ package org.alkaline.taskbrain.dsl.builtins
 import org.alkaline.taskbrain.dsl.runtime.BuiltinFunction
 import org.alkaline.taskbrain.dsl.runtime.BuiltinRegistry
 import org.alkaline.taskbrain.dsl.runtime.ExecutionException
-import org.alkaline.taskbrain.dsl.runtime.StringVal
+import org.alkaline.taskbrain.dsl.runtime.values.StringVal
 
 /**
  * Character constant functions for mobile-friendly string building.

@@ -1,6 +1,6 @@
 package org.alkaline.taskbrain.dsl.builtins
 
-import org.alkaline.taskbrain.dsl.runtime.BooleanVal
+import org.alkaline.taskbrain.dsl.runtime.values.BooleanVal
 import org.alkaline.taskbrain.dsl.runtime.BuiltinFunction
 import org.alkaline.taskbrain.dsl.runtime.BuiltinRegistry
 

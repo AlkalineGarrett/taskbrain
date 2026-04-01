@@ -218,9 +218,6 @@ export class Parser {
       const name = token.literal as string
       const position = token.position
 
-      if (name === 'lambda' && this.check(TokenType.LBRACKET)) {
-        return this.parseLambdaExpression(position)
-      }
       if (name === 'once' && this.check(TokenType.LBRACKET)) {
         return this.parseOnceExpression(position)
       }
@@ -356,13 +353,6 @@ export class Parser {
       return { kind: 'named', namedArg: { name: argName, value, position: argPosition } }
     }
     return { kind: 'positional', expr: this.parseCallChain() }
-  }
-
-  private parseLambdaExpression(position: number): LambdaExpr {
-    this.consume(TokenType.LBRACKET, "Expected '[' after 'lambda'")
-    const body = this.parseExpression()
-    this.consume(TokenType.RBRACKET, "Expected ']' to close lambda body")
-    return { kind: 'LambdaExpr', params: ['i'], body, position }
   }
 
   private parseOnceExpression(position: number): Expression {

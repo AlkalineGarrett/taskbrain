@@ -1,7 +1,7 @@
 package org.alkaline.taskbrain.dsl.directives
 
-import org.alkaline.taskbrain.dsl.runtime.NumberVal
-import org.alkaline.taskbrain.dsl.runtime.StringVal
+import org.alkaline.taskbrain.dsl.runtime.values.NumberVal
+import org.alkaline.taskbrain.dsl.runtime.values.StringVal
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -93,18 +93,18 @@ class DirectiveFinderTest {
 
     @Test
     fun `finds directive with nested brackets`() {
-        val content = "Test [lambda[i]] here"
+        val content = "Test [[i]] here"
         val directives = DirectiveFinder.findDirectives(content)
 
         assertEquals(1, directives.size)
-        assertEquals("[lambda[i]]", directives[0].sourceText)
+        assertEquals("[[i]]", directives[0].sourceText)
         assertEquals(5, directives[0].startOffset)
-        assertEquals(16, directives[0].endOffset)
+        assertEquals(10, directives[0].endOffset)
     }
 
     @Test
     fun `finds directive with deeply nested brackets`() {
-        val content = "[lambda[matches(i.path, pattern(digit*4))]]"
+        val content = "[[matches(i.path, pattern(digit*4))]]"
         val directives = DirectiveFinder.findDirectives(content)
 
         assertEquals(1, directives.size)
@@ -113,22 +113,22 @@ class DirectiveFinderTest {
 
     @Test
     fun `finds multiple directives with nested brackets`() {
-        val content = "[lambda[i.path]] and [lambda[i.name]]"
+        val content = "[[i.path]] and [[i.name]]"
         val directives = DirectiveFinder.findDirectives(content)
 
         assertEquals(2, directives.size)
-        assertEquals("[lambda[i.path]]", directives[0].sourceText)
-        assertEquals("[lambda[i.name]]", directives[1].sourceText)
+        assertEquals("[[i.path]]", directives[0].sourceText)
+        assertEquals("[[i.name]]", directives[1].sourceText)
     }
 
     @Test
     fun `finds mixed nested and simple directives`() {
-        val content = "[42] then [lambda[i]] then [\"hello\"]"
+        val content = "[42] then [[i]] then [\"hello\"]"
         val directives = DirectiveFinder.findDirectives(content)
 
         assertEquals(3, directives.size)
         assertEquals("[42]", directives[0].sourceText)
-        assertEquals("[lambda[i]]", directives[1].sourceText)
+        assertEquals("[[i]]", directives[1].sourceText)
         assertEquals("[\"hello\"]", directives[2].sourceText)
     }
 
@@ -142,7 +142,7 @@ class DirectiveFinderTest {
 
     @Test
     fun `handles unmatched nested bracket`() {
-        val content = "Test [lambda[unclosed]"
+        val content = "Test [[unclosed]"
         val directives = DirectiveFinder.findDirectives(content)
 
         // The outer bracket is unmatched, so no directive found
@@ -234,7 +234,7 @@ class DirectiveFinderTest {
 
     @Test
     fun `lambda at top level returns warning`() {
-        val execResult = DirectiveFinder.executeDirective("[lambda[i]]")
+        val execResult = DirectiveFinder.executeDirective("[[i]]")
 
         assertNull(execResult.result.error)
         assertNotNull(execResult.result.warning)
@@ -244,7 +244,7 @@ class DirectiveFinderTest {
 
     @Test
     fun `lambda with body at top level returns warning`() {
-        val execResult = DirectiveFinder.executeDirective("[lambda[i.path]]")
+        val execResult = DirectiveFinder.executeDirective("[[i.path]]")
 
         assertNull(execResult.result.error)
         assertEquals(DirectiveWarningType.NO_EFFECT_LAMBDA, execResult.result.warning)
