@@ -726,18 +726,26 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             .getOrDefault(emptyList())
     }
 
-    // Alarm data keyed by alarm document ID, for rendering symbol overlays
+    // Alarm data keyed by alarm document ID, for rendering symbol overlays.
+    // The LiveData values are scoped to the current note's referenced alarms.
+    // The backing stores persist across note navigations so previously-fetched
+    // alarm data is available immediately on revisit.
     private val _alarmCache = MutableLiveData<Map<String, Alarm>>(emptyMap())
     val alarmCache: LiveData<Map<String, Alarm>> = _alarmCache
+    private val alarmCacheStore = mutableMapOf<String, Alarm>()
 
     // Recurring alarm cache: maps recurrence ID → current instance alarm
     private val _recurringAlarmCache = MutableLiveData<Map<String, Alarm>>(emptyMap())
     val recurringAlarmCache: LiveData<Map<String, Alarm>> = _recurringAlarmCache
+    private val recurringAlarmCacheStore = mutableMapOf<String, Alarm>()
 
     /**
      * Loads all alarms referenced by alarm directives in the current note's lines.
      * Handles both [alarm("id")] and [recurringAlarm("id")] directives.
      * For recurring directives, fetches the RecurringAlarm → currentAlarmId → alarm instance.
+     *
+     * Uses a persistent cache so previously-fetched alarm data renders immediately
+     * on the first frame, then refreshes from Firestore in the background.
      */
     fun loadAlarmStates() {
         val extracted = extractAlarmIds(currentNoteLines)
@@ -746,6 +754,16 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             _recurringAlarmCache.value = emptyMap()
             return
         }
+
+        // Serve from persistent cache immediately so overlays render on the first frame.
+        // Filter to only alarm IDs referenced by this note's content.
+        val cachedDirect = extracted.alarmIds
+            .mapNotNull { id -> alarmCacheStore[id]?.let { id to it } }.toMap()
+        val cachedRecurring = extracted.recurringAlarmIds
+            .mapNotNull { id -> recurringAlarmCacheStore[id]?.let { id to it } }.toMap()
+        if (cachedDirect.isNotEmpty()) _alarmCache.value = cachedDirect
+        if (cachedRecurring.isNotEmpty()) _recurringAlarmCache.value = cachedRecurring
+
         viewModelScope.launch {
             coroutineScope {
                 // Load direct alarm references and recurring alarm references in parallel
@@ -775,8 +793,15 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                     }
                 }
 
-                _alarmCache.value = directDeferred.await()
-                _recurringAlarmCache.value = recurringDeferred.await()
+                val freshDirect = directDeferred.await()
+                val freshRecurring = recurringDeferred.await()
+
+                // Update persistent cache with fresh data
+                alarmCacheStore.putAll(freshDirect)
+                recurringAlarmCacheStore.putAll(freshRecurring)
+
+                _alarmCache.value = freshDirect
+                _recurringAlarmCache.value = freshRecurring
             }
         }
     }
