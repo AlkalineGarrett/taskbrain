@@ -81,20 +81,20 @@ fun CurrentNoteScreen(
     val isAgentProcessing = if (BuildConfig.AGENT_COMMAND_ENABLED) {
         currentNoteViewModel.isAgentProcessing.observeAsState(false).value
     } else false
-    val alarmCreated by currentNoteViewModel.alarmCreated.observeAsState()
-    val alarmError by currentNoteViewModel.alarmError.observeAsState()
-    val alarmPermissionWarning by currentNoteViewModel.alarmPermissionWarning.observeAsState(false)
-    val notificationPermissionWarning by currentNoteViewModel.notificationPermissionWarning.observeAsState(false)
-    val schedulingWarning by currentNoteViewModel.schedulingWarning.observeAsState()
-    val isAlarmOperationPending by currentNoteViewModel.isAlarmOperationPending.observeAsState(false)
-    val redoRollbackWarning by currentNoteViewModel.redoRollbackWarning.observeAsState()
-    val saveWarning by currentNoteViewModel.saveWarning.observeAsState()
+    val alarmCreated by currentNoteViewModel.alarmManager.alarmCreated.observeAsState()
+    val alarmError by currentNoteViewModel.alarmManager.alarmError.observeAsState()
+    val alarmPermissionWarning by currentNoteViewModel.alarmManager.alarmPermissionWarning.observeAsState(false)
+    val notificationPermissionWarning by currentNoteViewModel.alarmManager.notificationPermissionWarning.observeAsState(false)
+    val schedulingWarning by currentNoteViewModel.alarmManager.schedulingWarning.observeAsState()
+    val isAlarmOperationPending by currentNoteViewModel.alarmManager.isAlarmOperationPending.observeAsState(false)
+    val redoRollbackWarning by currentNoteViewModel.alarmManager.redoRollbackWarning.observeAsState()
+    val saveWarning by currentNoteViewModel.directiveManager.saveWarning.observeAsState()
     val isNoteDeletedFromVm by currentNoteViewModel.isNoteDeleted.observeAsState(false)
     val showCompletedFromVm by currentNoteViewModel.showCompleted.observeAsState(true)
     // Generation counter bumps after async cache fills, triggering recomposition
-    val directiveCacheGeneration by currentNoteViewModel.directiveCacheGeneration.observeAsState(0)
-    val buttonExecutionStates by currentNoteViewModel.buttonExecutionStates.observeAsState(emptyMap())
-    val buttonErrors by currentNoteViewModel.buttonErrors.observeAsState(emptyMap())
+    val directiveCacheGeneration by currentNoteViewModel.directiveManager.directiveCacheGeneration.observeAsState(0)
+    val buttonExecutionStates by currentNoteViewModel.directiveManager.buttonExecutionStates.observeAsState(emptyMap())
+    val buttonErrors by currentNoteViewModel.directiveManager.buttonErrors.observeAsState(emptyMap())
     val recentTabs by recentTabsViewModel.tabs.observeAsState(emptyList())
     val tabsError by recentTabsViewModel.error.observeAsState()
 
@@ -179,7 +179,7 @@ fun CurrentNoteScreen(
     val directiveResults = remember(userContent, directiveCacheGeneration, displayedNoteId) {
         // NoteStore already has the latest content (pushed on every keystroke via updateContent).
         // No flush needed — just compute directives.
-        currentNoteViewModel.computeDirectiveResults(userContent, displayedNoteId)
+        currentNoteViewModel.directiveManager.computeDirectiveResults(userContent, displayedNoteId)
     }
 
     // Update hidden indices for move system when showCompleted or lines change
@@ -191,22 +191,22 @@ fun CurrentNoteScreen(
     val inlineEditState = rememberInlineEditState()
     LaunchedEffect(inlineEditState) {
         inlineEditState.onExecuteDirectives = { content, onResults ->
-            currentNoteViewModel.executeDirectivesForContent(content, onResults)
+            currentNoteViewModel.directiveManager.executeDirectivesForContent(content, onResults)
         }
         inlineEditState.onExecuteSingleDirective = { sourceText, onResult ->
-            currentNoteViewModel.executeSingleDirective(sourceText, onResult)
+            currentNoteViewModel.directiveManager.executeSingleDirective(sourceText, onResult)
         }
         inlineEditState.onDirectiveEditConfirm = { _, _, _, _ ->
             inlineEditState.activeSession?.let { session ->
-                currentNoteViewModel.saveInlineNoteContent(
+                currentNoteViewModel.directiveManager.saveInlineNoteContent(
                     noteId = session.noteId,
                     newContent = session.currentContent,
                     onSuccess = {
                         session.markSaved()
                         recentTabsViewModel.invalidateCache(session.noteId)
-                        currentNoteViewModel.executeDirectivesForContent(session.currentContent) { results ->
+                        currentNoteViewModel.directiveManager.executeDirectivesForContent(session.currentContent) { results ->
                             session.updateDirectiveResults(results)
-                            currentNoteViewModel.forceRefreshAllDirectives {}
+                            currentNoteViewModel.directiveManager.forceRefreshAllDirectives {}
                         }
                     }
                 )
@@ -243,23 +243,23 @@ fun CurrentNoteScreen(
     var showAlarmDialog by remember { mutableStateOf(false) }
     var alarmDialogLineContent by remember { mutableStateOf("") }
     var alarmDialogLineIndex by remember { mutableStateOf<Int?>(null) }
-    val alarmCacheForOverlay by currentNoteViewModel.alarmCache.observeAsState(emptyMap())
-    val recurringAlarmCacheForOverlay by currentNoteViewModel.recurringAlarmCache.observeAsState(emptyMap())
+    val alarmCacheForOverlay by currentNoteViewModel.alarmManager.alarmCache.observeAsState(emptyMap())
+    val recurringAlarmCacheForOverlay by currentNoteViewModel.alarmManager.recurringAlarmCache.observeAsState(emptyMap())
     // The alarm being viewed/edited in the dialog (set when tapping a directive)
     var alarmDialogAlarm by remember { mutableStateOf<Alarm?>(null) }
     val alarmDialogExistingAlarm = alarmDialogAlarm
     var alarmDialogInitialMode by remember { mutableStateOf(AlarmDialogMode.INSTANCE) }
     // The directive text that was tapped to open the dialog (for directive switching after save)
     var tappedDirectiveText by remember { mutableStateOf<String?>(null) }
-    val alarmDialogRecurrenceConfig by currentNoteViewModel.recurrenceConfig.observeAsState()
-    val alarmDialogRecurringAlarm by currentNoteViewModel.recurringAlarm.observeAsState()
+    val alarmDialogRecurrenceConfig by currentNoteViewModel.alarmManager.recurrenceConfig.observeAsState()
+    val alarmDialogRecurringAlarm by currentNoteViewModel.alarmManager.recurringAlarm.observeAsState()
 
     // Sibling instances for recurring alarm navigation in the dialog
     var alarmDialogSiblings by remember { mutableStateOf<List<Alarm>>(emptyList()) }
     val alarmDialogRecurringId = alarmDialogExistingAlarm?.recurringAlarmId
     LaunchedEffect(alarmDialogRecurringId, showAlarmDialog) {
         alarmDialogSiblings = if (showAlarmDialog && alarmDialogRecurringId != null) {
-            currentNoteViewModel.getInstancesForRecurring(alarmDialogRecurringId)
+            currentNoteViewModel.alarmManager.getInstancesForRecurring(alarmDialogRecurringId)
         } else {
             emptyList()
         }
@@ -348,15 +348,15 @@ fun CurrentNoteScreen(
         schedulingWarning = schedulingWarning,
         redoRollbackWarning = redoRollbackWarning,
         saveWarning = saveWarning,
-        onClearSaveWarning = { currentNoteViewModel.clearSaveWarning() },
+        onClearSaveWarning = { currentNoteViewModel.directiveManager.clearSaveWarning() },
         onClearSaveError = { currentNoteViewModel.clearSaveError() },
         onClearLoadError = { currentNoteViewModel.clearLoadError() },
         onClearTabsError = { recentTabsViewModel.clearError() },
-        onClearAlarmError = { currentNoteViewModel.clearAlarmError() },
-        onClearAlarmPermissionWarning = { currentNoteViewModel.clearAlarmPermissionWarning() },
-        onClearNotificationPermissionWarning = { currentNoteViewModel.clearNotificationPermissionWarning() },
-        onClearSchedulingWarning = { currentNoteViewModel.clearSchedulingWarning() },
-        onClearRedoRollbackWarning = { currentNoteViewModel.clearRedoRollbackWarning() },
+        onClearAlarmError = { currentNoteViewModel.alarmManager.clearAlarmError() },
+        onClearAlarmPermissionWarning = { currentNoteViewModel.alarmManager.clearAlarmPermissionWarning() },
+        onClearNotificationPermissionWarning = { currentNoteViewModel.alarmManager.clearNotificationPermissionWarning() },
+        onClearSchedulingWarning = { currentNoteViewModel.alarmManager.clearSchedulingWarning() },
+        onClearRedoRollbackWarning = { currentNoteViewModel.alarmManager.clearRedoRollbackWarning() },
         showAlarmDialog = showAlarmDialog,
         alarmDialogLineContent = alarmDialogLineContent,
         alarmDialogExistingAlarm = alarmDialogExistingAlarm,
@@ -367,7 +367,7 @@ fun CurrentNoteScreen(
         onAlarmSave = { dueTime, stages ->
             val existing = alarmDialogExistingAlarm
             if (existing != null) {
-                currentNoteViewModel.updateAlarm(existing, dueTime, stages)
+                currentNoteViewModel.alarmManager.updateAlarm(existing, dueTime, stages)
                 // Non-recurring save: switch [recurringAlarm(...)] → [alarm(...)]
                 switchDirectiveIfNeeded(AlarmSymbolUtils.alarmDirective(existing.id))
             } else {
@@ -377,7 +377,7 @@ fun CurrentNoteScreen(
         onAlarmSaveRecurring = { dueTime, stages, recurrenceConfig ->
             val existing = alarmDialogExistingAlarm
             if (existing != null) {
-                currentNoteViewModel.updateRecurringAlarm(existing, dueTime, stages, recurrenceConfig)
+                currentNoteViewModel.alarmManager.updateRecurringAlarm(existing, dueTime, stages, recurrenceConfig)
                 // Recurring save: switch [alarm(...)] → [recurringAlarm(...)]
                 val recurringId = existing.recurringAlarmId
                 if (recurringId != null) {
@@ -389,22 +389,22 @@ fun CurrentNoteScreen(
         },
         onAlarmSaveInstance = alarmDialogRecurringAlarm?.let { recurring ->
             { alarm, dueTime, stages, alsoUpdateRecurrence ->
-                currentNoteViewModel.updateInstanceTimes(alarm, dueTime, stages, alsoUpdateRecurrence)
+                currentNoteViewModel.alarmManager.updateInstanceTimes(alarm, dueTime, stages, alsoUpdateRecurrence)
                 // Instance save on recurring: switch [alarm(...)] → [recurringAlarm(...)]
                 switchDirectiveIfNeeded(AlarmSymbolUtils.recurringAlarmDirective(recurring.id))
             }
         },
         onAlarmSaveRecurrenceTemplate = alarmDialogRecurringAlarm?.let { recurring ->
             { recId, dueTime, stages, config, alsoUpdateInstances ->
-                currentNoteViewModel.updateRecurrenceTemplate(recId, dueTime, stages, config, alsoUpdateInstances)
+                currentNoteViewModel.alarmManager.updateRecurrenceTemplate(recId, dueTime, stages, config, alsoUpdateInstances)
                 // Recurrence template save: switch [alarm(...)] → [recurringAlarm(...)]
                 switchDirectiveIfNeeded(AlarmSymbolUtils.recurringAlarmDirective(recurring.id))
             }
         },
-        onAlarmMarkDone = alarmDialogExistingAlarm?.let { alarm -> { currentNoteViewModel.markAlarmDone(alarm.id) } },
-        onAlarmMarkCancelled = alarmDialogExistingAlarm?.let { alarm -> { currentNoteViewModel.cancelAlarm(alarm.id) } },
-        onAlarmReactivate = alarmDialogExistingAlarm?.let { alarm -> { currentNoteViewModel.reactivateAlarm(alarm.id) } },
-        onAlarmDelete = alarmDialogExistingAlarm?.let { alarm -> { currentNoteViewModel.deleteAlarmPermanently(alarm.id) } },
+        onAlarmMarkDone = alarmDialogExistingAlarm?.let { alarm -> { currentNoteViewModel.alarmManager.markAlarmDone(alarm.id) } },
+        onAlarmMarkCancelled = alarmDialogExistingAlarm?.let { alarm -> { currentNoteViewModel.alarmManager.cancelAlarm(alarm.id) } },
+        onAlarmReactivate = alarmDialogExistingAlarm?.let { alarm -> { currentNoteViewModel.alarmManager.reactivateAlarm(alarm.id) } },
+        onAlarmDelete = alarmDialogExistingAlarm?.let { alarm -> { currentNoteViewModel.alarmManager.deleteAlarmPermanently(alarm.id) } },
         onAlarmNavigatePrevious = if (alarmDialogRecurringId != null) {{
             val idx = alarmDialogSiblings.indexOfFirst { it.id == alarmDialogExistingAlarm?.id }
             if (idx > 0) alarmDialogAlarm = alarmDialogSiblings[idx - 1]
@@ -421,9 +421,9 @@ fun CurrentNoteScreen(
             alarmDialogAlarm = null
             alarmDialogInitialMode = AlarmDialogMode.INSTANCE
             tappedDirectiveText = null
-            currentNoteViewModel.fetchRecurrenceConfig(null)
+            currentNoteViewModel.alarmManager.fetchRecurrenceConfig(null)
         },
-        onFetchRecurrenceConfig = { currentNoteViewModel.fetchRecurrenceConfig(it) }
+        onFetchRecurrenceConfig = { currentNoteViewModel.alarmManager.fetchRecurrenceConfig(it) }
     )
 
     // Clipboard HTML formatting
@@ -439,7 +439,7 @@ fun CurrentNoteScreen(
             val oldBracketCount = oldText.count { it == ']' }
             val newBracketCount = newValue.text.count { it == ']' }
             if (newBracketCount > oldBracketCount) {
-                currentNoteViewModel.bumpDirectiveCacheGeneration()
+                currentNoteViewModel.directiveManager.bumpDirectiveCacheGeneration()
             }
         }
     }
@@ -555,14 +555,14 @@ fun CurrentNoteScreen(
                                     if (tapInfo.recurringAlarmId != null) {
                                         tappedDirectiveText = AlarmSymbolUtils.recurringAlarmDirective(tapInfo.recurringAlarmId)
                                         alarmDialogInitialMode = AlarmDialogMode.RECURRENCE
-                                        currentNoteViewModel.fetchRecurringAlarmInstance(tapInfo.recurringAlarmId) { alarm ->
+                                        currentNoteViewModel.alarmManager.fetchRecurringAlarmInstance(tapInfo.recurringAlarmId) { alarm ->
                                             alarmDialogAlarm = alarm
                                             showAlarmDialog = true
                                         }
                                     } else if (tapInfo.alarmId != null) {
                                         tappedDirectiveText = AlarmSymbolUtils.alarmDirective(tapInfo.alarmId)
                                         alarmDialogInitialMode = AlarmDialogMode.INSTANCE
-                                        currentNoteViewModel.fetchAlarmById(tapInfo.alarmId) { alarm ->
+                                        currentNoteViewModel.alarmManager.fetchAlarmById(tapInfo.alarmId) { alarm ->
                                             alarmDialogAlarm = alarm
                                             showAlarmDialog = true
                                         }
@@ -577,7 +577,7 @@ fun CurrentNoteScreen(
                         showCompleted = showCompleted,
                         symbolOverlaysProvider = { lineIndex ->
                             val lineContent = editorState.lines.getOrNull(lineIndex)?.content ?: ""
-                            currentNoteViewModel.getSymbolOverlays(lineIndex, lineContent, alarmCacheForOverlay, recurringAlarmCacheForOverlay)
+                            currentNoteViewModel.alarmManager.getSymbolOverlays(lineContent, alarmCacheForOverlay, recurringAlarmCacheForOverlay)
                         },
                         modifier = Modifier.weight(1f)
                     )
@@ -752,7 +752,7 @@ private fun DataLoadingEffects(
                 if (storeContent == null || storeContent == session.originalContent || sessionContent == storeContent) {
                     // NoteStore hasn't changed since the session started, or matches session — safe to save
                     if (storeContent != sessionContent) {
-                        currentNoteViewModel.saveInlineNoteContent(
+                        currentNoteViewModel.directiveManager.saveInlineNoteContent(
                             noteId = session.noteId,
                             newContent = sessionContent
                         )
@@ -799,9 +799,9 @@ private fun DataLoadingEffects(
 
     // Re-execute directives when notes cache is refreshed
     LaunchedEffect(Unit) {
-        currentNoteViewModel.notesCacheRefreshed.collect {
+        currentNoteViewModel.directiveManager.notesCacheRefreshed.collect {
             if (userContent.isNotEmpty()) {
-                currentNoteViewModel.bumpDirectiveCacheGeneration()
+                currentNoteViewModel.directiveManager.bumpDirectiveCacheGeneration()
             }
         }
     }
@@ -945,8 +945,8 @@ private fun ContentSyncEffects(
             }
             currentNoteViewModel.saveContent(editorState.text, editorState.lines.map { it.noteIds })
             // Immediately render the new alarm icon (without waiting for snapshot reload)
-            currentNoteViewModel.bumpDirectiveCacheGeneration()
-            currentNoteViewModel.clearAlarmCreatedEvent()
+            currentNoteViewModel.directiveManager.bumpDirectiveCacheGeneration()
+            currentNoteViewModel.alarmManager.clearAlarmCreatedEvent()
         }
     }
 }
@@ -965,7 +965,7 @@ private fun DirectiveMutationEffect(
     onMarkUnsaved: () -> Unit,
 ) {
     DisposableEffect(currentNoteViewModel, controller) {
-        currentNoteViewModel.onEditorContentMutated = { noteId, newContent, mutationType, alreadyPersisted, appendedText ->
+        currentNoteViewModel.directiveManager.onEditorContentMutated = { noteId, newContent, mutationType, alreadyPersisted, appendedText ->
             if (noteId == currentNoteId) {
                 val updatedContent = when (mutationType) {
                     MutationType.CONTENT_CHANGED -> {
@@ -991,7 +991,7 @@ private fun DirectiveMutationEffect(
             }
         }
         onDispose {
-            currentNoteViewModel.onEditorContentMutated = null
+            currentNoteViewModel.directiveManager.onEditorContentMutated = null
         }
     }
 }
@@ -1025,28 +1025,28 @@ private fun NoteStatusBar(
         canUndo = canUndo,
         canRedo = canRedo,
         onUndoClick = {
-            val expandedHashes = currentNoteViewModel.getExpandedDirectiveHashes()
+            val expandedHashes = currentNoteViewModel.directiveManager.getExpandedDirectiveHashes()
             controller.commitUndoState()
             val snapshot = controller.undo()
             if (snapshot != null) {
                 onContentChanged(editorState.text)
                 onMarkUnsaved()
-                currentNoteViewModel.restoreExpandedDirectiveHashes(expandedHashes)
+                currentNoteViewModel.directiveManager.restoreExpandedDirectiveHashes(expandedHashes)
                 snapshot.createdAlarm?.let { alarm ->
-                    currentNoteViewModel.deleteAlarmPermanently(alarm.id)
+                    currentNoteViewModel.alarmManager.deleteAlarmPermanently(alarm.id)
                 }
             }
         },
         onRedoClick = {
-            val expandedHashes = currentNoteViewModel.getExpandedDirectiveHashes()
+            val expandedHashes = currentNoteViewModel.directiveManager.getExpandedDirectiveHashes()
             controller.commitUndoState()
             val snapshot = controller.redo()
             if (snapshot != null) {
                 onContentChanged(editorState.text)
                 onMarkUnsaved()
-                currentNoteViewModel.restoreExpandedDirectiveHashes(expandedHashes)
+                currentNoteViewModel.directiveManager.restoreExpandedDirectiveHashes(expandedHashes)
                 snapshot.createdAlarm?.let { alarm ->
-                    currentNoteViewModel.recreateAlarm(
+                    currentNoteViewModel.alarmManager.recreateAlarm(
                         alarmSnapshot = alarm,
                         onAlarmCreated = { newId ->
                             controller.updateLastUndoAlarmId(newId)
@@ -1064,7 +1064,7 @@ private fun NoteStatusBar(
                             val rollbackSnapshot = controller.undo()
                             val rollbackSucceeded = rollbackSnapshot != null
                             if (rollbackSucceeded) onContentChanged(editorState.text)
-                            currentNoteViewModel.showRedoRollbackWarning(rollbackSucceeded, errorMessage)
+                            currentNoteViewModel.alarmManager.showRedoRollbackWarning(rollbackSucceeded, errorMessage)
                         }
                     )
                 }

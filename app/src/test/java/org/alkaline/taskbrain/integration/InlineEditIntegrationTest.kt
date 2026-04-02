@@ -227,11 +227,11 @@ Poofgttt,,, and!! Works? Editing a line
         advanceUntilIdle()
 
         println("\n=== After loading note ===")
-        val initialResults = viewModel.computeDirectiveResults(hostNoteContent)
+        val initialResults = viewModel.directiveManager.computeDirectiveResults(hostNoteContent)
         println("Initial computeDirectiveResults: ${initialResults.size} entries")
 
         // USER ACTION 2: Start inline edit session (user taps on view to edit)
-        viewModel.startInlineEditSession(viewedNoteId)
+        viewModel.directiveManager.startInlineEditSession(viewedNoteId)
         println("\n=== Started inline edit session ===")
 
         // USER ACTION 3: Save inline edit (user taps out)
@@ -242,24 +242,24 @@ Poofgttt,,, and!! Works? Editing a line
         var sessionActiveAtOnSuccess = false
         var sessionActiveAtRefreshComplete = false
 
-        viewModel.saveInlineNoteContent(
+        viewModel.directiveManager.saveInlineNoteContent(
             noteId = viewedNoteId,
             newContent = newContent,
             onSuccess = {
                 saveSucceeded = true
 
                 // Check if session is still active (should be with the fix)
-                sessionActiveAtOnSuccess = viewModel.isInlineEditSessionActive()
+                sessionActiveAtOnSuccess = viewModel.directiveManager.isInlineEditSessionActive()
                 println("Session active at onSuccess: $sessionActiveAtOnSuccess")
 
                 // USER ACTION 4: Call forceRefreshAllDirectives with callback
                 // (like CurrentNoteScreen now does with the fix)
-                viewModel.forceRefreshAllDirectives {
-                    sessionActiveAtRefreshComplete = viewModel.isInlineEditSessionActive()
+                viewModel.directiveManager.forceRefreshAllDirectives {
+                    sessionActiveAtRefreshComplete = viewModel.directiveManager.isInlineEditSessionActive()
                     println("Session active at refresh complete: $sessionActiveAtRefreshComplete")
 
                     // Now end the session (like the fixed code does)
-                    viewModel.endInlineEditSession()
+                    viewModel.directiveManager.endInlineEditSession()
                     println("Session ended in refresh callback")
                 }
             }
@@ -290,7 +290,7 @@ Poofgttt,,, and!! Works? Editing a line
         // After everything completes, session should be ended
         assertFalse(
             "Session should be ended after refresh callback.",
-            viewModel.isInlineEditSessionActive()
+            viewModel.directiveManager.isInlineEditSessionActive()
         )
     }
 }

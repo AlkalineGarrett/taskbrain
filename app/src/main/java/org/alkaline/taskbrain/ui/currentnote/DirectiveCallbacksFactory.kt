@@ -24,7 +24,7 @@ fun rememberDirectiveCallbacks(
 ): DirectiveCallbacks = remember(editorState, controller, currentNoteViewModel) {
     DirectiveCallbacks(
         onDirectiveTap = { _, sourceText ->
-            currentNoteViewModel.toggleDirectiveCollapsed(sourceText)
+            currentNoteViewModel.directiveManager.toggleDirectiveCollapsed(sourceText)
         },
         onViewDirectiveConfirm = { lineIndex, _, sourceText, newText ->
             handleDirectiveConfirm(
@@ -34,7 +34,7 @@ fun rememberDirectiveCallbacks(
             )
         },
         onViewDirectiveCancel = { lineIndex, _, sourceText ->
-            currentNoteViewModel.toggleDirectiveCollapsed(sourceText)
+            currentNoteViewModel.directiveManager.toggleDirectiveCollapsed(sourceText)
             moveCursorToEndOfDirective(editorState, controller, lineIndex, sourceText)
         },
         onViewDirectiveRefresh = { lineIndex, _, sourceText, newText ->
@@ -45,7 +45,7 @@ fun rememberDirectiveCallbacks(
             )
         },
         onViewNoteTap = { _, noteId, noteContent ->
-            currentNoteViewModel.saveInlineNoteContent(
+            currentNoteViewModel.directiveManager.saveInlineNoteContent(
                 noteId = noteId,
                 newContent = noteContent,
                 onSuccess = {
@@ -55,7 +55,7 @@ fun rememberDirectiveCallbacks(
             )
         },
         onViewEditDirective = { _, sourceText ->
-            currentNoteViewModel.toggleDirectiveCollapsed(sourceText)
+            currentNoteViewModel.directiveManager.toggleDirectiveCollapsed(sourceText)
         },
     )
 }
@@ -71,7 +71,7 @@ fun rememberButtonCallbacks(
 ): ButtonCallbacks = remember(currentNoteViewModel) {
     ButtonCallbacks(
         onClick = { directiveKey, buttonVal, sourceText ->
-            currentNoteViewModel.executeButton(directiveKey, buttonVal, sourceText)
+            currentNoteViewModel.directiveManager.executeButton(directiveKey, buttonVal, sourceText)
         },
         executionStates = executionStates,
         errors = errors,
@@ -98,16 +98,16 @@ private fun handleDirectiveConfirm(
         controller.confirmDirectiveEdit(lineIndex, startOffset, endOffset, newText)
         onContentChanged(editorState.text)
         onMarkUnsaved()
-        viewModel.bumpDirectiveCacheGeneration()
+        viewModel.directiveManager.bumpDirectiveCacheGeneration()
 
         val cursorPos = startOffset + newText.length
         val prefixLength = editorState.lines.getOrNull(lineIndex)?.prefix?.length ?: 0
         controller.setCursor(lineIndex, prefixLength + cursorPos)
 
-        viewModel.confirmDirective(newText)
+        viewModel.directiveManager.confirmDirective(newText)
     } else if (startOffset >= 0) {
         moveCursorToEndOfDirective(editorState, controller, lineIndex, sourceText)
-        viewModel.confirmDirective(sourceText)
+        viewModel.directiveManager.confirmDirective(sourceText)
     }
 }
 
@@ -129,10 +129,10 @@ private fun handleDirectiveRefresh(
         controller.confirmDirectiveEdit(lineIndex, startOffset, endOffset, newText)
         onContentChanged(editorState.text)
         onMarkUnsaved()
-        viewModel.bumpDirectiveCacheGeneration()
-        viewModel.refreshDirective(newText)
+        viewModel.directiveManager.bumpDirectiveCacheGeneration()
+        viewModel.directiveManager.refreshDirective(newText)
     } else {
-        viewModel.refreshDirective(sourceText)
+        viewModel.directiveManager.refreshDirective(sourceText)
     }
 }
 
