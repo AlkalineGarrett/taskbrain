@@ -205,7 +205,7 @@ function ViewNoteSection({
   const handleSave = useCallback(async () => {
     const s = sessionRef.current
     if (!onSave || !s || !s.isDirty) return
-    const content = s.getText()
+    const content = s.sortAndGetText()
     lastSavedContentRef.current = content
     setSaveError(null)
     try {
@@ -230,7 +230,7 @@ function ViewNoteSection({
       const s = sessionRef.current
       const save = onSaveRef.current
       if (save && s?.isDirty) {
-        void save(s.getText()).catch((err) => {
+        void save(s.sortAndGetText()).catch((err) => {
           const msg = err instanceof Error ? err.message : SAVE_ERROR_BANNER
           try { sessionStorage.setItem(PENDING_VIEW_SAVE_ERROR_KEY, JSON.stringify({ noteId, message: msg })) } catch { /* ignore */ }
         })
@@ -267,7 +267,7 @@ function ViewNoteSection({
     // Always save dirty content on blur
     const s = sessionRef.current
     if (s?.isDirty && onSave) {
-      void onSave(s.getText()).catch(() => { /* handled by unmount fallback */ })
+      void onSave(s.sortAndGetText()).catch(() => { /* handled by unmount fallback */ })
     }
     // Only deactivate if this section's session is still the active one —
     // a sibling ViewNoteSection may have already activated its own session.

@@ -239,6 +239,40 @@ class SelectionCoordinatorTest {
         assertFalse(parentState.hasSelection)
     }
 
+    // ==================== Focus Guard Version ====================
+
+    @Test
+    fun `focusGuardVersion starts at zero`() {
+        assertEquals(0, coordinator.focusGuardVersion)
+    }
+
+    @Test
+    fun `focusGuardVersion increments on each withFocusGuard call`() {
+        coordinator.withFocusGuard { }
+        assertEquals(1, coordinator.focusGuardVersion)
+        coordinator.withFocusGuard { }
+        assertEquals(2, coordinator.focusGuardVersion)
+    }
+
+    @Test
+    fun `focusGuardVersion increments even if action throws`() {
+        try {
+            coordinator.withFocusGuard { throw RuntimeException("test") }
+        } catch (_: RuntimeException) {}
+        assertEquals(1, coordinator.focusGuardVersion)
+    }
+
+    @Test
+    fun `focusGuardVersion increments once per nested call`() {
+        coordinator.withFocusGuard {
+            assertEquals(1, coordinator.focusGuardVersion)
+            coordinator.withFocusGuard {
+                assertEquals(2, coordinator.focusGuardVersion)
+            }
+        }
+        assertEquals(2, coordinator.focusGuardVersion)
+    }
+
     // ==================== Fallback behavior ====================
 
     @Test

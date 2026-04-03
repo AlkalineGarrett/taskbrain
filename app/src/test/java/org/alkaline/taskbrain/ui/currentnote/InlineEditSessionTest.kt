@@ -1,5 +1,6 @@
 package org.alkaline.taskbrain.ui.currentnote
 
+import org.alkaline.taskbrain.ui.currentnote.util.LinePrefixes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -151,6 +152,74 @@ class InlineEditSessionTest {
         assertTrue(session.isCollapsingDirective)
         session.clearCollapsingFlag()
         assertFalse(session.isCollapsingDirective)
+    }
+
+    // --- sortCompletedToBottom via controller ---
+
+    @Test
+    fun `sort via controller reorders checked lines and permutes noteIds`() {
+        val session = createSession(
+            content = "Title\n${LinePrefixes.CHECKBOX_CHECKED}done\n${LinePrefixes.CHECKBOX_UNCHECKED}todo"
+        )
+        session.editorState.lines[0].noteIds = listOf("title-id")
+        session.editorState.lines[1].noteIds = listOf("done-id")
+        session.editorState.lines[2].noteIds = listOf("todo-id")
+
+        val changed = session.controller.sortCompletedToBottom()
+
+        assertTrue(changed)
+        assertEquals("${LinePrefixes.CHECKBOX_UNCHECKED}todo", session.editorState.lines[1].text)
+        assertEquals(listOf("todo-id"), session.editorState.lines[1].noteIds)
+        assertEquals("${LinePrefixes.CHECKBOX_CHECKED}done", session.editorState.lines[2].text)
+        assertEquals(listOf("done-id"), session.editorState.lines[2].noteIds)
+    }
+
+    @Test
+    fun `sort then currentContent reflects sorted order`() {
+        val session = createSession(
+            content = "Title\n${LinePrefixes.CHECKBOX_CHECKED}done\n${LinePrefixes.CHECKBOX_UNCHECKED}todo"
+        )
+
+        session.controller.sortCompletedToBottom()
+
+        assertEquals(
+            "Title\n${LinePrefixes.CHECKBOX_UNCHECKED}todo\n${LinePrefixes.CHECKBOX_CHECKED}done",
+            session.currentContent
+        )
+    }
+
+    @Test
+    fun `sort makes session dirty when order changes`() {
+        val original = "Title\n${LinePrefixes.CHECKBOX_CHECKED}done\n${LinePrefixes.CHECKBOX_UNCHECKED}todo"
+        val session = createSession(content = original)
+        assertFalse(session.isDirty)
+
+        session.controller.sortCompletedToBottom()
+
+        assertTrue(session.isDirty)
+    }
+
+    // --- noteId resolution for alarm creation ---
+
+    @Test
+    fun `line noteIds are accessible for alarm noteId resolution`() {
+        val session = createSession(content = "Parent\n\tChild line")
+        session.editorState.lines[0].noteIds = listOf("parent-id")
+        session.editorState.lines[1].noteIds = listOf("child-id")
+
+        // Simulates resolveInlineNoteId logic
+        val noteIdForLine1 = session.editorState.lines[1].noteIds.firstOrNull()
+        assertEquals("child-id", noteIdForLine1)
+    }
+
+    @Test
+    fun `line with empty noteIds falls back to session noteId`() {
+        val session = createSession(noteId = "fallback-note", content = "Line without noteId")
+        assertTrue(session.editorState.lines[0].noteIds.isEmpty())
+
+        // Simulates resolveInlineNoteId fallback
+        val noteId = session.editorState.lines[0].noteIds.firstOrNull() ?: session.noteId
+        assertEquals("fallback-note", noteId)
     }
 }
 

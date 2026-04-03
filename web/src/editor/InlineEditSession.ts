@@ -72,4 +72,15 @@ export class InlineEditSession {
     }
     return texts.join('\n')
   }
+
+  /**
+   * Sorts completed checkboxes to bottom via the editor controller
+   * (permuting noteIds and editor metadata) and returns the serialized content.
+   * This is the inline equivalent of the main editor's save-time sort.
+   * All save paths should call this instead of getText() directly.
+   */
+  sortAndGetText(): string {
+    this.controller.sortCompletedToBottom()
+    return this.getText()
+  }
 }

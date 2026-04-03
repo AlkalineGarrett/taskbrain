@@ -198,9 +198,8 @@ fun CurrentNoteScreen(
         }
         inlineEditState.onDirectiveEditConfirm = { _, _, _, _ ->
             inlineEditState.activeSession?.let { session ->
-                currentNoteViewModel.directiveManager.saveInlineNoteContent(
-                    noteId = session.noteId,
-                    newContent = session.currentContent,
+                currentNoteViewModel.directiveManager.saveInlineEditSession(
+                    session = session,
                     onSuccess = {
                         session.markSaved()
                         recentTabsViewModel.invalidateCache(session.noteId)
@@ -243,6 +242,9 @@ fun CurrentNoteScreen(
     var showAlarmDialog by remember { mutableStateOf(false) }
     var alarmDialogLineContent by remember { mutableStateOf("") }
     var alarmDialogLineIndex by remember { mutableStateOf<Int?>(null) }
+    // Capture the inline session at dialog-open time so alarm save routes correctly
+    // even if the session changes while the dialog is open.
+    var alarmDialogInlineSession by remember { mutableStateOf<InlineEditSession?>(null) }
     val alarmCacheForOverlay by currentNoteViewModel.alarmManager.alarmCache.observeAsState(emptyMap())
     val recurringAlarmCacheForOverlay by currentNoteViewModel.alarmManager.recurringAlarmCache.observeAsState(emptyMap())
     // The alarm being viewed/edited in the dialog (set when tapping a directive)
@@ -303,6 +305,7 @@ fun CurrentNoteScreen(
         isNoteDeleted = isNoteDeleted,
         editorState = editorState,
         controller = controller,
+        inlineEditState = inlineEditState,
         currentNoteViewModel = currentNoteViewModel,
         recentTabsViewModel = recentTabsViewModel,
         onContentChanged = { updateContent(it) },
@@ -371,7 +374,7 @@ fun CurrentNoteScreen(
                 // Non-recurring save: switch [recurringAlarm(...)] → [alarm(...)]
                 switchDirectiveIfNeeded(AlarmSymbolUtils.alarmDirective(existing.id))
             } else {
-                currentNoteViewModel.saveAndCreateAlarm(userContent, alarmDialogLineContent, alarmDialogLineIndex, dueTime, stages)
+                currentNoteViewModel.saveAndCreateAlarm(userContent, alarmDialogLineContent, alarmDialogLineIndex, dueTime, stages, inlineSession = alarmDialogInlineSession)
             }
         },
         onAlarmSaveRecurring = { dueTime, stages, recurrenceConfig ->
@@ -384,7 +387,7 @@ fun CurrentNoteScreen(
                     switchDirectiveIfNeeded(AlarmSymbolUtils.recurringAlarmDirective(recurringId))
                 }
             } else {
-                currentNoteViewModel.saveAndCreateRecurringAlarm(userContent, alarmDialogLineContent, alarmDialogLineIndex, dueTime, stages, recurrenceConfig)
+                currentNoteViewModel.saveAndCreateRecurringAlarm(userContent, alarmDialogLineContent, alarmDialogLineIndex, dueTime, stages, recurrenceConfig, inlineSession = alarmDialogInlineSession)
             }
         },
         onAlarmSaveInstance = alarmDialogRecurringAlarm?.let { recurring ->
@@ -418,6 +421,7 @@ fun CurrentNoteScreen(
         onAlarmDismiss = {
             showAlarmDialog = false
             alarmDialogLineIndex = null
+            alarmDialogInlineSession = null
             alarmDialogAlarm = null
             alarmDialogInitialMode = AlarmDialogMode.INSTANCE
             tappedDirectiveText = null
@@ -481,6 +485,7 @@ fun CurrentNoteScreen(
             editorState = editorState,
             controller = controller,
             currentNoteViewModel = currentNoteViewModel,
+            inlineEditState = inlineEditState,
             onContentChanged = { updateContent(it) },
             onMarkUnsaved = { isSaved = false },
             showCompleted = showCompleted,
@@ -621,18 +626,19 @@ fun CurrentNoteScreen(
             isPasteEnabled = (isMainContentFocused || inlineEditState.isActive) &&
                 !(inlineEditState.activeSession?.editorState?.hasSelection ?: editorState.hasSelection),
             onAddAlarm = {
-                if (!inlineEditState.isActive) {
-                    controller.commitUndoState(continueEditing = true)
-                    val lineContent = editorState.currentLine?.text ?: ""
-                    alarmDialogLineContent = TextLineUtils.trimLineForAlarm(lineContent)
-                    alarmDialogLineIndex = editorState.focusedLineIndex
-                    alarmDialogAlarm = null
-                    alarmDialogInitialMode = AlarmDialogMode.INSTANCE
-                    tappedDirectiveText = null
-                    showAlarmDialog = true
-                }
+                val activeState = coordinator.activeState
+                activeController.commitUndoState(continueEditing = true)
+                val lineContent = activeState.currentLine?.text ?: ""
+                alarmDialogLineContent = TextLineUtils.trimLineForAlarm(lineContent)
+                alarmDialogLineIndex = activeState.focusedLineIndex
+                alarmDialogInlineSession = if (inlineEditState.isActive) inlineEditState.activeSession else null
+                alarmDialogAlarm = null
+                alarmDialogInitialMode = AlarmDialogMode.INSTANCE
+                tappedDirectiveText = null
+                showAlarmDialog = true
             },
-            isAlarmEnabled = isMainContentFocused && !editorState.hasSelection && !inlineEditState.isActive
+            isAlarmEnabled = (isMainContentFocused || inlineEditState.isActive) &&
+                !coordinator.activeState.hasSelection
         )
 
         if (agentCommandEnabled) {
@@ -752,10 +758,7 @@ private fun DataLoadingEffects(
                 if (storeContent == null || storeContent == session.originalContent || sessionContent == storeContent) {
                     // NoteStore hasn't changed since the session started, or matches session — safe to save
                     if (storeContent != sessionContent) {
-                        currentNoteViewModel.directiveManager.saveInlineNoteContent(
-                            noteId = session.noteId,
-                            newContent = sessionContent
-                        )
+                        currentNoteViewModel.directiveManager.saveInlineEditSession(session)
                     }
                 }
                 // else: NoteStore has different content from a direct edit — don't overwrite
@@ -893,6 +896,7 @@ private fun ContentSyncEffects(
     isNoteDeleted: Boolean,
     editorState: EditorState,
     controller: EditorController,
+    inlineEditState: InlineEditState,
     currentNoteViewModel: CurrentNoteViewModel,
     recentTabsViewModel: RecentTabsViewModel,
     onContentChanged: (String) -> Unit,
@@ -938,12 +942,28 @@ private fun ContentSyncEffects(
             } else {
                 AlarmSymbolUtils.alarmDirective(event.alarmId)
             }
-            controller.insertAtEndOfCurrentLine(directive)
-            onContentChanged(editorState.text)
-            event.alarmSnapshot?.let { snapshot ->
-                controller.recordAlarmCreation(snapshot)
+
+            val session = inlineEditState.activeSession
+            val targetNoteId = event.alarmSnapshot?.noteId
+            val isInlineAlarm = session != null && targetNoteId == session.noteId
+
+            if (isInlineAlarm) {
+                // Insert directive in the inline editor and save the inline note
+                session!!.controller.insertAtEndOfCurrentLine(directive)
+                event.alarmSnapshot?.let { snapshot ->
+                    session.controller.recordAlarmCreation(snapshot)
+                }
+                currentNoteViewModel.directiveManager.saveInlineEditSession(session)
+            } else {
+                // Insert directive in the main editor and save the parent note
+                controller.insertAtEndOfCurrentLine(directive)
+                onContentChanged(editorState.text)
+                event.alarmSnapshot?.let { snapshot ->
+                    controller.recordAlarmCreation(snapshot)
+                }
+                currentNoteViewModel.saveContent(editorState.text, editorState.lines.map { it.noteIds })
             }
-            currentNoteViewModel.saveContent(editorState.text, editorState.lines.map { it.noteIds })
+
             // Immediately render the new alarm icon (without waiting for snapshot reload)
             currentNoteViewModel.directiveManager.bumpDirectiveCacheGeneration()
             currentNoteViewModel.alarmManager.clearAlarmCreatedEvent()
@@ -1009,6 +1029,7 @@ private fun NoteStatusBar(
     editorState: EditorState,
     controller: EditorController,
     currentNoteViewModel: CurrentNoteViewModel,
+    inlineEditState: InlineEditState?,
     onContentChanged: (String) -> Unit,
     onMarkUnsaved: () -> Unit,
     showCompleted: Boolean,
@@ -1018,6 +1039,12 @@ private fun NoteStatusBar(
     StatusBar(
         isSaved = isSaved,
         onSaveClick = {
+            // Save inline edit session if one is active and dirty
+            inlineEditState?.activeSession?.let { session ->
+                if (session.isDirty) {
+                    currentNoteViewModel.directiveManager.saveInlineEditSession(session)
+                }
+            }
             controller.sortCompletedToBottom()
             controller.commitUndoState(continueEditing = true)
             currentNoteViewModel.saveContent(editorState.text, editorState.lines.map { it.noteIds })

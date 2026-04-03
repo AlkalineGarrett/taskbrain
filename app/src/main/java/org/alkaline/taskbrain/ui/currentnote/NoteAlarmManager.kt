@@ -245,7 +245,16 @@ class NoteAlarmManager(
         stages: List<AlarmStage>
     ) {
         val noteId = if (lineIndex != null) getNoteIdForLine(lineIndex) else getCurrentNoteId()
+        createAlarmForNote(noteId, lineContent, lineIndex, dueTime, stages)
+    }
 
+    internal suspend fun createAlarmForNote(
+        noteId: String,
+        lineContent: String,
+        lineIndex: Int?,
+        dueTime: Timestamp?,
+        stages: List<AlarmStage>
+    ) {
         val alarm = Alarm(
             noteId = noteId,
             lineContent = lineContent,
@@ -286,7 +295,17 @@ class NoteAlarmManager(
         recurrenceConfig: RecurrenceConfig
     ) {
         val noteId = if (lineIndex != null) getNoteIdForLine(lineIndex) else getCurrentNoteId()
+        createRecurringAlarmForNote(noteId, lineContent, lineIndex, dueTime, stages, recurrenceConfig)
+    }
 
+    internal suspend fun createRecurringAlarmForNote(
+        noteId: String,
+        lineContent: String,
+        lineIndex: Int?,
+        dueTime: Timestamp?,
+        stages: List<AlarmStage>,
+        recurrenceConfig: RecurrenceConfig
+    ) {
         val recurringAlarm = RecurrenceConfigMapper.toRecurringAlarm(
             noteId = noteId,
             lineContent = lineContent,

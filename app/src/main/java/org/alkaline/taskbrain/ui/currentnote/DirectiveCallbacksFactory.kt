@@ -45,14 +45,24 @@ fun rememberDirectiveCallbacks(
             )
         },
         onViewNoteTap = { _, noteId, noteContent ->
-            currentNoteViewModel.directiveManager.saveInlineNoteContent(
-                noteId = noteId,
-                newContent = noteContent,
-                onSuccess = {
-                    inlineEditState.activeSession?.markSaved()
-                    recentTabsViewModel.invalidateCache(noteId)
-                }
-            )
+            val session = inlineEditState.activeSession
+            if (session != null && session.noteId == noteId) {
+                currentNoteViewModel.directiveManager.saveInlineEditSession(
+                    session = session,
+                    onSuccess = {
+                        session.markSaved()
+                        recentTabsViewModel.invalidateCache(noteId)
+                    }
+                )
+            } else {
+                currentNoteViewModel.directiveManager.saveInlineNoteContent(
+                    noteId = noteId,
+                    newContent = noteContent,
+                    onSuccess = {
+                        recentTabsViewModel.invalidateCache(noteId)
+                    }
+                )
+            }
         },
         onViewEditDirective = { _, sourceText ->
             currentNoteViewModel.directiveManager.toggleDirectiveCollapsed(sourceText)

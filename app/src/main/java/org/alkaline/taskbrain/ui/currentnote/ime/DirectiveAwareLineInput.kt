@@ -1008,9 +1008,8 @@ private fun EditableViewNoteSection(
                     hasBeenFocused = true
                 } else if (hasBeenFocused && isEditing && isActiveSession) {
                     val active = inlineEditState?.activeSession
-                    val coordinator = selectionCoordinator
                     val hasExpandedDirective = active?.expandedDirectiveKey != null
-                    if (!hasExpandedDirective && coordinator?.isFocusGuarded != true) {
+                    if (!hasExpandedDirective && selectionCoordinator?.isFocusGuarded != true) {
                         if (active?.isDirty == true) {
                             onSave(active.currentContent)
                         } else {
@@ -1091,6 +1090,10 @@ private fun InlineNoteEditor(
     // Track line count at last focus gain — if it changed when focus is lost,
     // it's a structural edit (backspace/enter), not the user leaving the editor.
     var lineCountAtFocusGain by remember { mutableIntStateOf(lineCount) }
+    // Track focus guard version at last focus gain — if it changed when focus is lost,
+    // a guarded operation (e.g. line move) caused transient focus loss.
+    val selectionCoordinator = LocalSelectionCoordinator.current
+    var guardVersionAtFocusGain by remember { mutableIntStateOf(selectionCoordinator?.focusGuardVersion ?: 0) }
 
     // Track line layouts for gutter hit testing (must be observable state for LineGutter recomposition)
     val lineLayouts = remember { mutableStateListOf<LineLayoutInfo>() }
@@ -1184,11 +1187,13 @@ private fun InlineNoteEditor(
                 isEditorFocused = focusState.hasFocus
                 if (focusState.hasFocus && !wasFocused) {
                     lineCountAtFocusGain = editorState.lines.size
+                    guardVersionAtFocusGain = selectionCoordinator?.focusGuardVersion ?: 0
                     onFocusChanged(true)
                 } else if (!focusState.hasFocus && wasFocused) {
                     val lineCountChanged = editorState.lines.size != lineCountAtFocusGain
-                    if (pendingFocusLineIndex >= 0 || lineCountChanged) {
-                        // Focus transfer between lines or structural edit — ignore
+                    val guardVersionChanged = (selectionCoordinator?.focusGuardVersion ?: 0) != guardVersionAtFocusGain
+                    if (pendingFocusLineIndex >= 0 || lineCountChanged || guardVersionChanged) {
+                        // Suppress transient focus loss from line moves or guarded operations
                     } else {
                         onFocusChanged(false)
                     }

@@ -617,8 +617,31 @@ class NoteDirectiveManager(
     fun isInlineEditSessionActive(): Boolean = editSessionManager.isEditSessionActive()
 
     /**
+     * Saves an inline edit session, sorting completed checkboxes to bottom first.
+     *
+     * This is the inline-note equivalent of the main editor's save-button path:
+     * it calls [EditorController.sortCompletedToBottom] on the session's controller
+     * (which permutes noteIds and editor metadata alongside the text) and then
+     * delegates to [saveInlineNoteContent] for the actual Firestore write.
+     *
+     * All inline save call sites that have an active [InlineEditSession] should
+     * use this method so sorting is consolidated in one place.
+     */
+    fun saveInlineEditSession(
+        session: InlineEditSession,
+        onSuccess: (() -> Unit)? = null,
+        onFailure: ((Throwable) -> Unit)? = null
+    ) {
+        session.controller.sortCompletedToBottom()
+        saveInlineNoteContent(session.noteId, session.currentContent, onSuccess, onFailure)
+    }
+
+    /**
      * Saves the content of a note edited inline within a view directive.
      * This is a simple content update that doesn't affect child note structure.
+     *
+     * Prefer [saveInlineEditSession] when an [InlineEditSession] is available,
+     * as it handles sorting completed checkboxes to bottom via the editor controller.
      *
      * The method:
      * 1. Starts an inline edit session to suppress cache invalidation during edit

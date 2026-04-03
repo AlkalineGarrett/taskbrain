@@ -35,6 +35,15 @@ class SelectionCoordinator(
     /** Focus guard depth — when > 0, focus loss should be ignored. */
     private var focusGuardDepth: Int = 0
 
+    /**
+     * Monotonically increasing counter, incremented each time [withFocusGuard] is called.
+     * Inline editors record this value on focus gain and compare on focus loss —
+     * if it changed, a guarded operation (e.g. line move) happened while focused,
+     * so transient focus loss should be suppressed.
+     */
+    var focusGuardVersion: Int = 0
+        private set
+
     // ===== Active editor properties =====
 
     val activeController: EditorController
@@ -94,8 +103,19 @@ class SelectionCoordinator(
 
     val isFocusGuarded: Boolean get() = focusGuardDepth > 0
 
+    /**
+     * Run [action] with the focus guard active. The guard suppresses focus-loss
+     * reactions (e.g. auto-save in inline editors) during the operation.
+     *
+     * The guard is decremented immediately when the action completes (in `finally`).
+     * Surviving async focus callbacks that arrive after the guard is released is
+     * handled by [focusGuardVersion]: inline editors record the version on focus
+     * gain and compare on focus loss — if it changed, a guarded operation happened
+     * while focused, so transient focus loss is suppressed.
+     */
     fun <T> withFocusGuard(action: () -> T): T {
         focusGuardDepth++
+        focusGuardVersion++
         try {
             return action()
         } finally {

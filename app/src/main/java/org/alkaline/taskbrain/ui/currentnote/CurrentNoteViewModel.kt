@@ -542,30 +542,28 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     }
 
     /**
-     * Saves content if needed, then creates a new alarm for the current line.
-     * Coordinator: persists note first so line tracker has correct note IDs.
+     * Saves the note, then creates a new alarm for the specified line.
+     * For the main editor, saves via [persistCurrentNote]; for inline editors,
+     * saves via [NoteDirectiveManager.saveInlineEditSession].
      */
     fun saveAndCreateAlarm(
         content: String,
         lineContent: String,
         lineIndex: Int? = null,
         dueTime: Timestamp?,
-        stages: List<AlarmStage> = Alarm.DEFAULT_STAGES
+        stages: List<AlarmStage> = Alarm.DEFAULT_STAGES,
+        inlineSession: InlineEditSession? = null
     ) {
-        val savedNoteId = currentNoteId
         viewModelScope.launch {
-            updateTrackedLines(content)
-            val saveResult = persistCurrentNote(savedNoteId, currentNoteLines)
-
-            saveResult.onSuccess {
-                alarmManager.createAlarmInternal(lineContent, lineIndex, dueTime, stages)
-            }
+            val noteId = saveAndResolveNoteId(content, lineIndex, inlineSession)
+            alarmManager.createAlarmForNote(noteId, lineContent, lineIndex, dueTime, stages)
         }
     }
 
     /**
-     * Saves content, then creates a recurring alarm template and its first instance.
-     * Coordinator: persists note first so line tracker has correct note IDs.
+     * Saves the note, then creates a recurring alarm for the specified line.
+     * For the main editor, saves via [persistCurrentNote]; for inline editors,
+     * saves via [NoteDirectiveManager.saveInlineEditSession].
      */
     fun saveAndCreateRecurringAlarm(
         content: String,
@@ -573,18 +571,32 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         lineIndex: Int? = null,
         dueTime: Timestamp?,
         stages: List<AlarmStage> = Alarm.DEFAULT_STAGES,
-        recurrenceConfig: RecurrenceConfig
+        recurrenceConfig: RecurrenceConfig,
+        inlineSession: InlineEditSession? = null
     ) {
-        val savedNoteId = currentNoteId
         viewModelScope.launch {
-            updateTrackedLines(content)
-            val saveResult = persistCurrentNote(savedNoteId, currentNoteLines)
+            val noteId = saveAndResolveNoteId(content, lineIndex, inlineSession)
+            alarmManager.createRecurringAlarmForNote(noteId, lineContent, lineIndex, dueTime, stages, recurrenceConfig)
+        }
+    }
 
-            saveResult.onSuccess {
-                alarmManager.createRecurringAlarmInternal(
-                    lineContent, lineIndex, dueTime, stages, recurrenceConfig
-                )
-            }
+    /**
+     * Saves the note and resolves the noteId for the given line.
+     * Routes to the inline or main editor save path based on [inlineSession].
+     */
+    private suspend fun saveAndResolveNoteId(
+        content: String,
+        lineIndex: Int?,
+        inlineSession: InlineEditSession?
+    ): String {
+        return if (inlineSession != null) {
+            directiveManager.saveInlineEditSession(inlineSession)
+            val line = lineIndex?.let { inlineSession.editorState.lines.getOrNull(it) }
+            line?.noteIds?.firstOrNull() ?: inlineSession.noteId
+        } else {
+            updateTrackedLines(content)
+            persistCurrentNote(currentNoteId, currentNoteLines)
+            if (lineIndex != null) getNoteIdForLine(lineIndex) else currentNoteId
         }
     }
 

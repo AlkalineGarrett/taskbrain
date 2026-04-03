@@ -111,4 +111,59 @@ class EditorControllerTest {
         assertFalse(controller.recentlyCheckedIndices.contains(1))
         assertTrue(controller.recentlyCheckedIndices.contains(2))
     }
+
+    // ==================== sortCompletedToBottom ====================
+
+    @Test
+    fun `sortCompletedToBottom moves checked lines after unchecked`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.updateFromText("Title\n${LinePrefixes.CHECKBOX_CHECKED}done\n${LinePrefixes.CHECKBOX_UNCHECKED}todo")
+
+        val changed = controller.sortCompletedToBottom()
+
+        assertTrue(changed)
+        assertEquals("Title", state.lines[0].text)
+        assertEquals("${LinePrefixes.CHECKBOX_UNCHECKED}todo", state.lines[1].text)
+        assertEquals("${LinePrefixes.CHECKBOX_CHECKED}done", state.lines[2].text)
+    }
+
+    @Test
+    fun `sortCompletedToBottom returns false when already sorted`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.updateFromText("Title\n${LinePrefixes.CHECKBOX_UNCHECKED}todo\n${LinePrefixes.CHECKBOX_CHECKED}done")
+
+        assertFalse(controller.sortCompletedToBottom())
+    }
+
+    @Test
+    fun `sortCompletedToBottom permutes noteIds alongside text`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.updateFromText("Title\n${LinePrefixes.CHECKBOX_CHECKED}done\n${LinePrefixes.CHECKBOX_UNCHECKED}todo")
+        state.lines[0].noteIds = listOf("title-id")
+        state.lines[1].noteIds = listOf("done-id")
+        state.lines[2].noteIds = listOf("todo-id")
+
+        controller.sortCompletedToBottom()
+
+        assertEquals(listOf("title-id"), state.lines[0].noteIds)
+        assertEquals(listOf("todo-id"), state.lines[1].noteIds)
+        assertEquals(listOf("done-id"), state.lines[2].noteIds)
+    }
+
+    @Test
+    fun `sortCompletedToBottom clears recentlyCheckedIndices`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.updateFromText("Title\n${LinePrefixes.CHECKBOX_UNCHECKED}a")
+        state.focusedLineIndex = 1
+        controller.toggleCheckbox()
+        assertTrue(controller.recentlyCheckedIndices.isNotEmpty())
+
+        controller.sortCompletedToBottom()
+
+        assertTrue(controller.recentlyCheckedIndices.isEmpty())
+    }
 }
