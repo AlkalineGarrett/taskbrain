@@ -136,11 +136,9 @@ fun CurrentNoteScreen(
     @Suppress("KotlinConstantConditions")
     val agentCommandEnabled = BuildConfig.AGENT_COMMAND_ENABLED
 
-    // Wrapper for user edits. Updates userContent and marks the note hot
-    // (so Firestore echo doesn't overwrite it).
     fun updateContent(newContent: String) {
         userContent = newContent
-        displayedNoteId?.let { NoteStore.markHot(it) }
+        currentNoteViewModel.dirty = true
     }
 
     // Push editor content to NoteStore on tab switch only (not every keystroke —
@@ -179,8 +177,6 @@ fun CurrentNoteScreen(
     // The CachedDirectiveExecutor's L1 cache makes cache hits instant.
     // directiveCacheGeneration triggers recomposition after async cache fills (cold start).
     val directiveResults = remember(userContent, directiveCacheGeneration, displayedNoteId) {
-        // NoteStore already has the latest content (pushed on every keystroke via updateContent).
-        // No flush needed — just compute directives.
         currentNoteViewModel.directiveManager.computeDirectiveResults(userContent, displayedNoteId)
     }
 
@@ -795,30 +791,6 @@ private fun DataLoadingEffects(
         }
     }
 
-    // Detect external changes (e.g., from web app) via NoteStore's collection listener.
-    // Only applies when the editor is clean and the change is truly external (not our own save).
-    LaunchedEffect(displayedNoteId) {
-        if (displayedNoteId == null) return@LaunchedEffect
-        var isFirstEmission = true
-        NoteStore.notes.collect {
-            if (isFirstEmission) { isFirstEmission = false; return@collect }
-            if (!isSaved) return@collect // local edits take priority
-            // Skip if a save is in progress or just completed for THIS note — the
-            // NoteStore change is from our own save, not an external source. Without
-            // this, the save's NoteStore update triggers editorState.updateFromText
-            // which resets the cursor. Only block for the note being saved, not for
-            // a different note's save that completed after a tab switch.
-            val currentSaveStatus = currentNoteViewModel.saveStatus.value
-            if (currentSaveStatus is SaveStatus.Saving) return@collect
-            if (currentSaveStatus is SaveStatus.Success && currentSaveStatus.noteId == displayedNoteId) return@collect
-            val storeNote = NoteStore.getNoteById(displayedNoteId) ?: return@collect
-            if (storeNote.content != userContent) {
-                onContentLoaded(storeNote.content)
-                editorState.updateFromText(storeNote.content)
-            }
-        }
-    }
-
     // Re-execute directives when notes cache is refreshed
     LaunchedEffect(Unit) {
         currentNoteViewModel.directiveManager.notesCacheRefreshed.collect {
@@ -842,7 +814,8 @@ private fun DataLoadingEffects(
                 // which means undo can restore to empty state and LOSE USER DATA.
                 if (loadStatus.lineNoteIds.isNotEmpty()) {
                     val noteLines = loadedContent.split("\n").zip(loadStatus.lineNoteIds)
-                    editorState.initFromNoteLines(noteLines)
+                    // Preserve cursor on external reloads (editor already has content)
+                    editorState.initFromNoteLines(noteLines, preserveCursor = editorState.lines.isNotEmpty())
                 } else {
                     editorState.updateFromText(loadedContent)
                 }

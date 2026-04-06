@@ -18,6 +18,12 @@ import { reconstructNoteContent } from './NoteReconstruction'
 import { flattenTreeToLines } from './NoteTree'
 import { performSimilarityMatching } from '@/editor/ContentSimilarity'
 
+export interface NoteLoadResult {
+  lines: NoteLine[]
+  isDeleted: boolean
+  showCompleted: boolean
+}
+
 /**
  * Repository for managing composable notes in Firestore.
  *
@@ -77,25 +83,30 @@ export class NoteRepository {
   // ── Load operations ─────────────────────────────────────────────────
 
   /**
-   * Loads a note and its descendants, returning a flat list of tab-prefixed NoteLines.
+   * Loads a note and its descendants, returning lines plus note metadata.
    */
-  async loadNoteWithChildren(noteId: string): Promise<NoteLine[]> {
+  async loadNoteWithChildren(noteId: string): Promise<NoteLoadResult> {
     return this.logged('loadNoteWithChildren', async () => {
       this.requireUserId()
       const docSnap = await getDoc(this.noteRef(noteId))
 
       if (!docSnap.exists()) {
-        return [{ content: '', noteId }]
+        return { lines: [{ content: '', noteId }], isDeleted: false, showCompleted: true }
       }
 
       const note = noteFromFirestore(docSnap.id, docSnap.data())
       const allLines = await this.loadNoteLines(note)
 
       // Append empty line for typing, unless note is a single empty line
-      if (allLines.length === 1 && allLines[0]!.content === '') {
-        return allLines
+      const lines = allLines.length === 1 && allLines[0]!.content === ''
+        ? allLines
+        : [...allLines, { content: '', noteId: null }]
+
+      return {
+        lines,
+        isDeleted: note.state === 'deleted',
+        showCompleted: note.showCompleted ?? true,
       }
-      return [...allLines, { content: '', noteId: null }]
     })
   }
 
@@ -344,7 +355,7 @@ export class NoteRepository {
       this.requireUserId()
 
       // Load existing structure (tree-aware)
-      const existingLines = await this.loadNoteWithChildren(noteId)
+      const { lines: existingLines } = await this.loadNoteWithChildren(noteId)
       const existingLinesNoTrailing =
         existingLines.length > 1 && existingLines[existingLines.length - 1]!.content === ''
           ? existingLines.slice(0, -1)

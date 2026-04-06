@@ -61,6 +61,11 @@ class LineState(
         noteIdContentLengths = emptyList()
     }
 
+    /** Sets cursor position without modifying text or noteIdContentLengths. */
+    fun moveCursor(pos: Int) {
+        cursorPosition = pos.coerceIn(0, text.length)
+    }
+
     /**
      * Updates the full line text and cursor position.
      */

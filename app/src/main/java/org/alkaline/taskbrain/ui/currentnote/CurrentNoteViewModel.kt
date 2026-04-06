@@ -100,6 +100,14 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     private val _showCompleted = MutableLiveData<Boolean>(true)
     val showCompleted: LiveData<Boolean> = _showCompleted
 
+    /**
+     * Whether the editor has unsaved changes. Set by the Screen on edits,
+     * cleared on save. Used by the changedNoteIds handler to skip external
+     * reloads during active editing (same role as dirtyRef on web).
+     */
+    @Volatile
+    var dirty: Boolean = false
+
 
     init {
         directiveManager.start()
@@ -132,17 +140,38 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         directiveManager.addSessionEndListener {
             directiveManager.bumpDirectiveCacheGeneration()
         }
-    }
+        // React to external changes (e.g., web app edits).
+        // Two responsibilities:
+        // 1. Reload editor if the current note's content changed
+        // 2. Invalidate directive cache if any displayed note changed (for view directives)
+        viewModelScope.launch {
+            NoteStore.changedNoteIds.collect { changedIds ->
+                val noteId = currentNoteId.takeIf { it.isNotEmpty() } ?: return@collect
 
-    // External change detection is handled by NoteStore's collection listener
-    // with hot/cool protection. No per-note snapshot listener needed.
+                directiveManager.invalidateDirectivesForChangedNotes(changedIds)
+
+                // Reload editor if the current note itself changed
+                if (noteId !in changedIds) return@collect
+                if (dirty) return@collect
+
+                val storeNote = NoteStore.getNoteById(noteId) ?: return@collect
+                val currentContent = (_loadStatus.value as? LoadStatus.Success)?.content ?: return@collect
+                if (storeNote.content == currentContent) return@collect
+
+                val storeLines = NoteStore.getNoteLinesById(noteId) ?: return@collect
+                applyNoteContent(
+                    noteId, storeNote.content, storeLines,
+                    isDeleted = storeNote.state == "deleted",
+                    showCompleted = storeNote.showCompleted,
+                )
+            }
+        }
+    }
 
     /**
      * Saves the current note to Firestore.
      * On success, handles post-save bookkeeping: updating noteIds,
      * notifying the UI, and syncing alarm line content.
-     * NoteStore's hot/cool mechanism prevents the collection listener from
-     * overwriting local state with a stale Firestore echo.
      */
     private suspend fun persistCurrentNote(noteId: String, trackedLines: List<NoteLine>): Result<Map<Int, String>> {
         val result = repository.saveNoteWithChildren(noteId, trackedLines)
@@ -207,6 +236,28 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     /** Extracts noteIds from NoteLines for passing to EditorState via LoadStatus. */
     private fun noteLinesToNoteIds(lines: List<NoteLine>): List<List<String>> =
         lines.map { listOfNotNull(it.noteId) }
+
+    /**
+     * Apply resolved note data to the editor: update metadata, lines, load status, and directives.
+     * All load paths (dirty cache, NoteStore, Firestore, external change) converge here.
+     */
+    private fun applyNoteContent(
+        noteId: String,
+        content: String,
+        lines: List<NoteLine>,
+        isDeleted: Boolean,
+        showCompleted: Boolean,
+    ) {
+        _isNoteDeleted.value = isDeleted
+        _showCompleted.value = showCompleted
+        currentNoteLines = lines
+        _loadStatus.value = LoadStatus.Success(noteId, content, noteLinesToNoteIds(lines))
+        viewModelScope.launch {
+            repository.updateLastAccessed(noteId)
+            directiveManager.loadDirectiveResults(content, noteId)
+        }
+        alarmManager.loadAlarmStates()
+    }
 
     /** Returns per-line noteIds for directive key generation. */
     fun getLineNoteIds(): List<String?> =
@@ -289,25 +340,21 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         if (cached != null && cached.isDirty) {
             val fullContent = cached.noteLines.joinToString("\n") { it.content }
             Log.d(TAG, "loadContent: restoring dirty editor cache for $noteId")
-            _isNoteDeleted.value = cached.isDeleted
-            _showCompleted.value = NoteStore.getNoteById(noteId)?.showCompleted ?: true
-            currentNoteLines = cached.noteLines
-            _loadStatus.value = LoadStatus.Success(noteId, fullContent, noteLinesToNoteIds(cached.noteLines))
-            viewModelScope.launch {
-                repository.updateLastAccessed(noteId)
-                directiveManager.loadDirectiveResults(fullContent, noteId)
-            }
-            alarmManager.loadAlarmStates()
+            applyNoteContent(
+                noteId, fullContent, cached.noteLines,
+                isDeleted = cached.isDeleted,
+                showCompleted = NoteStore.getNoteById(noteId)?.showCompleted ?: true,
+            )
 
             // Background refresh for proper noteId mappings (the fire-and-forget save
             // may have created new child notes with IDs we don't have yet)
             viewModelScope.launch {
-                repository.loadNoteWithChildren(noteId).onSuccess { freshLines ->
+                repository.loadNoteWithChildren(noteId).onSuccess { result ->
                     if (noteId != currentNoteId) return@onSuccess
-                    val freshContent = freshLines.joinToString("\n") { it.content }
+                    val freshContent = result.lines.joinToString("\n") { it.content }
                     if (freshContent == fullContent) {
                         // Content matches — update noteId mappings without changing editor
-                        currentNoteLines = freshLines
+                        currentNoteLines = result.lines
                     }
                 }
             }
@@ -327,15 +374,11 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 NoteLine(content = line, noteId = if (index == 0) noteId else null)
             }
             Log.d(TAG, "loadContent: using NoteStore content for $noteId (${storeLines.size} lines, noteIds: ${storeLines.count { it.noteId != null }}/${storeLines.size})")
-            _isNoteDeleted.value = storeNote.state == "deleted"
-            _showCompleted.value = storeNote.showCompleted
-            currentNoteLines = storeLines
-            _loadStatus.value = LoadStatus.Success(noteId, content, noteLinesToNoteIds(storeLines))
-            viewModelScope.launch {
-                repository.updateLastAccessed(noteId)
-                directiveManager.loadDirectiveResults(content, noteId)
-            }
-            alarmManager.loadAlarmStates()
+            applyNoteContent(
+                noteId, content, storeLines,
+                isDeleted = storeNote.state == "deleted",
+                showCompleted = storeNote.showCompleted,
+            )
             return
         }
 
@@ -346,32 +389,11 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         _loadStatus.value = LoadStatus.Loading
 
         viewModelScope.launch {
-            // Load note metadata (deleted state + showCompleted)
-            repository.loadNoteById(noteId).fold(
-                onSuccess = { note ->
-                    _isNoteDeleted.value = note?.state == "deleted"
-                    _showCompleted.value = note?.showCompleted ?: true
-                },
-                onFailure = {
-                    _isNoteDeleted.value = false
-                    _showCompleted.value = true
-                }
-            )
-
-            // Update lastAccessedAt (fire-and-forget, doesn't block loading)
-            launch { repository.updateLastAccessed(noteId) }
-
             val result = repository.loadNoteWithChildren(noteId)
             result.fold(
-                onSuccess = { loadedLines ->
-                    currentNoteLines = loadedLines
+                onSuccess = { (loadedLines, isDeleted, showCompleted) ->
                     val fullContent = loadedLines.joinToString("\n") { it.content }
-                    _loadStatus.value = LoadStatus.Success(noteId, fullContent, noteLinesToNoteIds(loadedLines))
-
-                    // Load cached directive results and execute any missing directives
-                    directiveManager.loadDirectiveResults(fullContent)
-
-                    alarmManager.loadAlarmStates()
+                    applyNoteContent(noteId, fullContent, loadedLines, isDeleted, showCompleted)
                 },
                 onFailure = { e ->
                     if (isPermissionDenied(e)) {
@@ -609,9 +631,9 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         private const val TAG = "CurrentNoteViewModel"
     }
 
-    // Call this when content is manually edited or when a save completes
     fun markAsSaved() {
         _contentModified.value = false
+        dirty = false
     }
 
     fun clearSaveError() {
@@ -681,7 +703,7 @@ sealed class LoadStatus {
     data class Success(
         val noteId: String,
         val content: String,
-        val lineNoteIds: List<List<String>> = emptyList()
+        val lineNoteIds: List<List<String>> = emptyList(),
     ) : LoadStatus()
     data class Error(val throwable: Throwable) : LoadStatus()
 }

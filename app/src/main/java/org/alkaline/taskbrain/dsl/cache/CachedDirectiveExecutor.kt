@@ -334,18 +334,15 @@ class CachedDirectiveExecutor(
 
     /**
      * Invalidate cache for notes that changed.
-     * Call this after note saves.
      *
      * @param changedNoteIds IDs of notes that changed
      */
     fun invalidateForChangedNotes(changedNoteIds: Set<String>) {
         if (editSessionManager != null) {
-            // Use edit-aware invalidation
             for (noteId in changedNoteIds) {
                 editSessionManager.requestInvalidation(noteId, InvalidationReason.CONTENT_CHANGED)
             }
         } else {
-            // Direct invalidation
             for (noteId in changedNoteIds) {
                 cacheManager.clearNote(noteId)
             }

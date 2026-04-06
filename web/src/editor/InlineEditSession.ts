@@ -61,6 +61,11 @@ export class InlineEditSession {
     this.originalContent = savedContent ?? this.getText()
   }
 
+  /** Update the baseline content after an external change was applied to the EditorState. */
+  syncOriginalContent(content: string): void {
+    this.originalContent = content
+  }
+
   /**
    * Returns the serialized content, stripping the trailing empty line
    * that was added for editing (matches main editor save convention).

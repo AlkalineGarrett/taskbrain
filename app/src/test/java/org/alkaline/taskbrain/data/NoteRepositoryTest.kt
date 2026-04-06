@@ -109,7 +109,7 @@ class NoteRepositoryTest {
     fun `loadNoteWithChildren returns empty line when document does not exist`() = runTest {
         mockDocument("note_1", null)
 
-        val lines = repository.loadNoteWithChildren("note_1").getOrThrow()
+        val lines = repository.loadNoteWithChildren("note_1").getOrThrow().lines
 
         assertEquals(listOf(NoteLine("", "note_1")), lines)
     }
@@ -118,7 +118,7 @@ class NoteRepositoryTest {
     fun `loadNoteWithChildren does not add trailing empty line when note is single empty line`() = runTest {
         mockDocument("note_1", Note(content = "", containedNotes = emptyList()))
 
-        val lines = repository.loadNoteWithChildren("note_1").getOrThrow()
+        val lines = repository.loadNoteWithChildren("note_1").getOrThrow().lines
 
         assertEquals(1, lines.size)
         assertEquals("", lines[0].content)
@@ -129,7 +129,7 @@ class NoteRepositoryTest {
     fun `loadNoteWithChildren returns parent content with trailing empty line`() = runTest {
         mockDocument("note_1", Note(content = "Parent content", containedNotes = emptyList()))
 
-        val lines = repository.loadNoteWithChildren("note_1").getOrThrow()
+        val lines = repository.loadNoteWithChildren("note_1").getOrThrow().lines
 
         assertEquals(2, lines.size)
         assertEquals("Parent content", lines[0].content)
@@ -467,7 +467,7 @@ class NoteRepositoryTest {
             "c2" to Note(id = "c2", content = "Child 2", containedNotes = emptyList(), rootNoteId = "root"),
         ))
 
-        val lines = repository.loadNoteWithChildren("root").getOrThrow()
+        val lines = repository.loadNoteWithChildren("root").getOrThrow().lines
 
         assertEquals(4, lines.size)
         assertEquals(NoteLine("Root", "root"), lines[0])
@@ -488,7 +488,7 @@ class NoteRepositoryTest {
             "b" to Note(id = "b", content = "B", containedNotes = emptyList(), rootNoteId = "root"),
         ))
 
-        val lines = repository.loadNoteWithChildren("root").getOrThrow()
+        val lines = repository.loadNoteWithChildren("root").getOrThrow().lines
 
         assertEquals(4, lines.size)
         assertEquals(NoteLine("Root", "root"), lines[0])
@@ -509,7 +509,7 @@ class NoteRepositoryTest {
             "c2" to Note(id = "c2", content = "Dead", containedNotes = emptyList(), rootNoteId = "root", state = "deleted"),
         ))
 
-        val lines = repository.loadNoteWithChildren("root").getOrThrow()
+        val lines = repository.loadNoteWithChildren("root").getOrThrow().lines
 
         // Only c1 should appear (c2 is deleted)
         assertEquals(3, lines.size)

@@ -298,3 +298,111 @@ describe('EditorState indent/unindent with hidden lines', () => {
     expect(state.lines[2]!.text).toBe('b')
   })
 })
+
+describe('initFromNoteLines with preserveCursor', () => {
+  it('resets to line 0 when preserveCursor is false', () => {
+    const state = new EditorState()
+    state.initFromNoteLines([
+      { text: 'Line A', noteIds: ['a'] },
+      { text: 'Line B', noteIds: ['b'] },
+    ])
+    state.focusedLineIndex = 1
+
+    state.initFromNoteLines([
+      { text: 'Line A updated', noteIds: ['a'] },
+      { text: 'Line B updated', noteIds: ['b'] },
+    ], false)
+
+    expect(state.focusedLineIndex).toBe(0)
+  })
+
+  it('restores cursor to same noteId line', () => {
+    const state = new EditorState()
+    state.initFromNoteLines([
+      { text: 'Line A', noteIds: ['a'] },
+      { text: 'Line B', noteIds: ['b'] },
+      { text: 'Line C', noteIds: ['c'] },
+    ])
+    state.focusedLineIndex = 1
+    state.lines[1]!.cursorPosition = 3
+
+    state.initFromNoteLines([
+      { text: 'Line A updated', noteIds: ['a'] },
+      { text: 'Line B updated', noteIds: ['b'] },
+      { text: 'Line C updated', noteIds: ['c'] },
+    ], true)
+
+    expect(state.focusedLineIndex).toBe(1)
+    expect(state.lines[1]!.cursorPosition).toBe(3)
+  })
+
+  it('clamps cursor when line becomes shorter', () => {
+    const state = new EditorState()
+    state.initFromNoteLines([
+      { text: 'Short', noteIds: ['a'] },
+      { text: 'A longer line here', noteIds: ['b'] },
+    ])
+    state.focusedLineIndex = 1
+    state.lines[1]!.cursorPosition = 15
+
+    state.initFromNoteLines([
+      { text: 'Short', noteIds: ['a'] },
+      { text: 'Tiny', noteIds: ['b'] },
+    ], true)
+
+    expect(state.focusedLineIndex).toBe(1)
+    expect(state.lines[1]!.cursorPosition).toBe(4) // clamped to "Tiny".length
+  })
+
+  it('falls back to closest line when noteId disappears', () => {
+    const state = new EditorState()
+    state.initFromNoteLines([
+      { text: 'Line A', noteIds: ['a'] },
+      { text: 'Line B', noteIds: ['b'] },
+      { text: 'Line C', noteIds: ['c'] },
+    ])
+    state.focusedLineIndex = 2
+
+    state.initFromNoteLines([
+      { text: 'Line A', noteIds: ['a'] },
+      { text: 'Line B', noteIds: ['b'] },
+    ], true)
+
+    expect(state.focusedLineIndex).toBe(1) // clamped from 2 to last index
+  })
+
+  it('follows noteId when line moves position', () => {
+    const state = new EditorState()
+    state.initFromNoteLines([
+      { text: 'Line A', noteIds: ['a'] },
+      { text: 'Line B', noteIds: ['b'] },
+      { text: 'Line C', noteIds: ['c'] },
+    ])
+    state.focusedLineIndex = 0
+
+    state.initFromNoteLines([
+      { text: 'New line', noteIds: ['new'] },
+      { text: 'Line A', noteIds: ['a'] },
+      { text: 'Line B', noteIds: ['b'] },
+      { text: 'Line C', noteIds: ['c'] },
+    ], true)
+
+    expect(state.focusedLineIndex).toBe(1) // followed noteId 'a' to index 1
+  })
+
+  it('resets to 0 when previous line had no noteId', () => {
+    const state = new EditorState()
+    state.initFromNoteLines([
+      { text: 'Line A', noteIds: [] },
+      { text: 'Line B', noteIds: [] },
+    ])
+    state.focusedLineIndex = 1
+
+    state.initFromNoteLines([
+      { text: 'Updated A', noteIds: ['a'] },
+      { text: 'Updated B', noteIds: ['b'] },
+    ], true)
+
+    expect(state.focusedLineIndex).toBe(0)
+  })
+})

@@ -984,4 +984,158 @@ class EditorStateTest {
         assertEquals("• def", state.lines[1].text)
     }
 
+    // ==================== LineState.moveCursor ====================
+
+    @Test
+    fun `moveCursor sets cursor to valid position`() {
+        val line = LineState("hello", 0)
+        line.moveCursor(3)
+        assertEquals(3, line.cursorPosition)
+    }
+
+    @Test
+    fun `moveCursor clamps negative position to zero`() {
+        val line = LineState("hello", 3)
+        line.moveCursor(-5)
+        assertEquals(0, line.cursorPosition)
+    }
+
+    @Test
+    fun `moveCursor clamps position beyond text length`() {
+        val line = LineState("hi", 0)
+        line.moveCursor(100)
+        assertEquals(2, line.cursorPosition)
+    }
+
+    @Test
+    fun `moveCursor does not modify text or noteIdContentLengths`() {
+        val line = LineState("hello", 0, listOf("note1"))
+        line.noteIdContentLengths = listOf(5)
+        line.moveCursor(3)
+        assertEquals("hello", line.text)
+        assertEquals(listOf(5), line.noteIdContentLengths)
+        assertEquals(listOf("note1"), line.noteIds)
+    }
+
+    // ==================== initFromNoteLines with preserveCursor ====================
+
+    @Test
+    fun `initFromNoteLines without preserveCursor resets to line 0`() {
+        val state = EditorState()
+        state.initFromNoteLines(listOf(
+            "Line A" to listOf("a"),
+            "Line B" to listOf("b"),
+        ))
+        state.lines[1].moveCursor(3)
+        // Reinitialize without preserveCursor — focusedLineIndex should reset
+        state.initFromNoteLines(listOf(
+            "Line A updated" to listOf("a"),
+            "Line B updated" to listOf("b"),
+        ), preserveCursor = false)
+        assertEquals(0, state.focusedLineIndex)
+    }
+
+    @Test
+    fun `initFromNoteLines preserveCursor restores to same noteId line`() {
+        val state = EditorState()
+        state.initFromNoteLines(listOf(
+            "Line A" to listOf("a"),
+            "Line B" to listOf("b"),
+            "Line C" to listOf("c"),
+        ))
+        // Focus line B at position 3
+        state.focusedLineIndex = 1
+        state.lines[1].moveCursor(3)
+
+        // Reinitialize — line B still exists with same noteId
+        state.initFromNoteLines(listOf(
+            "Line A updated" to listOf("a"),
+            "Line B updated" to listOf("b"),
+            "Line C updated" to listOf("c"),
+        ), preserveCursor = true)
+
+        assertEquals(1, state.focusedLineIndex)
+        assertEquals(3, state.lines[1].cursorPosition)
+    }
+
+    @Test
+    fun `initFromNoteLines preserveCursor clamps position when line is shorter`() {
+        val state = EditorState()
+        state.initFromNoteLines(listOf(
+            "Short" to listOf("a"),
+            "A longer line here" to listOf("b"),
+        ))
+        state.focusedLineIndex = 1
+        state.lines[1].moveCursor(15)
+
+        // Line B becomes shorter
+        state.initFromNoteLines(listOf(
+            "Short" to listOf("a"),
+            "Tiny" to listOf("b"),
+        ), preserveCursor = true)
+
+        assertEquals(1, state.focusedLineIndex)
+        assertEquals(4, state.lines[1].cursorPosition) // clamped to "Tiny".length
+    }
+
+    @Test
+    fun `initFromNoteLines preserveCursor falls back when noteId disappears`() {
+        val state = EditorState()
+        state.initFromNoteLines(listOf(
+            "Line A" to listOf("a"),
+            "Line B" to listOf("b"),
+            "Line C" to listOf("c"),
+        ))
+        state.focusedLineIndex = 2 // focus on Line C
+
+        // Line C removed
+        state.initFromNoteLines(listOf(
+            "Line A" to listOf("a"),
+            "Line B" to listOf("b"),
+        ), preserveCursor = true)
+
+        // Should fall back to last line (index 1, clamped from 2)
+        assertEquals(1, state.focusedLineIndex)
+    }
+
+    @Test
+    fun `initFromNoteLines preserveCursor follows noteId when line moves`() {
+        val state = EditorState()
+        state.initFromNoteLines(listOf(
+            "Line A" to listOf("a"),
+            "Line B" to listOf("b"),
+            "Line C" to listOf("c"),
+        ))
+        state.focusedLineIndex = 0 // focus on Line A
+
+        // New line inserted before A — A moves to index 1
+        state.initFromNoteLines(listOf(
+            "New line" to listOf("new"),
+            "Line A" to listOf("a"),
+            "Line B" to listOf("b"),
+            "Line C" to listOf("c"),
+        ), preserveCursor = true)
+
+        assertEquals(1, state.focusedLineIndex) // followed noteId "a" to index 1
+    }
+
+    @Test
+    fun `initFromNoteLines preserveCursor with no previous noteId resets to 0`() {
+        val state = EditorState()
+        // Lines without noteIds
+        state.initFromNoteLines(listOf(
+            "Line A" to emptyList(),
+            "Line B" to emptyList(),
+        ))
+        state.focusedLineIndex = 1
+
+        state.initFromNoteLines(listOf(
+            "Updated A" to listOf("a"),
+            "Updated B" to listOf("b"),
+        ), preserveCursor = true)
+
+        // No previous noteId to match — falls back to 0
+        assertEquals(0, state.focusedLineIndex)
+    }
+
 }

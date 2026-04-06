@@ -202,11 +202,12 @@ Poofgttt,,, and!! Works? Editing a line
         }
         coEvery { mockRepository.loadNoteWithChildren(hostNoteId) } coAnswers {
             delay(loadDelayMs)
-            Result.success(hostNoteLines)
+            Result.success(NoteRepository.NoteLoadResult(
+                lines = hostNoteLines,
+                isDeleted = false,
+                showCompleted = true,
+            ))
         }
-
-        // Mock other repository methods
-        coEvery { mockRepository.loadNoteById(any()) } returns Result.success(null)
         coEvery { mockRepository.isNoteDeleted(any()) } returns Result.success(false)
         coEvery { mockRepository.updateLastAccessed(any()) } returns Result.success(Unit)
 

@@ -404,12 +404,31 @@ export class EditorState {
     }
   }
 
-  /** Initializes editor lines with noteIds from loaded note data. */
-  initFromNoteLines(noteLines: Array<{ text: string; noteIds: string[] }>): void {
+  /**
+   * Initializes editor lines with noteIds from loaded note data.
+   * @param preserveCursor If true, restores cursor to the same line (by noteId)
+   *   and position. Used for external change reloads.
+   */
+  initFromNoteLines(noteLines: Array<{ text: string; noteIds: string[] }>, preserveCursor = false): void {
+    const prevLineIndex = this.focusedLineIndex
+    const prevNoteId = this.lines[prevLineIndex]?.noteIds[0]
+    const prevCursorPos = this.lines[prevLineIndex]?.cursorPosition ?? 0
+
     this.lines = noteLines.map((nl) => new LineState(nl.text, undefined, nl.noteIds))
     this.parentNoteId = noteLines[0]?.noteIds[0] ?? ''
-    this.focusedLineIndex = 0
     this.clearSelection()
+
+    if (preserveCursor && prevNoteId) {
+      const restoredIndex = this.lines.findIndex((l) => l.noteIds[0] === prevNoteId)
+      if (restoredIndex >= 0) {
+        this.focusedLineIndex = restoredIndex
+        this.lines[restoredIndex]!.cursorPosition = Math.min(prevCursorPos, this.lines[restoredIndex]!.text.length)
+      } else {
+        this.focusedLineIndex = Math.min(prevLineIndex, this.lines.length - 1)
+      }
+    } else {
+      this.focusedLineIndex = 0
+    }
   }
 
   /** Updates noteIds on existing lines without disturbing editor state. */

@@ -970,10 +970,13 @@ private fun EditableViewNoteSection(
         }
     }
 
-    val session = remember(note.id, editContent) {
+    val isActiveSession = inlineEditState?.activeSession?.noteId == note.id
+
+    // Session is created once per note.id and updated in place on external changes.
+    // Never recreate on content changes — that orphans the focused line's IME connection,
+    // causing the documented rendering bug where the focused line displays empty text.
+    val session = remember(note.id) {
         val s = EditorState()
-        // Initialize with noteIds from the tree structure so the save path
-        // can use editor-tracked IDs directly (same pattern as main editor).
         val storeLines = NoteStore.getNoteLinesById(note.id)
         if (storeLines != null) {
             val noteLines = storeLines.map { nl -> nl.content to (nl.noteId?.let { listOf(it) } ?: emptyList()) }
@@ -981,13 +984,26 @@ private fun EditableViewNoteSection(
         } else {
             s.updateFromText(editContent)
         }
-        val c = EditorController(s)
         InlineEditSession(
             noteId = note.id,
             originalContent = editContent,
             editorState = s,
-            controller = c
+            controller = EditorController(s)
         ).also { inlineEditState?.viewSessions?.set(note.id, it) }
+    }
+
+    // Update existing session content in place on external changes (same pattern as
+    // main editor's initFromNoteLines). Skipped when the session has unsaved edits.
+    if (editContent != session.originalContent && !session.isDirty) {
+        val storeLines = NoteStore.getNoteLinesById(note.id)
+        if (storeLines != null) {
+            val noteLines = storeLines.map { nl -> nl.content to (nl.noteId?.let { listOf(it) } ?: emptyList()) }
+            session.editorState.initFromNoteLines(noteLines, preserveCursor = true)
+        } else {
+            session.editorState.updateFromText(editContent)
+        }
+        session.syncOriginalContent(editContent)
+        session.editorState.requestFocusUpdate()
     }
 
     // When editing starts, register the SAME session as active (no new session)
@@ -999,8 +1015,6 @@ private fun EditableViewNoteSection(
         }
         Unit
     }
-
-    val isActiveSession = inlineEditState?.activeSession?.noteId == note.id
 
     Box(modifier = modifier.fillMaxWidth()) {
         InlineNoteEditor(

@@ -47,31 +47,42 @@ class NoteRepository(
 
     // ── Load operations ─────────────────────────────────────────────────
 
+    data class NoteLoadResult(
+        val lines: List<NoteLine>,
+        val isDeleted: Boolean,
+        val showCompleted: Boolean,
+    )
+
     /**
-     * Loads a note and its descendants, returning a flat list of tab-prefixed NoteLines.
+     * Loads a note and its descendants, returning lines plus note metadata.
      * Queries descendants via rootNoteId and flattens the tree with tabs from depth.
      */
-    suspend fun loadNoteWithChildren(noteId: String): Result<List<NoteLine>> = runCatching {
+    suspend fun loadNoteWithChildren(noteId: String): Result<NoteLoadResult> = runCatching {
         withContext(Dispatchers.IO) {
             requireUserId()
             val document = noteRef(noteId).get().await()
+            val emptyResult = NoteLoadResult(listOf(NoteLine("", noteId)), isDeleted = false, showCompleted = true)
 
-            if (!document.exists()) {
-                return@withContext listOf(NoteLine("", noteId))
-            }
+            if (!document.exists()) return@withContext emptyResult
 
             val note = document.toObject(Note::class.java)?.copy(id = noteId)
-                ?: return@withContext listOf(NoteLine("", noteId))
+                ?: return@withContext emptyResult
 
             val allLines = loadNoteLines(note)
 
             // Append an empty line for user to type on, unless the note is already
             // a single empty line (new note case — the existing empty line suffices)
-            if (allLines.size == 1 && allLines[0].content.isEmpty()) {
+            val lines = if (allLines.size == 1 && allLines[0].content.isEmpty()) {
                 allLines
             } else {
                 allLines + NoteLine("", null)
             }
+
+            NoteLoadResult(
+                lines = lines,
+                isDeleted = note.state == "deleted",
+                showCompleted = note.showCompleted,
+            )
         }
     }.onFailure { Log.e(TAG, "Error loading note", it) }
 
@@ -363,7 +374,7 @@ class NoteRepository(
             requireUserId()
 
             // Load existing structure (tree-aware)
-            val existingLines = loadNoteWithChildren(noteId).getOrThrow()
+            val existingLines = loadNoteWithChildren(noteId).getOrThrow().lines
             // Remove trailing empty line that loadNoteWithChildren appends for the editor
             val existingLinesNoTrailing = if (existingLines.size > 1 && existingLines.last().content.isEmpty()) {
                 existingLines.dropLast(1)

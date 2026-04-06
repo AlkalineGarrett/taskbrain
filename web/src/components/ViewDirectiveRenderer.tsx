@@ -168,26 +168,30 @@ function ViewNoteSection({
     return sessionRef.current
   }, [note.id, note.content, lineNoteIds, notifyActiveChange])
 
-  // Sync with external content changes when not actively editing.
-  // Only trigger on note.content changes — NOT on isActiveHere changes.
-  // If isActiveHere were in deps, deactivation would null the session, force
-  // a new session with focusedLineIndex=0, and its focus effect would steal
-  // DOM focus from wherever the user just clicked.
-  //
-  // Skip recreation when the session already matches the new content. This
-  // avoids a noteId mismatch after blur-save: the optimistic update changes
-  // note.content to the full multi-line text while containedNotes still
-  // references old children, causing flattenTreeToLines to produce stale
-  // lineNoteIds that don't align with the new content.
+  // Sync external content changes into the existing session in place (same
+  // pattern as the main editor's initFromNoteLines). Never recreate the session
+  // — that orphans event handlers and loses cursor state.
+  // Skip when session has unsaved edits (isDirty) to avoid wiping user's work.
   useEffect(() => {
-    if (!isActiveHereRef.current) {
-      const s = sessionRef.current
-      if (s && s.getText() === note.content) return
-      sessionRef.current = null // Force recreate on next render
-      lastSavedContentRef.current = null
-      setRenderVersion(v => v + 1)
+    const s = sessionRef.current
+    if (!s || s.getText() === note.content) return
+    if (s.isDirty) return
+
+    const storeLines = noteStore.getNoteLinesById(note.id)
+    if (storeLines) {
+      const noteLines = storeLines.map((nl) => ({
+        text: nl.content,
+        noteIds: nl.noteId ? [nl.noteId] : [],
+      }))
+      s.editorState.initFromNoteLines(noteLines, true)
+    } else {
+      s.editorState.updateFromText(note.content)
     }
-  }, [note.content])
+    s.syncOriginalContent(note.content)
+    s.updateHiddenIndices()
+    s.editorState.requestFocusUpdate()
+    setRenderVersion(v => v + 1)
+  }, [note.content, note.id])
 
   // Check for save errors persisted from a previous unmount
   useEffect(() => {

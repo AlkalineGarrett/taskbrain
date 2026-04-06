@@ -50,6 +50,11 @@ class InlineEditSession(
         originalContent = editorState.text
     }
 
+    /** Update the baseline content after an external change was applied to the EditorState. */
+    fun syncOriginalContent(content: String) {
+        originalContent = content
+    }
+
     /**
      * Builds tracked lines (content + noteId) from editor state, ready for
      * saveNoteWithChildren. Mirrors the main editor's save path.

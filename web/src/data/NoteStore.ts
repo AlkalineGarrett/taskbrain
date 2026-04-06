@@ -33,6 +33,7 @@ export class NoteStore {
   private loadPromise: Promise<void> | null = null
   private unsubscribe: Unsubscribe | null = null
   private listeners = new Set<() => void>()
+  private changeListeners = new Set<(changedIds: Set<string>) => void>()
   private errorListeners = new Set<() => void>()
   private pendingSaves = new Map<string, Promise<unknown>>()
   private _error: string | null = null
@@ -44,6 +45,12 @@ export class NoteStore {
 
   getSnapshot = (): Note[] => {
     return this.reconstructedNotes
+  }
+
+  /** Subscribe to changed note IDs on each incremental snapshot. */
+  subscribeChangedNoteIds = (listener: (changedIds: Set<string>) => void): (() => void) => {
+    this.changeListeners.add(listener)
+    return () => this.changeListeners.delete(listener)
   }
 
   subscribeError = (listener: () => void): (() => void) => {
@@ -119,6 +126,7 @@ export class NoteStore {
 
         if (affectedRoots.size > 0) {
           this.rebuildAffected(affectedRoots)
+          this.emitChangedNoteIds(affectedRoots)
         }
       }
     }, (error) => {
@@ -254,6 +262,12 @@ export class NoteStore {
   private emitChange(): void {
     for (const listener of this.listeners) {
       listener()
+    }
+  }
+
+  private emitChangedNoteIds(changedIds: Set<string>): void {
+    for (const listener of this.changeListeners) {
+      listener(changedIds)
     }
   }
 

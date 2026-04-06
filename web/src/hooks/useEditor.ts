@@ -168,7 +168,7 @@ export function useEditor(noteId: string | undefined) {
 
       // Refresh tracked line IDs from Firestore (the fire-and-forget save
       // may have created new child notes with IDs we don't have yet)
-      void repo.loadNoteWithChildren(noteId).then((freshLines) => {
+      void repo.loadNoteWithChildren(noteId).then(({ lines: freshLines }) => {
         if (cancelled) return
         const freshContent = freshLines.map((l) => l.content).join('\n')
         const currentContent = editorState.lines.map((l) => l.text).join('\n')
@@ -191,14 +191,9 @@ export function useEditor(noteId: string | undefined) {
         setError(null)
         // Await any pending inline-edit saves for this note to avoid reading stale data
         await noteStore.awaitPendingSave(noteId)
-        const [lines, note] = await Promise.all([
-          repo.loadNoteWithChildren(noteId),
-          repo.loadNoteById(noteId),
-        ])
+        const { lines, showCompleted } = await repo.loadNoteWithChildren(noteId)
 
-        setShowCompleted(note?.showCompleted ?? true)
-        // If we had a clean cache entry, use its tracked lines for noteId mappings
-        // but content from Firestore (always fresh)
+        setShowCompleted(showCompleted)
         populateEditor(lines, false, false)
         setShowLoading(false)
 
@@ -217,21 +212,18 @@ export function useEditor(noteId: string | undefined) {
     return () => { cancelled = true }
   }, [noteId, editorState, controller, undoManager])
 
-  // Detect external changes via NoteStore's collection listener.
-  // When the store's content for the current note changes and the editor isn't dirty,
-  // reload the editor to show the external update.
-  const suppressStoreReloadRef = useRef(false)
+  // Detect external changes via NoteStore's changedNoteIds subscription.
+  // Only fires on incremental Firestore snapshots (never on first load),
+  // and provides the set of changed note IDs for targeted checking.
+  // Mirrors Android's NoteStore.changedNoteIds → applyNoteContent flow.
+  const savingRef = useRef(false)
   useEffect(() => {
     if (!noteId) return
-    // Suppress the first notification (initial load — editor already has this content)
-    suppressStoreReloadRef.current = true
 
-    const unsub = noteStore.subscribe(() => {
-      if (suppressStoreReloadRef.current) {
-        suppressStoreReloadRef.current = false
-        return
-      }
+    return noteStore.subscribeChangedNoteIds((changedIds) => {
+      if (!changedIds.has(noteId)) return
       if (dirtyRef.current) return
+      if (savingRef.current) return
 
       const storeNote = noteStore.getNoteById(noteId)
       if (!storeNote) return
@@ -239,36 +231,29 @@ export function useEditor(noteId: string | undefined) {
       const currentContent = editorState.lines.map((l) => l.text).join('\n')
       if (storeNote.content === currentContent) return
 
-      // External change detected — reload from Firestore for proper noteId mappings
-      void (async () => {
-        try {
-          const freshLines = await repo.loadNoteWithChildren(noteId)
-          const freshContent = freshLines.map((l) => l.content).join('\n')
-          if (freshContent === editorState.lines.map((l) => l.text).join('\n')) return
+      // External change detected — use NoteStore's in-memory tree for noteId mappings
+      const storeLines = noteStore.getNoteLinesById(noteId)
+      if (!storeLines) return
 
-          const noteLines = freshLines.map((l) => ({
-            text: l.content,
-            noteIds: l.noteId ? [l.noteId] : [],
-          }))
-          editorState.initFromNoteLines(noteLines)
-          editorState.requestFocusUpdate()
-          trackedLinesRef.current = freshLines
-          setDirty(false)
-          setRenderVersion((v) => v + 1)
-        } catch (e) {
-          console.error('NoteStore-triggered reload failed:', e)
-        }
-      })()
+      const noteLines = storeLines.map((l) => ({
+        text: l.content,
+        noteIds: l.noteId ? [l.noteId] : [],
+      }))
+      editorState.initFromNoteLines(noteLines, true)
+      editorState.requestFocusUpdate()
+      trackedLinesRef.current = storeLines
+      setShowCompleted(storeNote.showCompleted ?? true)
+      setDirty(false)
+      setRenderVersion((v) => v + 1)
+      void repo.updateLastAccessed(noteId)
     })
-
-    return unsub
   }, [noteId, editorState])
 
   // Core save logic — accepts noteId as parameter to avoid stale closure bugs
   const saveNoteById = useCallback(async (targetNoteId: string) => {
     try {
       setSaving(true)
-      suppressStoreReloadRef.current = true
+      savingRef.current = true
       controller.sortCompletedToBottom()
       controller.commitUndoState(true)
 
@@ -303,6 +288,7 @@ export function useEditor(noteId: string | undefined) {
       throw e // Re-throw so unmount/beforeunload callers can persist the error
     } finally {
       setSaving(false)
+      savingRef.current = false
     }
   }, [editorState, controller])
 
@@ -316,7 +302,6 @@ export function useEditor(noteId: string | undefined) {
     if (!noteId) return
     const newValue = !showCompleted
     setShowCompleted(newValue)
-    suppressStoreReloadRef.current = true
     try {
       await repo.updateShowCompleted(noteId, newValue)
     } catch (e) {

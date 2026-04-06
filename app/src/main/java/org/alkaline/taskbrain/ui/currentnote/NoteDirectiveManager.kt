@@ -140,6 +140,26 @@ class NoteDirectiveManager(
     }
 
     /**
+     * Invalidate directives affected by the given note changes and trigger recomposition.
+     *
+     * Two invalidation mechanisms work together:
+     * - [invalidateForChangedNotes]: eagerly clears cache entries for the changed notes themselves
+     * - [bumpDirectiveCacheGeneration]: forces [computeDirectiveResults] to re-run, where the
+     *   StalenessChecker detects cross-note staleness (e.g., note A's [view B] directive
+     *   is stale because note B changed). This lazy validation handles dependencies that
+     *   per-note clearing cannot reach.
+     *
+     * The generation bump MUST be unconditional — do not gate it on whether
+     * invalidateForChangedNotes found entries to clear. The per-note clear only handles
+     * direct entries; cross-note dependencies rely on the staleness check at lookup time,
+     * which only runs when computeDirectiveResults re-executes via the generation bump.
+     */
+    fun invalidateDirectivesForChangedNotes(changedNoteIds: Set<String>) {
+        cachedDirectiveExecutor.invalidateForChangedNotes(changedNoteIds)
+        bumpDirectiveCacheGeneration()
+    }
+
+    /**
      * Force re-execute all directives with fresh data from Firestore.
      * Used after inline editing a viewed note to refresh the view.
      *
@@ -697,6 +717,7 @@ class NoteDirectiveManager(
                 .onSuccess {
                     MetadataHasher.invalidateCache()
                     directiveCacheManager.clearAll()
+                    endInlineEditSession()
                     onSuccess?.invoke()
                 }
                 .onFailure { e ->

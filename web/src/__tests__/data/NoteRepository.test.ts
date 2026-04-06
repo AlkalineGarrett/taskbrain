@@ -108,7 +108,7 @@ describe('NoteRepository', () => {
         id: 'note_1',
       } as any)
 
-      const lines = await repository.loadNoteWithChildren('note_1')
+      const { lines } = await repository.loadNoteWithChildren('note_1')
 
       expect(lines).toEqual([{ content: '', noteId: 'note_1' }])
     })
@@ -121,7 +121,7 @@ describe('NoteRepository', () => {
         id: 'note_1',
       } as any)
 
-      const lines = await repository.loadNoteWithChildren('note_1')
+      const { lines } = await repository.loadNoteWithChildren('note_1')
 
       expect(lines).toHaveLength(1)
       expect(lines[0]!.content).toBe('')
@@ -136,7 +136,7 @@ describe('NoteRepository', () => {
         id: 'note_1',
       } as any)
 
-      const lines = await repository.loadNoteWithChildren('note_1')
+      const { lines } = await repository.loadNoteWithChildren('note_1')
 
       expect(lines).toHaveLength(2)
       expect(lines[0]!.content).toBe('Parent content')
@@ -459,7 +459,7 @@ describe('NoteRepository', () => {
         empty: false,
       } as any)
 
-      const lines = await repository.loadNoteWithChildren('root')
+      const { lines } = await repository.loadNoteWithChildren('root')
 
       expect(lines).toEqual([
         { content: 'Root', noteId: 'root' },
@@ -487,7 +487,7 @@ describe('NoteRepository', () => {
         empty: false,
       } as any)
 
-      const lines = await repository.loadNoteWithChildren('root')
+      const { lines } = await repository.loadNoteWithChildren('root')
 
       expect(lines).toEqual([
         { content: 'Root', noteId: 'root' },
@@ -515,7 +515,7 @@ describe('NoteRepository', () => {
         empty: false,
       } as any)
 
-      const lines = await repository.loadNoteWithChildren('root')
+      const { lines } = await repository.loadNoteWithChildren('root')
 
       expect(lines).toHaveLength(3)
       expect(lines[0]).toEqual({ content: 'Root', noteId: 'root' })

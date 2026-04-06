@@ -6,7 +6,9 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -23,10 +25,16 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 object NoteStore {
     private const val TAG = "NoteStore"
-    private const val HOT_COOLDOWN_MS = 5_000L
 
     private val _notes = MutableStateFlow<List<Note>>(emptyList())
     val notes: StateFlow<List<Note>> = _notes.asStateFlow()
+
+    /** IDs of notes whose content changed in the most recent incremental snapshot. */
+    private val _changedNoteIds = MutableSharedFlow<Set<String>>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+    )
+    val changedNoteIds: SharedFlow<Set<String>> = _changedNoteIds
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
@@ -37,27 +45,6 @@ object NoteStore {
 
     /** All notes from Firestore, indexed by ID (including descendants). */
     private val rawNotes = mutableMapOf<String, Note>()
-
-    /**
-     * Notes recently modified locally, keyed by rootNoteId → timestamp.
-     * The collection listener skips rebuilding hot notes so local edits
-     * aren't overwritten by Firestore echoes. After the cooldown expires,
-     * the next snapshot applies Firestore truth.
-     */
-    private val hotNotes = mutableMapOf<String, Long>()
-
-    /** Mark a note as recently modified locally. */
-    fun markHot(noteId: String) {
-        hotNotes[noteId] = System.currentTimeMillis()
-    }
-
-    /** Returns true if the note was locally modified within the cooldown window. */
-    fun isHot(noteId: String): Boolean {
-        val timestamp = hotNotes[noteId] ?: return false
-        if (System.currentTimeMillis() - timestamp < HOT_COOLDOWN_MS) return true
-        hotNotes.remove(noteId)
-        return false
-    }
 
     private var listenerRegistration: ListenerRegistration? = null
     private var loaded = false
@@ -153,7 +140,6 @@ object NoteStore {
         listenerRegistration?.remove()
         listenerRegistration = null
         rawNotes.clear()
-        hotNotes.clear()
         pendingPersistContent.clear()
         pendingPersistRunnables.clear()
         persistHandler.removeCallbacksAndMessages(null)
@@ -175,7 +161,6 @@ object NoteStore {
         val current = _notes.value
         val index = current.indexOfFirst { it.id == noteId }
         if (index >= 0) {
-            markHot(noteId)
             _notes.value = current.toMutableList().apply { set(index, updatedNote) }
             if (persist) {
                 debouncePersist(noteId, updatedNote.content)
@@ -268,11 +253,9 @@ object NoteStore {
             affectedRoots.add(rootId)
         }
 
-        // Don't rebuild hot notes — local state is authoritative.
-        affectedRoots.removeAll { isHot(it) }
-
         if (affectedRoots.isNotEmpty()) {
             rebuildAffected(affectedRoots)
+            _changedNoteIds.tryEmit(affectedRoots)
         }
     }
 

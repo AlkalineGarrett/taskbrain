@@ -508,14 +508,39 @@ class EditorState {
     /**
      * Initializes the editor from note lines with their associated noteIds.
      * Used when loading a note from Firestore.
+     *
+     * @param preserveCursor If true, attempts to restore the cursor to the same
+     *   line (by noteId) and position. Used for external change reloads where
+     *   the user's cursor should stay in place.
      */
-    internal fun initFromNoteLines(noteLines: List<Pair<String, List<String>>>) {
+    internal fun initFromNoteLines(
+        noteLines: List<Pair<String, List<String>>>,
+        preserveCursor: Boolean = false,
+    ) {
+        // Capture cursor state before clearing
+        val prevLineIndex = focusedLineIndex
+        val prevNoteId = lines.getOrNull(prevLineIndex)?.noteIds?.firstOrNull()
+        val prevCursorPos = lines.getOrNull(prevLineIndex)?.cursorPosition ?: 0
+
         parentNoteId = noteLines.firstOrNull()?.second?.firstOrNull() ?: ""
         lines.clear()
         noteLines.forEach { (text, noteIds) ->
             lines.add(LineState(text, text.length, noteIds))
         }
-        focusedLineIndex = 0
+
+        if (preserveCursor && prevNoteId != null) {
+            // Find the line with the same noteId
+            val restoredIndex = lines.indexOfFirst { it.noteIds.firstOrNull() == prevNoteId }
+            if (restoredIndex >= 0) {
+                focusedLineIndex = restoredIndex
+                lines[restoredIndex].moveCursor(prevCursorPos)
+            } else {
+                // Line disappeared — find the closest surviving line
+                focusedLineIndex = prevLineIndex.coerceAtMost(lines.lastIndex).coerceAtLeast(0)
+            }
+        } else {
+            focusedLineIndex = 0
+        }
     }
 
     /**

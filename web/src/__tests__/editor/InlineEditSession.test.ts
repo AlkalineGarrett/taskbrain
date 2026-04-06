@@ -105,4 +105,39 @@ describe('InlineEditSession', () => {
     // Lines should now have 4 lines, trailing empty at index 3
     expect(session.controller.hiddenIndices.has(session.editorState.lines.length - 1)).toBe(true)
   })
+
+  // --- syncOriginalContent ---
+
+  it('syncOriginalContent resets dirty state when content matches editor', () => {
+    const session = new InlineEditSession('note1', 'Hello\nWorld')
+    // Not dirty initially
+    expect(session.isDirty).toBe(false)
+
+    // Simulate external change applied to editor
+    session.editorState.lines[0]!.updateFull('Hello changed', 0)
+    expect(session.isDirty).toBe(true)
+
+    // Sync baseline to match editor content
+    session.syncOriginalContent(session.getText())
+    expect(session.isDirty).toBe(false)
+  })
+
+  it('syncOriginalContent with different content leaves session dirty', () => {
+    const session = new InlineEditSession('note1', 'Hello\nWorld')
+    session.editorState.lines[0]!.updateFull('User edit', 0)
+
+    // Sync to external content that differs from editor
+    session.syncOriginalContent('External content')
+    expect(session.isDirty).toBe(true)
+  })
+
+  it('syncOriginalContent does not modify editor state', () => {
+    const session = new InlineEditSession('note1', 'Hello\nWorld')
+    const linesBefore = session.editorState.lines.map(l => l.text)
+
+    session.syncOriginalContent('Completely different')
+
+    const linesAfter = session.editorState.lines.map(l => l.text)
+    expect(linesAfter).toEqual(linesBefore)
+  })
 })
