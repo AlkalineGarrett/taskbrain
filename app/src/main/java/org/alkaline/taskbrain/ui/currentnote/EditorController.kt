@@ -73,8 +73,11 @@ class EditorController(
      */
     val recentlyCheckedIndices: MutableSet<Int> = mutableSetOf()
 
-    /** Lines from the most recent cut, used to recover noteIds on paste. */
-    private var lastCutLines: List<LineState> = emptyList()
+    companion object {
+        /** Shared across all EditorController instances so cut in one embedded note
+         *  can recover noteIds when pasted into a different embedded note. */
+        private var sharedCutLines: List<LineState> = emptyList()
+    }
 
     // =========================================================================
     // Undo/Redo Operations
@@ -308,8 +311,8 @@ class EditorController(
      */
     fun paste(plainText: String, html: String? = null) = executeOperation(OperationType.PASTE) {
         val parsed = ClipboardParser.parse(plainText, html)
-        val cutLines = lastCutLines
-        lastCutLines = emptyList()
+        val cutLines = sharedCutLines
+        sharedCutLines = emptyList()
         val result = PasteHandler.execute(
             state.lines.toList(),
             state.focusedLineIndex,
@@ -339,7 +342,7 @@ class EditorController(
         return executeOperation(OperationType.CUT) {
             // Capture cut lines (with noteIds) before deletion for paste recovery
             val range = state.getSelectedLineRange()
-            lastCutLines = state.lines.subList(range.first, range.last + 1)
+            sharedCutLines = state.lines.subList(range.first, range.last + 1)
                 .map { LineState(it.text, noteIds = it.noteIds.toList()) }
 
             val clipText = getSelectedTextWithPrefix()

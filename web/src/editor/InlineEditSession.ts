@@ -1,6 +1,8 @@
+import type { NoteLine } from '@/data/Note'
 import { EditorState } from './EditorState'
 import { EditorController } from './EditorController'
 import { UndoManager } from './UndoManager'
+import { resolveNoteIds } from './resolveNoteIds'
 
 /**
  * Encapsulates a self-contained editing session for a view note.
@@ -74,14 +76,24 @@ export class InlineEditSession {
   }
 
   /**
-   * Sorts completed checkboxes to bottom via the editor controller
-   * (permuting noteIds and editor metadata) and returns the serialized content.
-   * This is the inline equivalent of the main editor's save-time sort.
-   * All save paths should call this instead of getText() directly.
+   * Builds tracked lines (content + noteId) from editor state, ready for
+   * saveNoteWithChildren. Mirrors the main editor's save path in useEditor.
    */
-  sortAndGetText(): string {
-    this.controller.sortCompletedToBottom()
-    return this.getText()
+  getTrackedLines(): NoteLine[] {
+    const lines = this.editorState.lines
+    // Strip trailing empty lines to match getText()
+    let count = lines.length
+    while (count > 1 && lines[count - 1]!.text === '') count--
+
+    const contentLines = lines.slice(0, count).map(l => l.text)
+    const lineNoteIds = lines.slice(0, count).map(l => l.noteIds)
+    const tracked = resolveNoteIds(contentLines, lineNoteIds)
+
+    // Ensure first line always maps to the parent noteId
+    if (tracked.length > 0 && tracked[0]!.noteId !== this.noteId) {
+      tracked[0] = { ...tracked[0]!, noteId: this.noteId }
+    }
+    return tracked
   }
 
   /**

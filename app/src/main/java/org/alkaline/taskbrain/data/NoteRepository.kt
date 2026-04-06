@@ -302,6 +302,7 @@ class NoteRepository(
                                 "parentNoteId" to parentId,
                                 "rootNoteId" to noteId,
                                 "containedNotes" to childrenOfLine[i].toList(),
+                                "state" to null, // Clear deleted state for reparented notes
                                 "updatedAt" to FieldValue.serverTimestamp(),
                             ),
                             SetOptions.merge()

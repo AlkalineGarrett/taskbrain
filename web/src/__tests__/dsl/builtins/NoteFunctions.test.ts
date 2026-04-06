@@ -280,4 +280,21 @@ describe('NoteFunctions', () => {
       expect(() => execute('[view(find())]', envWithStack)).toThrow(/[Cc]ircular/)
     })
   })
+
+  describe('unknown named arguments', () => {
+    it('should reject unknown named arg on view', () => {
+      expect(() => execute('[view(find(), order: descending)]'))
+        .toThrow("'view' does not accept named argument 'order'")
+    })
+
+    it('should reject unknown named arg on find', () => {
+      expect(() => execute('[find(bogus: "x")]'))
+        .toThrow("'find' does not accept named argument 'bogus'")
+    })
+
+    it('should accept known named args on find', () => {
+      const result = execute('[find(path: "tasks")]')
+      expect(result.kind).toBe('ListVal')
+    })
+  })
 })

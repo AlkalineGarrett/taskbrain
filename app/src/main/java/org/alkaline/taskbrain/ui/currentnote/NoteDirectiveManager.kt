@@ -617,15 +617,12 @@ class NoteDirectiveManager(
     fun isInlineEditSessionActive(): Boolean = editSessionManager.isEditSessionActive()
 
     /**
-     * Saves an inline edit session, sorting completed checkboxes to bottom first.
+     * Saves an inline edit session using editor-tracked noteIds directly.
+     * Sorts completed checkboxes to bottom first, then passes tracked lines
+     * to [NoteRepository.saveNoteWithChildren] (same path as the main editor).
      *
-     * This is the inline-note equivalent of the main editor's save-button path:
-     * it calls [EditorController.sortCompletedToBottom] on the session's controller
-     * (which permutes noteIds and editor metadata alongside the text) and then
-     * delegates to [saveInlineNoteContent] for the actual Firestore write.
-     *
-     * All inline save call sites that have an active [InlineEditSession] should
-     * use this method so sorting is consolidated in one place.
+     * Prefer this over [saveInlineNoteContent] when an [InlineEditSession] is
+     * available, as it preserves noteId identity through edits.
      */
     fun saveInlineEditSession(
         session: InlineEditSession,
@@ -633,26 +630,22 @@ class NoteDirectiveManager(
         onFailure: ((Throwable) -> Unit)? = null
     ) {
         session.controller.sortCompletedToBottom()
-        saveInlineNoteContent(session.noteId, session.currentContent, onSuccess, onFailure)
+        val trackedLines = session.getTrackedLines()
+        launchInlineSave(
+            noteId = session.noteId,
+            newContent = trackedLines.joinToString("\n") { it.content },
+            saveAction = { repository.saveNoteWithChildren(session.noteId, trackedLines) },
+            onSuccess = onSuccess,
+            onFailure = onFailure,
+        )
     }
 
     /**
      * Saves the content of a note edited inline within a view directive.
-     * This is a simple content update that doesn't affect child note structure.
+     * Falls back to content-based matching when no [InlineEditSession] is available.
      *
      * Prefer [saveInlineEditSession] when an [InlineEditSession] is available,
-     * as it handles sorting completed checkboxes to bottom via the editor controller.
-     *
-     * The method:
-     * 1. Starts an inline edit session to suppress cache invalidation during edit
-     * 2. Updates the note content in Firestore
-     * 3. Invalidates the directive cache so views refresh
-     * 4. Ends the edit session which triggers view refresh
-     *
-     * @param noteId The ID of the note to update
-     * @param newContent The new content for the note
-     * @param onSuccess Optional callback when save succeeds
-     * @param onFailure Optional callback when save fails
+     * as it uses editor-tracked noteIds and handles sorting.
      */
     fun saveInlineNoteContent(
         noteId: String,
@@ -660,9 +653,31 @@ class NoteDirectiveManager(
         onSuccess: (() -> Unit)? = null,
         onFailure: ((Throwable) -> Unit)? = null
     ) {
-        // Optimistic update immediately so tab-switching shows the edit
-        // before the async Firestore save completes (persist = false because
-        // saveNoteWithFullContent below does a more appropriate save)
+        launchInlineSave(
+            noteId = noteId,
+            newContent = newContent,
+            saveAction = { repository.saveNoteWithFullContent(noteId, newContent) },
+            onSuccess = onSuccess,
+            onFailure = onFailure,
+        )
+    }
+
+    /**
+     * Shared inline save implementation: optimistic update, ensure edit session,
+     * run the save action, then invalidate caches on success or abort on failure.
+     *
+     * Do NOT bump cache generation on success — that would force immediate
+     * recomposition of the directive line, recreating ControlledLineView composables
+     * and invalidating the focused line's IME InputConnection.
+     */
+    private fun launchInlineSave(
+        noteId: String,
+        newContent: String,
+        saveAction: suspend () -> Result<*>,
+        onSuccess: (() -> Unit)?,
+        onFailure: ((Throwable) -> Unit)?,
+    ) {
+        // Optimistic update so tab-switching shows the edit before Firestore confirms
         val existing = NoteStore.getNoteById(noteId)
         if (existing != null) {
             NoteStore.updateNote(noteId, existing.copy(content = newContent), persist = false)
@@ -678,33 +693,15 @@ class NoteDirectiveManager(
                 startInlineEditSession(noteId)
             }
 
-            // Use saveNoteWithFullContent to properly handle multi-line notes
-            // This preserves child note IDs and handles line additions/deletions
-            //
-            // AWAIT save completion before clearing caches.
-            // This ensures that when we refresh, Firestore has the new data.
-            val saveResult = repository.saveNoteWithFullContent(noteId, newContent)
-
-            saveResult
+            saveAction()
                 .onSuccess {
-                    // NoteStore was already updated synchronously (before the coroutine)
-                    // with the new content. Clear directive caches so the next re-execution
-                    // uses fresh data. Do NOT bump cache generation here — that would force
-                    // immediate recomposition of the directive line, which recreates the
-                    // ControlledLineView composables and invalidates the focused line's IME
-                    // InputConnection, causing the keyboard to clear the focused line's text.
-                    // The cache will be naturally re-evaluated when the user defocuses.
                     MetadataHasher.invalidateCache()
                     directiveCacheManager.clearAll()
-
                     onSuccess?.invoke()
                 }
                 .onFailure { e ->
-                    Log.e("NoteRepository", "=== saveInlineNoteContent FAILED for $noteId ===", e)
-
-                    // Abort edit session on failure (don't apply pending invalidations)
+                    Log.e(TAG, "=== launchInlineSave FAILED for $noteId ===", e)
                     editSessionManager.abortEditSession()
-
                     onFailure?.invoke(e)
                 }
         }

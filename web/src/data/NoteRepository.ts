@@ -282,6 +282,7 @@ export class NoteRepository {
                 parentNoteId: parentId,
                 rootNoteId: noteId,
                 containedNotes: childrenOfLine[i]!,
+                state: null, // Clear deleted state for reparented notes
                 updatedAt: serverTimestamp(),
               },
               { merge: true },
@@ -334,7 +335,11 @@ export class NoteRepository {
    * Saves a note with full multi-line content.
    * Used for inline editing of notes within view directives.
    */
-  async saveNoteWithFullContent(noteId: string, newContent: string): Promise<Map<number, string>> {
+  async saveNoteWithFullContent(
+    noteId: string,
+    newContent: string,
+    editorNoteIds?: (string | null)[],
+  ): Promise<Map<number, string>> {
     return this.logged('saveNoteWithFullContent', async () => {
       this.requireUserId()
 
@@ -346,7 +351,7 @@ export class NoteRepository {
           : existingLines
 
       const newLinesContent = newContent.split('\n')
-      const trackedLines = matchLinesToIds(noteId, existingLinesNoTrailing, newLinesContent)
+      const trackedLines = matchLinesToIds(noteId, existingLinesNoTrailing, newLinesContent, editorNoteIds)
       return this.saveNoteWithChildren(noteId, trackedLines)
     })
   }
@@ -529,8 +534,9 @@ export function matchLinesToIds(
   parentNoteId: string,
   existingLines: NoteLine[],
   newLinesContent: string[],
+  editorNoteIds?: (string | null)[],
 ): NoteLine[] {
-  if (existingLines.length === 0) {
+  if (existingLines.length === 0 && !editorNoteIds) {
     return newLinesContent.map((content, index) => ({
       content,
       noteId: index === 0 ? parentNoteId : null,
@@ -547,11 +553,27 @@ export function matchLinesToIds(
     }
   })
 
+  // Build set of noteIds known to this tree so we can detect foreign (reparented) IDs
+  const existingNoteIdSet = new Set(existingLines.map(l => l.noteId).filter((id): id is string => id != null))
+
   const newIds: (string | null)[] = new Array(newLinesContent.length).fill(null) as (string | null)[]
   const oldConsumed = new Array(existingLines.length).fill(false) as boolean[]
 
-  // Phase 1: Exact matches
+  // Phase 0: Use editor-provided noteIds for foreign notes (reparented from another tree).
+  // Only trust editor noteIds that aren't already in this tree's existing lines —
+  // existing notes are matched more reliably by content in phases 1-3.
+  if (editorNoteIds) {
+    for (let i = 0; i < newLinesContent.length; i++) {
+      const editorId = editorNoteIds[i]
+      if (editorId && !existingNoteIdSet.has(editorId)) {
+        newIds[i] = editorId
+      }
+    }
+  }
+
+  // Phase 1: Exact matches (skip lines already assigned by editor noteIds)
   newLinesContent.forEach((content, index) => {
+    if (newIds[index] != null) return
     const indices = contentToOldIndices.get(content)
     if (indices && indices.length > 0) {
       const oldIdx = indices.shift()!

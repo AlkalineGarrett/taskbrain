@@ -26,6 +26,10 @@ export interface MoveButtonState {
   isWarning: boolean
 }
 
+// Shared across all EditorController instances so cut in one embedded note
+// can recover noteIds when pasted into a different embedded note.
+let sharedCutLines: LineState[] = []
+
 export class EditorController {
   readonly state: EditorState
   readonly undoManager: UndoManager
@@ -33,8 +37,6 @@ export class EditorController {
   hiddenIndices: Set<number> = new Set()
   /** Line indices recently toggled from unchecked to checked. Visible at reduced opacity until save. */
   readonly recentlyCheckedIndices: Set<number> = new Set()
-  /** Lines from the most recent cut, used to recover noteIds on paste. */
-  private lastCutLines: LineState[] = []
 
   constructor(state: EditorState, undoManager?: UndoManager) {
     this.state = state
@@ -204,8 +206,8 @@ export class EditorController {
   paste(plainText: string, html?: string | null): void {
     this.executeOperation(OperationType.PASTE, () => {
       const parsed = parseClipboardContent(plainText, html ?? null)
-      const cutLines = this.lastCutLines
-      this.lastCutLines = []
+      const cutLines = sharedCutLines
+      sharedCutLines = []
       const result = executePaste(
         this.state.lines,
         this.state.focusedLineIndex,
@@ -230,7 +232,7 @@ export class EditorController {
     return this.executeOperation(OperationType.CUT, () => {
       // Capture cut lines (with noteIds) before deletion for paste recovery
       const [rangeFirst, rangeLast] = this.state.getSelectedLineRange()
-      this.lastCutLines = this.state.lines.slice(rangeFirst, rangeLast + 1)
+      sharedCutLines = this.state.lines.slice(rangeFirst, rangeLast + 1)
         .map(l => new LineState(l.text, undefined, [...l.noteIds]))
 
       const clipText = this.getSelectedTextWithPrefix()

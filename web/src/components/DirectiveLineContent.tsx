@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react'
+import type { ViewNoteSaveHandler } from './ViewDirectiveRenderer'
 import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
 import { segmentLine, isViewSegment } from '@/dsl/directives/DirectiveSegmenter'
 import { DirectiveChip } from './DirectiveChip'
@@ -12,7 +13,7 @@ interface DirectiveLineContentProps {
   onDirectiveEdit?: (oldSourceText: string, newSourceText: string) => void
   onDirectiveRefresh?: (key: string, sourceText: string) => void
   onButtonClick?: (key: string) => void
-  onViewNoteSave?: (noteId: string, newContent: string) => Promise<Map<number, string>>
+  onViewNoteSave?: ViewNoteSaveHandler
 }
 
 /**

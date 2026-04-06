@@ -79,6 +79,7 @@ object ListFunctions {
         name = "sort",
         isDynamic = false  // Results are deterministic based on input
     ) { args, env ->
+        args.assertNoUnknownNamed("sort", "key", "order")
         // Require exactly one positional argument (the list)
         if (args.size != 1) {
             throw ExecutionException("'sort' requires exactly 1 positional argument (list), got ${args.size}")

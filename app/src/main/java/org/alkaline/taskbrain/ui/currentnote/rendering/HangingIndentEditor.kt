@@ -57,6 +57,7 @@ import org.alkaline.taskbrain.ui.currentnote.LineState
 import org.alkaline.taskbrain.ui.currentnote.rememberEditorState
 import org.alkaline.taskbrain.dsl.directives.DirectiveFinder
 import org.alkaline.taskbrain.dsl.directives.DirectiveResult
+import org.alkaline.taskbrain.dsl.directives.DirectiveSegment
 import org.alkaline.taskbrain.dsl.ui.DirectiveEditRow
 import org.alkaline.taskbrain.ui.currentnote.util.CompletedLineUtils
 import org.alkaline.taskbrain.ui.currentnote.util.SymbolOverlay
@@ -631,6 +632,7 @@ private fun EditorContent(
                             val hashKey = DirectiveResult.hashDirective(found.sourceText)
                             val result = directiveResults[hashKey]
                             val isViewDirective = result?.toValue() is org.alkaline.taskbrain.dsl.runtime.values.ViewVal
+                                || DirectiveSegment.Directive.isViewDirective(found.sourceText)
                             if (result != null && !result.collapsed && !isViewDirective) {
                                 key(hashKey) {
                                     DirectiveEditRow(

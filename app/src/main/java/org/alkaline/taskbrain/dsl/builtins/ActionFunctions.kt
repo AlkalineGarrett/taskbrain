@@ -151,6 +151,7 @@ object ScheduleConstants {
      * @param precise (named, optional) Whether to use exact timing (default: false)
      */
     private val dailyAtFunction = BuiltinFunction(name = "daily_at") { args, _ ->
+        args.assertNoUnknownNamed("daily_at", "precise")
         val timeStr = args.requireString(0, "daily_at", "time")
         validateTimeFormat(timeStr.value, "daily_at")
 
@@ -176,6 +177,7 @@ object ScheduleConstants {
      * @param precise (named, optional) Whether to use exact timing (default: false)
      */
     private val weeklyAtFunction = BuiltinFunction(name = "weekly_at") { args, _ ->
+        args.assertNoUnknownNamed("weekly_at", "precise")
         val timeStr = args.requireString(0, "weekly_at", "time")
         validateTimeFormat(timeStr.value, "weekly_at")
 

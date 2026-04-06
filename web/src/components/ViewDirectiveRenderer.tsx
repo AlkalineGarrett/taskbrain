@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
-import type { Note } from '@/data/Note'
+import type { Note, NoteLine } from '@/data/Note'
 import type { ViewVal } from '@/dsl/runtime/DslValue'
 import { directiveResultToValue } from '@/dsl/directives/DirectiveResult'
 import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
@@ -11,10 +11,12 @@ import { EditorLine } from './EditorLine'
 import { EMPTY_VIEW, SAVE, SAVING, SAVE_ERROR_BANNER, SAVE_ERROR_DISMISS } from '@/strings'
 import styles from './ViewDirectiveRenderer.module.css'
 
+export type ViewNoteSaveHandler = (noteId: string, trackedLines: NoteLine[]) => Promise<Map<number, string>>
+
 interface ViewDirectiveRendererProps {
   viewVal: ViewVal
   /** Called to save edited note content; returns created noteId map for new lines */
-  onNoteSave?: (noteId: string, newContent: string) => Promise<Map<number, string>>
+  onNoteSave?: ViewNoteSaveHandler
   /** Called when the gear icon is clicked to switch to directive editing mode */
   onEditDirective?: () => void
 }
@@ -99,7 +101,7 @@ export function ViewDirectiveRenderer({
           {noteIndex > 0 && <hr className={styles.separator} />}
           <ViewNoteSection
             note={note}
-            onSave={onNoteSave ? (content) => onNoteSave(note.id, content) : undefined}
+            onSave={onNoteSave ? (trackedLines) => onNoteSave(note.id, trackedLines) : undefined}
             onDirtyChange={getDirtyCallback(note.id)}
             saveRef={dirtyNoteId === note.id ? saveRef : undefined}
           />
@@ -112,7 +114,7 @@ export function ViewDirectiveRenderer({
 
 interface ViewNoteSectionProps {
   note: Note
-  onSave?: (newContent: string) => Promise<Map<number, string>>
+  onSave?: (trackedLines: NoteLine[]) => Promise<Map<number, string>>
   onDirtyChange?: (dirty: boolean) => void
   saveRef?: React.MutableRefObject<(() => Promise<void>) | null>
 }
@@ -171,8 +173,16 @@ function ViewNoteSection({
   // If isActiveHere were in deps, deactivation would null the session, force
   // a new session with focusedLineIndex=0, and its focus effect would steal
   // DOM focus from wherever the user just clicked.
+  //
+  // Skip recreation when the session already matches the new content. This
+  // avoids a noteId mismatch after blur-save: the optimistic update changes
+  // note.content to the full multi-line text while containedNotes still
+  // references old children, causing flattenTreeToLines to produce stale
+  // lineNoteIds that don't align with the new content.
   useEffect(() => {
     if (!isActiveHereRef.current) {
+      const s = sessionRef.current
+      if (s && s.getText() === note.content) return
       sessionRef.current = null // Force recreate on next render
       lastSavedContentRef.current = null
       setRenderVersion(v => v + 1)
@@ -203,11 +213,13 @@ function ViewNoteSection({
   const handleSave = useCallback(async () => {
     const s = sessionRef.current
     if (!onSave || !s || !s.isDirty) return
-    const content = s.sortAndGetText()
+    s.controller.sortCompletedToBottom()
+    const trackedLines = s.getTrackedLines()
+    const content = s.getText()
     lastSavedContentRef.current = content
     setSaveError(null)
     try {
-      const createdIds = await onSave(content)
+      const createdIds = await onSave(trackedLines)
       s.applyCreatedIds(createdIds)
       s.markSaved(content)
     } catch (e) {
@@ -229,7 +241,8 @@ function ViewNoteSection({
       const s = sessionRef.current
       const save = onSaveRef.current
       if (save && s?.isDirty) {
-        void save(s.sortAndGetText()).catch((err) => {
+        s.controller.sortCompletedToBottom()
+        void save(s.getTrackedLines()).catch((err) => {
           const msg = err instanceof Error ? err.message : SAVE_ERROR_BANNER
           try { sessionStorage.setItem(PENDING_VIEW_SAVE_ERROR_KEY, JSON.stringify({ noteId, message: msg })) } catch { /* ignore */ }
         })
@@ -266,7 +279,8 @@ function ViewNoteSection({
     // Always save dirty content on blur
     const s = sessionRef.current
     if (s?.isDirty && onSave) {
-      void onSave(s.sortAndGetText()).then(ids => s?.applyCreatedIds(ids)).catch(() => { /* handled by unmount fallback */ })
+      s.controller.sortCompletedToBottom()
+      void onSave(s.getTrackedLines()).then(ids => s?.applyCreatedIds(ids)).catch(() => { /* handled by unmount fallback */ })
     }
     // Only deactivate if this section's session is still the active one —
     // a sibling ViewNoteSection may have already activated its own session.

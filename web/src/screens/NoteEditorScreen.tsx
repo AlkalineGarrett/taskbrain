@@ -1,5 +1,6 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { useEffect, useCallback, useState, useRef, useMemo } from 'react'
+import type { NoteLine } from '@/data/Note'
 import { NoteRepository } from '@/data/NoteRepository'
 import { noteStore } from '@/data/NoteStore'
 import { useAllNotes, useNoteStoreError } from '@/hooks/useNoteStore'
@@ -113,14 +114,15 @@ export function NoteEditorScreen() {
     }
   }, [directiveMutations, handleMutations])
 
-  const handleViewNoteSave = useCallback(async (viewedNoteId: string, newContent: string): Promise<Map<number, string>> => {
+  const handleViewNoteSave = useCallback(async (viewedNoteId: string, trackedLines: NoteLine[]): Promise<Map<number, string>> => {
     // Update store optimistically so directives see the edit before Firestore confirms
+    const newContent = trackedLines.map(l => l.content).join('\n')
     const existing = noteStore.getNoteById(viewedNoteId)
     if (existing) {
       noteStore.updateNote(viewedNoteId, { ...existing, content: newContent })
     }
-    // Track the Firestore write so useEditor can await it before loading
-    const savePromise = noteRepo.saveNoteWithFullContent(viewedNoteId, newContent)
+    // Save directly with editor-tracked noteIds (same path as main editor)
+    const savePromise = noteRepo.saveNoteWithChildren(viewedNoteId, trackedLines)
     noteStore.trackSave(viewedNoteId, savePromise)
     const createdIds = await savePromise
     invalidateAndRecompute()

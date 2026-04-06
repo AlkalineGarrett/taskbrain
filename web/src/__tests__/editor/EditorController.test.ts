@@ -69,6 +69,104 @@ describe('EditorController cut', () => {
     const ctrl = controllerWithText('hello')
     expect(ctrl.cutSelection()).toBeNull()
   })
+
+  it('preserves noteIds when pasting into a different controller instance', () => {
+    // Simulate cut from one embedded note editor
+    const source = new EditorState()
+    source.lines = [
+      new LineState('line A', undefined, ['noteA']),
+      new LineState('line B', undefined, ['noteB']),
+    ]
+    source.focusedLineIndex = 0
+    const sourceCtrl = new EditorController(source)
+    sourceCtrl.state.setSelection(0, 11) // select both lines
+    sourceCtrl.cutSelection()
+
+    // Simulate paste into a different embedded note editor
+    const dest = new EditorState()
+    dest.lines = [new LineState('existing')]
+    dest.focusedLineIndex = 0
+    dest.lines[0]!.updateFull('existing', 8) // cursor at end
+    const destCtrl = new EditorController(dest)
+    destCtrl.paste('line A\nline B')
+
+    // The pasted lines should recover noteIds from the cut
+    const pastedA = destCtrl.state.lines.find(l => l.text === 'line A')
+    const pastedB = destCtrl.state.lines.find(l => l.text === 'line B')
+    expect(pastedA?.noteIds).toEqual(['noteA'])
+    expect(pastedB?.noteIds).toEqual(['noteB'])
+  })
+
+  it('shared cut lines are consumed on paste (single use)', () => {
+    const source = new EditorState()
+    source.lines = [new LineState('line A', undefined, ['noteA'])]
+    source.focusedLineIndex = 0
+    const sourceCtrl = new EditorController(source)
+    sourceCtrl.state.setSelection(0, 5)
+    sourceCtrl.cutSelection()
+
+    // First paste consumes the cut lines
+    const dest1 = new EditorState()
+    dest1.lines = [new LineState('')]
+    dest1.focusedLineIndex = 0
+    const destCtrl1 = new EditorController(dest1)
+    destCtrl1.paste('line A')
+    expect(destCtrl1.state.lines.find(l => l.text === 'line A')?.noteIds).toEqual(['noteA'])
+
+    // Second paste has no cut lines to recover from
+    const dest2 = new EditorState()
+    dest2.lines = [new LineState('')]
+    dest2.focusedLineIndex = 0
+    const destCtrl2 = new EditorController(dest2)
+    destCtrl2.paste('line A')
+    expect(destCtrl2.state.lines.find(l => l.text === 'line A')?.noteIds).toEqual([])
+  })
+})
+
+describe('EditorController gutter cut → paste at position 0', () => {
+  it('gutter cut produces clipboard text with trailing newline', () => {
+    // Embedded note: title + one child line + trailing empty
+    const source = new EditorState()
+    source.lines = [
+      new LineState('Title', undefined, ['root']),
+      new LineState('☐ task item', undefined, ['noteA']),
+      new LineState('', undefined, []),
+    ]
+    source.focusedLineIndex = 1
+
+    // Gutter select line 1: from line start to line end
+    const lineStart = source.getLineStartOffset(1)
+    const lineEnd = lineStart + source.lines[1]!.text.length
+    const sourceCtrl = new EditorController(source)
+    sourceCtrl.setSelection(lineStart, lineEnd)
+
+    // Cut — check what clipboard text would be
+    const clipText = sourceCtrl.cutSelection()
+    // Full-line gutter selection gets extended to include trailing \n
+    expect(clipText).toBe('☐ task item\n')
+  })
+
+  it('paste full-line cut at position 0 inserts before target without extra blank', () => {
+    // Clipboard text from the cut above (includes trailing \n)
+    const clipboardText = '☐ task item\n'
+
+    // Destination embedded note
+    const dest = new EditorState()
+    dest.lines = [
+      new LineState('Title', undefined, ['destRoot']),
+      new LineState('• existing task', undefined, ['noteB']),
+      new LineState('', undefined, []),
+    ]
+    dest.focusedLineIndex = 1
+    dest.lines[1]!.updateFull(dest.lines[1]!.text, 0) // cursor at position 0
+
+    const destCtrl = new EditorController(dest)
+    destCtrl.paste(clipboardText)
+
+    // Should be: Title, pasted line, existing task, empty
+    const texts = destCtrl.state.lines.map(l => l.text)
+    expect(texts).toEqual(['Title', '☐ task item', '• existing task', ''])
+  })
 })
 
 describe('EditorController delete', () => {

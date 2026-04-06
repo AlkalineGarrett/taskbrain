@@ -73,6 +73,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.alkaline.taskbrain.R
 import org.alkaline.taskbrain.data.Note
+import org.alkaline.taskbrain.data.NoteStore
 import org.alkaline.taskbrain.dsl.directives.DirectiveResult
 import org.alkaline.taskbrain.dsl.directives.DirectiveSegment
 import org.alkaline.taskbrain.dsl.directives.DirectiveSegmenter
@@ -971,7 +972,15 @@ private fun EditableViewNoteSection(
 
     val session = remember(note.id, editContent) {
         val s = EditorState()
-        s.updateFromText(editContent)
+        // Initialize with noteIds from the tree structure so the save path
+        // can use editor-tracked IDs directly (same pattern as main editor).
+        val storeLines = NoteStore.getNoteLinesById(note.id)
+        if (storeLines != null) {
+            val noteLines = storeLines.map { nl -> nl.content to (nl.noteId?.let { listOf(it) } ?: emptyList()) }
+            s.initFromNoteLines(noteLines)
+        } else {
+            s.updateFromText(editContent)
+        }
         val c = EditorController(s)
         InlineEditSession(
             noteId = note.id,

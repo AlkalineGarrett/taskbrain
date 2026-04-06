@@ -8,6 +8,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import org.alkaline.taskbrain.data.NoteLine
 import org.alkaline.taskbrain.dsl.directives.DirectiveFinder
 import org.alkaline.taskbrain.dsl.directives.DirectiveResult
 
@@ -47,6 +48,27 @@ class InlineEditSession(
      */
     fun markSaved() {
         originalContent = editorState.text
+    }
+
+    /**
+     * Builds tracked lines (content + noteId) from editor state, ready for
+     * saveNoteWithChildren. Mirrors the main editor's save path.
+     */
+    fun getTrackedLines(): List<NoteLine> {
+        val lines = editorState.lines
+        // Strip trailing empty lines to match save convention
+        var count = lines.size
+        while (count > 1 && lines[count - 1].text.isEmpty()) count--
+
+        val contentLines = lines.subList(0, count).map { it.text }
+        val lineNoteIds = lines.subList(0, count).map { it.noteIds }
+        val tracked = resolveNoteIds(contentLines, lineNoteIds).toMutableList()
+
+        // Ensure first line always maps to the parent noteId
+        if (tracked.isNotEmpty() && tracked[0].noteId != noteId) {
+            tracked[0] = tracked[0].copy(noteId = noteId)
+        }
+        return tracked
     }
 
     /**

@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import type { ViewNoteSaveHandler } from './ViewDirectiveRenderer'
 import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
 import { directiveResultToDisplayString, directiveResultToValue, isComputed } from '@/dsl/directives/DirectiveResult'
 import { ViewDirectiveRenderer } from './ViewDirectiveRenderer'
@@ -9,7 +10,7 @@ interface DirectiveChipProps {
   result: DirectiveResult | null
   onClick?: () => void
   onButtonClick?: () => void
-  onViewNoteSave?: (noteId: string, newContent: string) => Promise<Map<number, string>>
+  onViewNoteSave?: ViewNoteSaveHandler
   /** Called when the gear icon on a view directive is clicked */
   onEditDirective?: () => void
 }

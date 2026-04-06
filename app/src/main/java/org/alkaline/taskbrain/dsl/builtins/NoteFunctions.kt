@@ -62,6 +62,7 @@ object NoteFunctions {
         name = "find",
         isDynamic = false  // Results are deterministic based on current note content
     ) { args, env ->
+        args.assertNoUnknownNamed("find", "path", "name", "where")
         val pathArg = args["path"]
         val nameArg = args["name"]
         val whereArg = args.getLambda("where")
@@ -152,6 +153,7 @@ object NoteFunctions {
         name = "new",
         isDynamic = true  // Creates a new note each time
     ) { args, env ->
+        args.assertNoUnknownNamed("new", "path", "content")
         val pathArg = args["path"]
             ?: throw ExecutionException("'new' requires a 'path' argument")
         val path = (pathArg as? StringVal)?.value
@@ -202,6 +204,7 @@ object NoteFunctions {
         name = "maybe_new",
         isDynamic = true  // May create a new note
     ) { args, env ->
+        args.assertNoUnknownNamed("maybe_new", "path", "maybe_content")
         val pathArg = args["path"]
             ?: throw ExecutionException("'maybe_new' requires a 'path' argument")
         val path = (pathArg as? StringVal)?.value
@@ -255,6 +258,7 @@ object NoteFunctions {
         name = "view",
         isDynamic = false  // Results are deterministic based on current note content
     ) { args, env ->
+        args.assertNoUnknownNamed("view")
         // Get the list argument
         val listArg = args[0]
             ?: throw ExecutionException("'view' requires a list of notes as argument")

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { LineState } from '@/editor/LineState'
 import { SELECTION_NONE, type EditorSelection } from '@/editor/EditorSelection'
 import { executePaste, isFullLineSelection } from '@/editor/PasteHandler'
-import type { ParsedLine } from '@/editor/ClipboardParser'
+import { type ParsedLine, parseClipboardContent } from '@/editor/ClipboardParser'
 
 function lines(...texts: string[]): LineState[] {
   return texts.map(t => new LineState(t))
@@ -249,5 +249,75 @@ describe('combined scenarios from spec', () => {
     ])
     // Empty line is replaced, not scooted down
     expect(lineTexts(result.lines)).toEqual(['☐ one', '☐ two'])
+  })
+})
+
+describe('full-line cut-paste at position 0 (end-to-end with parser)', () => {
+  it('prefixed line with trailing newline inserts before destination', () => {
+    const clipboardText = '☐ cut task\n'
+    const parsedLines = parseClipboardContent(clipboardText, null)
+
+    const ls = withCursor(
+      [new LineState('title'), new LineState('• existing', undefined, ['noteB'])],
+      1, 0,
+    )
+    const cutLines = [new LineState('☐ cut task', undefined, ['noteA'])]
+    const result = executePaste(ls, 1, SELECTION_NONE, parsedLines, cutLines)
+
+    expect(lineTexts(result.lines)).toEqual(['title', '☐ cut task', '• existing'])
+    expect(result.lines[1]!.noteIds).toEqual(['noteA'])
+    expect(result.lines[2]!.noteIds).toEqual(['noteB'])
+  })
+
+  it('plain text with trailing newline inserts as line, not inline', () => {
+    // "snacks\n" is a complete line — should NOT merge inline
+    const clipboardText = 'snacks\n'
+    const parsedLines = parseClipboardContent(clipboardText, null)
+
+    const ls = withCursor(
+      [new LineState('title'), new LineState('• existing', undefined, ['noteB'])],
+      1, 0,
+    )
+    const result = executePaste(ls, 1, SELECTION_NONE, parsedLines)
+
+    // Structured paste adopts destination bullet for unprefixed content (Rule 1)
+    expect(lineTexts(result.lines)).toEqual(['title', '• snacks', '• existing'])
+    expect(result.lines[2]!.noteIds).toEqual(['noteB'])
+  })
+
+  it('plain text without trailing newline merges inline', () => {
+    // "snacks" is content, not a complete line — merges at cursor
+    const clipboardText = 'snacks'
+    const parsedLines = parseClipboardContent(clipboardText, null)
+
+    const ls = withCursor(
+      [new LineState('title'), new LineState('• existing')],
+      1, 2, // cursor after "• "
+    )
+    const result = executePaste(ls, 1, SELECTION_NONE, parsedLines)
+
+    expect(lineTexts(result.lines)).toEqual(['title', '• snacksexisting'])
+  })
+
+  it('multi-line with trailing newline produces correct line count', () => {
+    const clipboardText = '☐ line A\n☐ line B\n'
+    const parsedLines = parseClipboardContent(clipboardText, null)
+
+    const ls = withCursor([new LineState('title'), new LineState('')], 1, 0)
+    const result = executePaste(ls, 1, SELECTION_NONE, parsedLines)
+
+    // 2 pasted lines, not 3
+    expect(result.lines.filter(l => l.text.includes('line')).length).toBe(2)
+  })
+
+  it('line-terminated paste onto empty line preserves the empty line', () => {
+    const clipboardText = 'snacks\n'
+    const parsedLines = parseClipboardContent(clipboardText, null)
+
+    const ls = withCursor([new LineState('title'), new LineState('')], 1, 0)
+    const result = executePaste(ls, 1, SELECTION_NONE, parsedLines)
+
+    // Empty line should be pushed down, not replaced
+    expect(lineTexts(result.lines)).toEqual(['title', 'snacks', ''])
   })
 })

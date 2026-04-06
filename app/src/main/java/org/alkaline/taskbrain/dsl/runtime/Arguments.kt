@@ -118,6 +118,16 @@ data class Arguments(
      */
     fun getLambda(name: String): LambdaVal? = named[name] as? LambdaVal
 
+    /** Throws if any named arguments exist that aren't in the known set. */
+    fun assertNoUnknownNamed(funcName: String, vararg known: String) {
+        val knownSet = known.toSet()
+        for (name in named.keys) {
+            if (name !in knownSet) {
+                throw ExecutionException("'$funcName' does not accept named argument '$name'")
+            }
+        }
+    }
+
     /**
      * Get a positional argument as BooleanVal, throwing with descriptive error if not present or wrong type.
      * @param index Argument index

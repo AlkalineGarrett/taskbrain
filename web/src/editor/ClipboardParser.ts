@@ -173,6 +173,8 @@ export function parseClipboardContent(plainText: string, html: string | null): P
   // Normalize line endings (CRLF → LF, CR → LF)
   plainText = plainText.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
 
+  let lines: ParsedLine[]
+
   // Try HTML first if it contains lists
   if (html) {
     const htmlLines = parseHtmlLines(html)
@@ -181,11 +183,13 @@ export function parseClipboardContent(plainText: string, html: string | null): P
 
   // Try markdown detection
   if (looksLikeMarkdown(plainText)) {
-    return parseMarkdownLines(plainText)
+    lines = parseMarkdownLines(plainText)
+  } else {
+    // Default: parse as internal format
+    lines = parseInternalLines(plainText)
   }
 
-  // Default: parse as internal format
-  return parseInternalLines(plainText)
+  return lines
 }
 
 // --- Helpers ---

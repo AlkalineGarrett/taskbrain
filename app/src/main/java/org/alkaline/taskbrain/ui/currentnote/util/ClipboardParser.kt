@@ -32,10 +32,11 @@ object ClipboardParser {
             val htmlLines = parseHtml(html)
             if (htmlLines != null) return htmlLines
         }
-        if (looksLikeMarkdown(normalized)) {
-            return parseMarkdown(normalized)
+        return if (looksLikeMarkdown(normalized)) {
+            parseMarkdown(normalized)
+        } else {
+            parseInternal(normalized)
         }
-        return parseInternal(normalized)
     }
 
     // --- Internal format ---

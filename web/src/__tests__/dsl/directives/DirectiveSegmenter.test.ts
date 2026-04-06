@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { segmentLine, buildDisplayText, hasDirectives } from '../../../dsl/directives/DirectiveSegmenter'
+import { segmentLine, buildDisplayText, hasDirectives, isViewSegment, type DirectiveSegmentType } from '../../../dsl/directives/DirectiveSegmenter'
 import type { DirectiveResult } from '../../../dsl/directives/DirectiveResult'
 import { directiveResultSuccess, directiveResultFailure } from '../../../dsl/directives/DirectiveResult'
 import { directiveHash } from '../../../dsl/directives/DirectiveFinder'
-import { numberVal, stringVal, alarmVal } from '../../../dsl/runtime/DslValue'
+import { numberVal, stringVal, alarmVal, viewVal } from '../../../dsl/runtime/DslValue'
+import type { Note } from '../../../data/Note'
 
 function resultsMap(entries: [string, DirectiveResult][]): Map<string, DirectiveResult> {
   return new Map(entries)
@@ -304,6 +305,86 @@ describe('buildDisplayText recurringAlarm directives', () => {
     expect(result.directiveDisplayRanges[0]!.alarmId).toBe('a1')
     expect(result.directiveDisplayRanges[0]!.recurringAlarmId).toBeUndefined()
     expect(result.directiveDisplayRanges[1]!.recurringAlarmId).toBe('rec1')
+  })
+})
+
+function directiveSegment(sourceText: string, result: DirectiveResult | null): DirectiveSegmentType {
+  return {
+    kind: 'Directive',
+    sourceText,
+    key: directiveHash(sourceText),
+    result,
+    rangeStart: 0,
+    rangeEnd: sourceText.length,
+    displayText: sourceText,
+    isComputed: false,
+  }
+}
+
+const dummyNote: Note = {
+  id: 'n1', userId: 'u1', parentNoteId: null, content: 'test',
+  createdAt: null, updatedAt: null, lastAccessedAt: null,
+  tags: [], containedNotes: [], state: null, path: '/test',
+  rootNoteId: null, showCompleted: true,
+}
+
+describe('isViewSegment', () => {
+  it('returns true for view directive with successful result', () => {
+    const result = directiveResultSuccess(viewVal([dummyNote]))
+    expect(isViewSegment(directiveSegment('[view(find())]', result))).toBe(true)
+  })
+
+  it('returns true for view directive with error result (source text fallback)', () => {
+    const result = directiveResultFailure('parse error')
+    expect(isViewSegment(directiveSegment('[view(bad syntax)]', result))).toBe(true)
+  })
+
+  it('returns true for view directive with no result', () => {
+    expect(isViewSegment(directiveSegment('[view(find())]', null))).toBe(true)
+  })
+
+  it('returns false for non-view directive', () => {
+    const result = directiveResultSuccess(numberVal(42))
+    expect(isViewSegment(directiveSegment('[calc]', result))).toBe(false)
+  })
+
+  it('returns false for non-view directive with error', () => {
+    const result = directiveResultFailure('bad')
+    expect(isViewSegment(directiveSegment('[calc]', result))).toBe(false)
+  })
+
+  it('returns false for source text that merely contains view', () => {
+    expect(isViewSegment(directiveSegment('[overview()]', null))).toBe(false)
+  })
+})
+
+describe('buildDisplayText view directives', () => {
+  it('marks view directive with isView when result is ViewVal', () => {
+    const source = '[view(find())]'
+    const key = directiveHash(source)
+    const dr = directiveResultSuccess(viewVal([dummyNote]))
+    const result = buildDisplayText(source, 'test-line', resultsMap([[key, dr]]))
+    expect(result.directiveDisplayRanges[0]!.isView).toBe(true)
+  })
+
+  it('marks view directive with isView even on error (source text fallback)', () => {
+    const source = '[view(bad)]'
+    const key = directiveHash(source)
+    const dr = directiveResultFailure('parse error')
+    const result = buildDisplayText(source, 'test-line', resultsMap([[key, dr]]))
+    expect(result.directiveDisplayRanges[0]!.isView).toBe(true)
+  })
+
+  it('marks view directive with isView when no result at all', () => {
+    const source = '[view(find())]'
+    const result = buildDisplayText(source, 'test-line', new Map())
+    expect(result.directiveDisplayRanges[0]!.isView).toBe(true)
+  })
+
+  it('does not mark non-view directive as isView', () => {
+    const source = '[calc]'
+    const result = buildDisplayText(source, 'test-line', new Map())
+    expect(result.directiveDisplayRanges[0]!.isView).toBe(false)
   })
 })
 

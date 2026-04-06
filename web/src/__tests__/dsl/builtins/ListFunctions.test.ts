@@ -182,6 +182,17 @@ describe('ListFunctions', () => {
     })
   })
 
+  describe('unknown named arguments', () => {
+    it('should reject unknown named arg on sort', () => {
+      expect(() => execute('[sort(list(1), bogus: 1)]')).toThrow("'sort' does not accept named argument 'bogus'")
+    })
+
+    it('should accept known named args on sort', () => {
+      const result = executeList('[sort(list(3, 1), order: ascending)]')
+      expect(result.items.map(toDisplayString)).toEqual(['1', '3'])
+    })
+  })
+
   describe('integration', () => {
     it('should sort numbers and get first', () => {
       const result = execute('[first(sort(list(5, 3, 8, 1, 4)))]')

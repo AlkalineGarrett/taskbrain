@@ -31,20 +31,38 @@ object PasteHandler {
         parsed: List<ParsedLine>,
         cutLines: List<LineState>? = null,
     ): PasteResult {
-        if (parsed.isEmpty()) {
+        // A trailing \n is a line terminator, not an extra empty line.
+        // "line\n" = 1 complete line; "line\nfoo" = 1 line + trailing content.
+        // split('\n') on "line\n" produces ["line", ""] — strip the empty terminator
+        // but remember it was there so line-terminated content gets line-level paste.
+        var trimmed = parsed
+        var isLineTerminated = false
+        if (parsed.size > 1) {
+            val last = parsed.last()
+            if (last.content.isEmpty() && last.bullet.isEmpty() && last.indent == 0) {
+                trimmed = parsed.dropLast(1)
+                isLineTerminated = true
+            }
+        }
+
+        if (trimmed.isEmpty()) {
             return PasteResult(lines, focusedLineIndex, 0)
         }
 
         val result = when {
             // Rule 5: single-line paste with no prefix = simple text insertion
-            parsed.size == 1 && !parsed[0].hasPrefix ->
-                applySingleLinePaste(lines, focusedLineIndex, selection, parsed[0].content)
+            // Skip if line-terminated: "content\n" is a full line, not inline content.
+            trimmed.size == 1 && !trimmed[0].hasPrefix && !isLineTerminated ->
+                applySingleLinePaste(lines, focusedLineIndex, selection, trimmed[0].content)
             // Rule 3: full-line selection = clean replacement
             selection.hasSelection && isFullLineSelection(lines, selection) ->
-                applyFullLineReplace(lines, selection, parsed)
+                applyFullLineReplace(lines, selection, trimmed)
+            // Line-level insert: complete lines go before cursor line, cursor line preserved
+            isLineTerminated && !selection.hasSelection ->
+                applyLineInsert(lines, focusedLineIndex, trimmed)
             // Rules 1, 2, 4: multi-line or prefixed paste
             else ->
-                applyStructuredPaste(lines, focusedLineIndex, selection, parsed)
+                applyStructuredPaste(lines, focusedLineIndex, selection, trimmed)
         }
 
         // Recover noteIds from cut lines for any pasted lines that have none
@@ -134,6 +152,38 @@ object PasteHandler {
         return PasteResult(newLines, cursorLineIndex, cursorPosition)
     }
 
+    // --- Shared: prefix merging + indent shifting ---
+
+    private fun buildMergedPastedLines(destLine: LineState, parsed: List<ParsedLine>): List<LineState> {
+        val destPrefix = LineState.extractPrefix(destLine.text)
+        val destIndent = destPrefix.takeWhile { it == '\t' }.length
+        val destBullet = destPrefix.drop(destIndent)
+        val indentDelta = destIndent - parsed[0].indent
+
+        return parsed.map { p ->
+            val newIndent = maxOf(0, p.indent + indentDelta)
+            val bullet = p.bullet.ifEmpty { destBullet }
+            LineState(ParsedLine(newIndent, bullet, p.content).toLineText())
+        }
+    }
+
+    // --- Line-level insert (line-terminated paste without selection) ---
+
+    private fun applyLineInsert(
+        lines: List<LineState>,
+        focusedLineIndex: Int,
+        parsed: List<ParsedLine>,
+    ): PasteResult {
+        val pastedLines = buildMergedPastedLines(lines[focusedLineIndex], parsed)
+
+        val before = lines.subList(0, focusedLineIndex)
+        val atAndAfter = lines.subList(focusedLineIndex, lines.size)
+        val resultLines = before + pastedLines + atAndAfter
+        val lastPastedIndex = before.size + pastedLines.size - 1
+        val cursorPosition = resultLines.getOrNull(lastPastedIndex)?.text?.length ?: 0
+        return PasteResult(resultLines, lastPastedIndex, cursorPosition)
+    }
+
     // --- Rules 1, 2, 4: Structured paste ---
 
     private fun applyStructuredPaste(
@@ -174,22 +224,10 @@ object PasteHandler {
         }
 
         val destLine = lines[destLineIndex]
-        val destPrefix = LineState.extractPrefix(destLine.text)
-        val destIndent = destPrefix.takeWhile { it == '\t' }.length
-        val destBullet = destPrefix.drop(destIndent)
         val leadingText = destLine.text.substring(0, splitOffset)
         val leadingContent = leadingText.drop(LineState.extractPrefix(leadingText).length)
 
-        // Rule 4: compute indent delta
-        val firstPastedIndent = parsed[0].indent
-        val indentDelta = destIndent - firstPastedIndent
-
-        // Rule 1: prefix merging + Rule 4: indent shifting
-        val pastedLines = parsed.map { p ->
-            val newIndent = maxOf(0, p.indent + indentDelta)
-            val bullet = p.bullet.ifEmpty { destBullet }  // source wins, adopt dest if absent
-            LineState(ParsedLine(newIndent, bullet, p.content).toLineText())
-        }
+        val pastedLines = buildMergedPastedLines(destLine, parsed)
 
         // Rule 2: build leading half, pasted lines, trailing half
         val result = mutableListOf<LineState>()
@@ -208,7 +246,11 @@ object PasteHandler {
         // or prefix-only (e.g. bare "☐ ") have nothing worth preserving — the pasted
         // content replaces them.
         if (hasTrailingContent) {
-            result.add(LineState(trailingPrefix + trailingContent))
+            // Preserve the destination line's noteIds when the trailing half is the
+            // unsplit remainder (cursor was at position 0 or within the prefix).
+            val trailingNoteIds = if (!hasLeadingContent && !selection.hasSelection)
+                destLine.noteIds else emptyList()
+            result.add(LineState(trailingPrefix + trailingContent, noteIds = trailingNoteIds))
         }
 
         result.addAll(afterLines)

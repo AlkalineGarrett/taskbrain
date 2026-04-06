@@ -712,6 +712,56 @@ describe('matchLinesToIds', () => {
     expect(result[0]!.noteId).toBe('root')
     expect(result[1]!.noteId).toBeNull()
   })
+
+  it('uses editor noteIds for foreign notes (reparenting from another tree)', () => {
+    const existing: NoteLine[] = [
+      { content: 'Root', noteId: 'root' },
+      { content: '\tExisting child', noteId: 'child1' },
+    ]
+
+    const result = matchLinesToIds(
+      'root',
+      existing,
+      ['Root', '\tExisting child', '\tPasted line'],
+      ['root', 'child1', 'foreign-note'],
+    )
+
+    expect(result[0]!.noteId).toBe('root')
+    expect(result[1]!.noteId).toBe('child1')
+    expect(result[2]!.noteId).toBe('foreign-note')
+  })
+
+  it('prefers content matching over editor noteIds for notes already in tree', () => {
+    const existing: NoteLine[] = [
+      { content: 'Root', noteId: 'root' },
+      { content: '\tChild A', noteId: 'a' },
+      { content: '\tChild B', noteId: 'b' },
+    ]
+
+    // Editor has noteIds in a different order due to reordering
+    const result = matchLinesToIds(
+      'root',
+      existing,
+      ['Root', '\tChild B', '\tChild A'],
+      ['root', 'a', 'b'],
+    )
+
+    // Content matching should win for in-tree notes
+    expect(result[1]!.noteId).toBe('b')
+    expect(result[2]!.noteId).toBe('a')
+  })
+
+  it('handles editorNoteIds with no existing lines', () => {
+    const result = matchLinesToIds(
+      'root',
+      [],
+      ['Root', '\tPasted line'],
+      ['root', 'foreign-note'],
+    )
+
+    expect(result[0]!.noteId).toBe('root')
+    expect(result[1]!.noteId).toBe('foreign-note')
+  })
 })
 
 // endregion

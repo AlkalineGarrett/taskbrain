@@ -76,6 +76,10 @@ sealed class DirectiveSegment {
             /** Returns true if this is any alarm-type directive (alarm or recurringAlarm). */
             fun isAlarmDirective(sourceText: String): Boolean =
                 alarmIdFromSource(sourceText) != null || recurringAlarmIdFromSource(sourceText) != null
+
+            /** Returns true if the source text is a view directive, regardless of parse/execution result. */
+            fun isViewDirective(sourceText: String): Boolean =
+                sourceText.startsWith("[view(")
         }
     }
 }

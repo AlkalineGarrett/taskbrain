@@ -48,21 +48,39 @@ export function executePaste(
   parsed: ParsedLine[],
   cutLines?: LineState[],
 ): PasteResult {
-  if (parsed.length === 0) {
+  // A trailing \n is a line terminator, not an extra empty line.
+  // "line\n" = 1 complete line; "line\nfoo" = 1 line + trailing content.
+  // split('\n') on "line\n" produces ["line", ""] — strip the empty terminator
+  // but remember it was there so line-terminated content gets line-level paste.
+  let trimmed = parsed
+  let isLineTerminated = false
+  if (parsed.length > 1) {
+    const last = parsed[parsed.length - 1]!
+    if (last.content === '' && last.bullet === '' && last.indent === 0) {
+      trimmed = parsed.slice(0, -1)
+      isLineTerminated = true
+    }
+  }
+
+  if (trimmed.length === 0) {
     return { lines: [...lines], cursorLineIndex: focusedLineIndex, cursorPosition: 0 }
   }
 
   let result: PasteResult
 
   // Rule 5: single-line paste with no prefix = simple text insertion
-  if (parsed.length === 1 && !parsedLineHasPrefix(parsed[0]!)) {
-    result = applySingleLinePaste(lines, focusedLineIndex, selection, parsed[0]!.content)
+  // Skip if line-terminated: "content\n" is a full line, not inline content.
+  if (trimmed.length === 1 && !parsedLineHasPrefix(trimmed[0]!) && !isLineTerminated) {
+    result = applySingleLinePaste(lines, focusedLineIndex, selection, trimmed[0]!.content)
   } else if (hasSel(selection) && isFullLineSelection(lines, selection)) {
     // Rule 3: full-line selection = clean replacement
-    result = applyFullLineReplace(lines, selection, parsed)
+    result = applyFullLineReplace(lines, selection, trimmed)
+  } else if (isLineTerminated && !hasSel(selection)) {
+    // Line-level insert: complete lines go before the cursor line, cursor line is preserved
+    result = applyLineInsert(lines, focusedLineIndex, trimmed)
   } else {
     // Rules 1, 2, 4: multi-line or prefixed paste
-    result = applyStructuredPaste(lines, focusedLineIndex, selection, parsed)
+    result = applyStructuredPaste(lines, focusedLineIndex, selection, trimmed)
   }
 
   // Recover noteIds from cut lines for any pasted lines that have none
@@ -137,6 +155,38 @@ function applyFullLineReplace(
   return { lines: newLines, cursorLineIndex, cursorPosition }
 }
 
+// --- Shared: prefix merging + indent shifting ---
+
+function buildMergedPastedLines(destLine: LineState, parsed: ParsedLine[]): LineState[] {
+  const destPrefix = extractPrefix(destLine.text)
+  const destIndent = destPrefix.match(/^\t*/)?.[0].length ?? 0
+  const destBullet = destPrefix.slice(destIndent)
+  const indentDelta = destIndent - parsed[0]!.indent
+
+  return parsed.map(p => {
+    const newIndent = Math.max(0, p.indent + indentDelta)
+    const bullet = p.bullet || destBullet
+    return new LineState(buildLineText({ indent: newIndent, bullet, content: p.content }))
+  })
+}
+
+// --- Line-level insert (line-terminated paste without selection) ---
+
+function applyLineInsert(
+  lines: LineState[],
+  focusedLineIndex: number,
+  parsed: ParsedLine[],
+): PasteResult {
+  const pastedLines = buildMergedPastedLines(lines[focusedLineIndex]!, parsed)
+
+  const before = lines.slice(0, focusedLineIndex)
+  const atAndAfter = lines.slice(focusedLineIndex)
+  const resultLines = [...before, ...pastedLines, ...atAndAfter]
+  const lastPastedIndex = before.length + pastedLines.length - 1
+  const cursorPosition = resultLines[lastPastedIndex]?.text.length ?? 0
+  return { lines: resultLines, cursorLineIndex: lastPastedIndex, cursorPosition }
+}
+
 // --- Rules 1, 2, 4: Structured paste (multi-line or prefixed) ---
 
 function applyStructuredPaste(
@@ -178,22 +228,10 @@ function applyStructuredPaste(
   }
 
   const destLine = lines[destLineIndex]!
-  const destPrefix = extractPrefix(destLine.text)
-  const destIndent = destPrefix.match(/^\t*/)?.[0].length ?? 0
-  const destBullet = destPrefix.slice(destIndent)
   const leadingText = destLine.text.substring(0, splitOffset)
   const leadingContent = leadingText.substring(extractPrefix(leadingText).length)
 
-  // Rule 4: compute indent delta
-  const firstPastedIndent = parsed[0]!.indent
-  const indentDelta = destIndent - firstPastedIndent
-
-  // Rule 1: apply prefix merging + Rule 4: indent shifting
-  const pastedLines = parsed.map(p => {
-    const newIndent = Math.max(0, p.indent + indentDelta)
-    const bullet = p.bullet || destBullet  // source wins, adopt dest if absent
-    return new LineState(buildLineText({ indent: newIndent, bullet, content: p.content }))
-  })
+  const pastedLines = buildMergedPastedLines(destLine, parsed)
 
   // Rule 2: build leading half, pasted lines, trailing half
   const result: LineState[] = [...beforeLines]
@@ -217,7 +255,11 @@ function applyStructuredPaste(
   // content replaces them.
   if (hasTrailingContent) {
     const trailingLine = trailingPrefix + trailingContent
-    result.push(new LineState(trailingLine))
+    // Preserve the destination line's noteIds when the trailing half is the
+    // unsplit remainder (cursor was at position 0 or within the prefix).
+    const trailingNoteIds = !hasLeadingContent && !hasSel(selection)
+      ? destLine.noteIds : []
+    result.push(new LineState(trailingLine, undefined, trailingNoteIds))
   }
 
   // Remaining lines after the affected region
