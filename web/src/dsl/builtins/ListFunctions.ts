@@ -17,6 +17,7 @@ const listFunction: BuiltinFunction = {
 const sortFunction: BuiltinFunction = {
   name: 'sort',
   call: (args, env) => {
+    args.assertNoUnknownNamed('sort', 'key', 'order')
     if (args.size !== 1) throw new ExecutionException(`'sort' requires exactly 1 positional argument (list), got ${args.size}`)
     const listArg = args.getPositional(0)
     if (!listArg) throw new ExecutionException("'sort' requires a list argument")

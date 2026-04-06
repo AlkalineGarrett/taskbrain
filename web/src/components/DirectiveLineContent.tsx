@@ -1,7 +1,6 @@
 import { useState, useCallback } from 'react'
 import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
-import { isViewResult } from '@/dsl/directives/DirectiveResult'
-import { segmentLine } from '@/dsl/directives/DirectiveSegmenter'
+import { segmentLine, isViewSegment } from '@/dsl/directives/DirectiveSegmenter'
 import { DirectiveChip } from './DirectiveChip'
 import { DirectiveEditRow } from './DirectiveEditRow'
 import styles from './DirectiveLineContent.module.css'
@@ -69,7 +68,7 @@ export function DirectiveLineContent({
       onRefresh={(text) => handleRefresh(editingKey!, text)}
     />
   ) : null
-  const isEditingView = editSegment?.kind === 'Directive' && isViewResult(editSegment.result)
+  const isEditingView = editSegment?.kind === 'Directive' && isViewSegment(editSegment)
 
   return (
     <div style={{ width: '100%' }}>

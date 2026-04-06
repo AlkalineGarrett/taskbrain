@@ -3,8 +3,8 @@ import type { EditorController } from '@/editor/EditorController'
 import type { EditorState } from '@/editor/EditorState'
 import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
 import { hasCheckbox } from '@/editor/LinePrefixes'
-import { hasDirectives, segmentLine } from '@/dsl/directives/DirectiveSegmenter'
-import { directiveResultToValue, isViewResult } from '@/dsl/directives/DirectiveResult'
+import { hasDirectives, segmentLine, isViewSegment } from '@/dsl/directives/DirectiveSegmenter'
+import { directiveResultToValue } from '@/dsl/directives/DirectiveResult'
 import { DirectiveLineContent } from './DirectiveLineContent'
 import { getCharOffsetFromPoint, getCharOffsetHidingTextarea, getWordBoundsAt, isOnFirstVisualRow, isOnLastVisualRow, mapDisplayOffsetToSource, mapSourceOffsetToDisplay } from '@/editor/TextMeasure'
 import { computeFocusHighlight } from '@/editor/FocusHighlight'
@@ -587,7 +587,7 @@ export function EditorLine({
   // Check if any directive on this line is a view — views stay rendered even when focused
   const lineHasDirectives = directiveResults && hasDirectives(content)
   const viewSegment = lineHasDirectives ? segmentLine(content, line.effectiveId, directiveResults).find(
-    (s) => s.kind === 'Directive' && isViewResult(s.result),
+    (s) => s.kind === 'Directive' && isViewSegment(s),
   ) : undefined
   const hasViewDirective = viewSegment != null
   // Only hide the parent gutter when the view has content (its own gutter replaces it).

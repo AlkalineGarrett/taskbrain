@@ -14,6 +14,7 @@ export function getNoteFunctions(): BuiltinFunction[] {
 const findFunction: BuiltinFunction = {
   name: 'find',
   call: (args, env) => {
+    args.assertNoUnknownNamed('find', 'path', 'name', 'where')
     const pathArg = args.getNamed('path')
     const nameArg = args.getNamed('name')
     const whereArg = args.getLambda('where')
@@ -41,6 +42,7 @@ const newFunction: BuiltinFunction = {
   name: 'new',
   isDynamic: true,
   call: async (args, env) => {
+    args.assertNoUnknownNamed('new', 'path', 'content')
     const pathArg = args.getNamed('path')
     if (!pathArg) throw new ExecutionException("'new' requires a 'path' argument")
     if (pathArg.kind !== 'StringVal') throw new ExecutionException(`'new' path argument must be a string, got ${typeName(pathArg)}`)
@@ -67,6 +69,7 @@ const maybeNewFunction: BuiltinFunction = {
   name: 'maybe_new',
   isDynamic: true,
   call: async (args, env) => {
+    args.assertNoUnknownNamed('maybe_new', 'path', 'maybe_content')
     const pathArg = args.getNamed('path')
     if (!pathArg) throw new ExecutionException("'maybe_new' requires a 'path' argument")
     if (pathArg.kind !== 'StringVal') throw new ExecutionException(`'maybe_new' path argument must be a string, got ${typeName(pathArg)}`)
@@ -92,6 +95,7 @@ const maybeNewFunction: BuiltinFunction = {
 const viewFunction: BuiltinFunction = {
   name: 'view',
   call: (args, env) => {
+    args.assertNoUnknownNamed('view')
     const listArg = args.getPositional(0)
     if (!listArg) throw new ExecutionException("'view' requires a list of notes as argument")
     if (listArg.kind !== 'ListVal') throw new ExecutionException(`'view' argument must be a list, got ${typeName(listArg)}`)

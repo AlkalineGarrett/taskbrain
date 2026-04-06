@@ -103,6 +103,7 @@ const weeklyConstant: BuiltinFunction = {
 const dailyAtFunction: BuiltinFunction = {
   name: 'daily_at',
   call: (args) => {
+    args.assertNoUnknownNamed('daily_at', 'precise')
     const timeStr = args.requireString(0, 'daily_at', 'time')
     validateTimeFormat(timeStr.value, 'daily_at')
     const precise = (args.getNamed('precise') as BooleanVal | null)?.value ?? false
@@ -114,6 +115,7 @@ const dailyAtFunction: BuiltinFunction = {
 const weeklyAtFunction: BuiltinFunction = {
   name: 'weekly_at',
   call: (args) => {
+    args.assertNoUnknownNamed('weekly_at', 'precise')
     const timeStr = args.requireString(0, 'weekly_at', 'time')
     validateTimeFormat(timeStr.value, 'weekly_at')
     const precise = (args.getNamed('precise') as BooleanVal | null)?.value ?? false

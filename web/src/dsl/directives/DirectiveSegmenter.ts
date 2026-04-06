@@ -1,6 +1,6 @@
 import { findDirectives, directiveHash } from './DirectiveFinder'
 import type { DirectiveResult } from './DirectiveResult'
-import { directiveResultToValue, isComputed } from './DirectiveResult'
+import { directiveResultToValue, isComputed, isViewResult } from './DirectiveResult'
 import { toDisplayString } from '../runtime/DslValue'
 
 const ALARM_PATTERN = /^\[alarm\("([^"]+)"\)]$/
@@ -20,6 +20,18 @@ function recurringAlarmIdFromSource(sourceText: string): string | undefined {
 /** Returns true if this is any alarm-type directive (alarm or recurringAlarm). */
 function isAlarmDirective(sourceText: string): boolean {
   return alarmIdFromSource(sourceText) != null || recurringAlarmIdFromSource(sourceText) != null
+}
+
+const VIEW_PATTERN = /^\[view\(/
+
+/** Returns true if the source text is a view directive, regardless of parse/execution result. */
+function isViewDirective(sourceText: string): boolean {
+  return VIEW_PATTERN.test(sourceText)
+}
+
+/** Returns true if a directive segment is a view — checks result first, falls back to source text. */
+export function isViewSegment(segment: DirectiveSegmentType): boolean {
+  return isViewResult(segment.result) || isViewDirective(segment.sourceText)
 }
 
 // ---- Segment types ----
@@ -168,7 +180,7 @@ export function buildDisplayText(
         isComputed: segment.isComputed,
         hasError: segment.result?.error != null,
         hasWarning: segment.result?.warning != null,
-        isView: resultValue?.kind === 'ViewVal',
+        isView: resultValue?.kind === 'ViewVal' || isViewDirective(segment.sourceText),
         isButton: resultValue?.kind === 'ButtonVal',
         isAlarm: resultValue?.kind === 'AlarmVal' || synthesizedAlarmId != null || synthesizedRecurringId != null,
         // Always extract alarm ID from source text — immune to result cache

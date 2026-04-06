@@ -108,6 +108,16 @@ export class Arguments {
     return arg
   }
 
+  /** Throws if any named arguments exist that aren't in the known set. */
+  assertNoUnknownNamed(funcName: string, ...known: string[]): void {
+    const knownSet = new Set(known)
+    for (const name of this.named.keys()) {
+      if (!knownSet.has(name)) {
+        throw new ExecutionException(`'${funcName}' does not accept named argument '${name}'`)
+      }
+    }
+  }
+
   getLambda(name: string): LambdaVal | null {
     const val = this.named.get(name)
     if (val === undefined) return null
