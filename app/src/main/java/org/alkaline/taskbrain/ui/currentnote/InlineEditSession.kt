@@ -8,7 +8,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import org.alkaline.taskbrain.data.Note
 import org.alkaline.taskbrain.data.NoteLine
+import org.alkaline.taskbrain.data.NoteStore
 import org.alkaline.taskbrain.dsl.directives.DirectiveFinder
 import org.alkaline.taskbrain.dsl.directives.DirectiveResult
 
@@ -200,6 +202,57 @@ class InlineEditState {
      * Decoupled from the editing session so they survive session transitions.
      */
     internal val viewGutterStates = mutableMapOf<String, org.alkaline.taskbrain.ui.currentnote.selection.GutterSelectionState>()
+
+    /**
+     * Eagerly create sessions for all notes that don't already have one.
+     * Existing sessions (including dirty ones) are preserved.
+     */
+    fun ensureSessionsForNotes(notes: List<Note>) {
+        for (note in notes) {
+            if (viewSessions.containsKey(note.id)) continue
+            val editorState = EditorState()
+            val storeLines = NoteStore.getNoteLinesById(note.id)
+            if (storeLines != null) {
+                val noteLines = storeLines.map { nl ->
+                    nl.content to (nl.noteId?.let { listOf(it) } ?: emptyList())
+                }
+                editorState.initFromNoteLines(noteLines)
+            } else {
+                editorState.updateFromText(note.content)
+            }
+            val session = InlineEditSession(
+                noteId = note.id,
+                originalContent = note.content,
+                editorState = editorState,
+                controller = EditorController(editorState)
+            )
+            viewSessions[note.id] = session
+        }
+    }
+
+    /**
+     * Remove sessions for notes no longer displayed in view directives.
+     * Returns any dirty sessions that were removed (caller may want to save them).
+     */
+    fun removeStaleSessionsExcept(activeNoteIds: Set<String>): List<InlineEditSession> {
+        val removed = mutableListOf<InlineEditSession>()
+        val iterator = viewSessions.iterator()
+        while (iterator.hasNext()) {
+            val (noteId, session) = iterator.next()
+            if (noteId !in activeNoteIds) {
+                if (session.isDirty) removed.add(session)
+                iterator.remove()
+                // Also clean up associated layout/gutter state
+                viewLineLayouts.remove(noteId)
+                viewGutterStates.remove(noteId)
+            }
+        }
+        return removed
+    }
+
+    /** Get all sessions that have unsaved changes. */
+    fun getAllDirtySessions(): List<InlineEditSession> =
+        viewSessions.values.filter { it.isDirty }
 
     /**
      * Register an existing session as the active session (no new EditorState created).

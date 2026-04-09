@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeFocusHighlight } from '@/editor/FocusHighlight'
+import { computeFocusHighlight } from '../../editor/FocusHighlight'
 
 /**
  * Tests for the focus highlight and auto-focus gating logic used in EditorLine.

@@ -812,14 +812,9 @@ private fun ViewDirectiveInlineContent(
             )
         }
 
-        // Main content box with edit/save buttons
+        // Main content box with gear button overlay
         Box(modifier = Modifier.fillMaxWidth()) {
             val inlineEditState = LocalInlineEditState.current
-            val activeSession = inlineEditState?.activeSession
-            val editingNoteIsDirty = editingNoteIndex != null &&
-                activeSession != null &&
-                notes.getOrNull(editingNoteIndex ?: -1)?.id == activeSession.noteId &&
-                activeSession.isDirty
 
             // Note content first (below buttons in z-order)
             if (notes.isEmpty()) {
@@ -881,39 +876,13 @@ private fun ViewDirectiveInlineContent(
                 }
             }
 
-            // Overlay buttons on top (last child in Box = highest z-order = receives taps)
+            // Overlay gear button on top (last child in Box = highest z-order = receives taps)
             Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (editingNoteIsDirty) {
-                    Button(
-                        onClick = {
-                            activeSession?.let { onNoteTap(it.noteId, it.currentContent) }
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = colorResource(R.color.action_button_background),
-                            contentColor = colorResource(R.color.action_button_text)
-                        ),
-                        shape = RoundedCornerShape(6.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                        modifier = Modifier.height(22.dp)
-                    ) {
-                        Icon(
-                            painter = painterResource(id = R.drawable.ic_save),
-                            contentDescription = null,
-                            modifier = Modifier.size(14.dp),
-                            tint = colorResource(R.color.action_button_text)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = stringResource(R.string.action_save),
-                            fontSize = 11.sp
-                        )
-                    }
-                }
                 IconButton(
                     onClick = onEditDirective,
                     modifier = Modifier.size(ViewEditButtonSize)
@@ -972,10 +941,10 @@ private fun EditableViewNoteSection(
 
     val isActiveSession = inlineEditState?.activeSession?.noteId == note.id
 
-    // Session is created once per note.id and updated in place on external changes.
-    // Never recreate on content changes — that orphans the focused line's IME connection,
-    // causing the documented rendering bug where the focused line displays empty text.
-    val session = remember(note.id) {
+    // Session is eagerly created by InlineEditState.ensureSessionsForNotes() when
+    // directive results are computed. Look it up from viewSessions.
+    val session = inlineEditState?.viewSessions?.get(note.id) ?: remember(note.id) {
+        // Fallback: create on demand if not yet in viewSessions (shouldn't happen normally)
         val s = EditorState()
         val storeLines = NoteStore.getNoteLinesById(note.id)
         if (storeLines != null) {
@@ -1031,14 +1000,17 @@ private fun EditableViewNoteSection(
                     }
                     hasBeenFocused = true
                 } else if (hasBeenFocused && isEditing && isActiveSession) {
+                    // On blur: push optimistic update to NoteStore (no Firestore write).
+                    // This lets other view directives referencing the same note see edits.
                     val active = inlineEditState?.activeSession
-                    val hasExpandedDirective = active?.expandedDirectiveKey != null
-                    if (!hasExpandedDirective && selectionCoordinator?.isFocusGuarded != true) {
-                        if (active?.isDirty == true) {
-                            onSave(active.currentContent)
-                        } else {
-                            inlineEditState?.endSession()
-                            onCancel()
+                    if (active?.isDirty == true) {
+                        val existing = NoteStore.getNoteById(active.noteId)
+                        if (existing != null) {
+                            NoteStore.updateNote(
+                                active.noteId,
+                                existing.copy(content = active.currentContent),
+                                persist = false
+                            )
                         }
                     }
                 }

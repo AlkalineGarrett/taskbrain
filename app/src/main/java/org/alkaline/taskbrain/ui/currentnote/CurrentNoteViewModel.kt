@@ -58,8 +58,8 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         getCurrentNoteId = { currentNoteId }
     )
 
-    private val _saveStatus = MutableLiveData<SaveStatus>()
-    val saveStatus: LiveData<SaveStatus> = _saveStatus
+    private val _saveStatus = MutableLiveData<UnifiedSaveStatus>()
+    val saveStatus: LiveData<UnifiedSaveStatus> = _saveStatus
 
     // Event emitted when a save completes successfully - allows other screens to refresh
     private val _saveCompleted = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
@@ -189,13 +189,13 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                     _newlyAssignedNoteIds.tryEmit(newIdsMap)
                 }
                 alarmManager.syncAlarmLineContent(trackedLines)
-                _saveStatus.value = SaveStatus.Success(noteId)
+                _saveStatus.value = UnifiedSaveStatus.Saved(noteId)
                 _saveCompleted.tryEmit(Unit)
                 markAsSaved()
             },
             onFailure = { e ->
                 Log.e(TAG, "Error saving note", e)
-                _saveStatus.value = SaveStatus.Error(e)
+                _saveStatus.value = UnifiedSaveStatus.PartialError(listOf(noteId), e)
             }
         )
         return result
@@ -306,9 +306,9 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         currentNoteId = resolvedId
         _currentNoteIdLiveData.value = currentNoteId
 
-        // A leftover SaveStatus.Success from the old note blocks the external
+        // A leftover Saved status from the old note blocks the external
         // change detector (NoteStore collector) for the new note.
-        _saveStatus.value = null
+        _saveStatus.value = UnifiedSaveStatus.Idle
 
         // Capture noteId for all coroutines in this method. currentNoteId is a mutable
         // field that changes on the next loadContent call, so coroutines MUST NOT read it.
@@ -498,7 +498,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         }
         currentNoteLines = capturedLines
 
-        _saveStatus.value = SaveStatus.Saving
+        _saveStatus.value = UnifiedSaveStatus.Saving
 
         // Capture noteId now — currentNoteId may change before the coroutine runs
         val savedNoteId = currentNoteId
@@ -637,8 +637,8 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     }
 
     fun clearSaveError() {
-        if (_saveStatus.value is SaveStatus.Error) {
-            _saveStatus.value = null
+        if (_saveStatus.value is UnifiedSaveStatus.PartialError) {
+            _saveStatus.value = UnifiedSaveStatus.Idle
         }
     }
 
@@ -663,7 +663,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 },
                 onFailure = { e ->
                     Log.e(TAG, "Error deleting note", e)
-                    _saveStatus.value = SaveStatus.Error(e)
+                    _saveStatus.value = UnifiedSaveStatus.PartialError(listOf(capturedNoteId), e)
                 }
             )
         }
@@ -684,18 +684,105 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 },
                 onFailure = { e ->
                     Log.e(TAG, "Error restoring note", e)
-                    _saveStatus.value = SaveStatus.Error(e)
+                    _saveStatus.value = UnifiedSaveStatus.PartialError(listOf(capturedNoteId), e)
                 }
             )
         }
     }
+
+    /**
+     * Saves the main note and all dirty inline edit sessions at once.
+     * On partial failure, saves what succeeds and reports the failures.
+     */
+    fun saveAll(
+        content: String,
+        lineNoteIds: List<List<String>>,
+        dirtySessions: List<InlineEditSession>
+    ) {
+        _saveStatus.value = UnifiedSaveStatus.Saving
+
+        val savedNoteId = currentNoteId
+
+        // Prepare main note lines
+        val capturedLines = if (lineNoteIds.any { it.isNotEmpty() }) {
+            resolveNoteIds(content.lines(), lineNoteIds)
+        } else {
+            updateTrackedLines(content)
+            currentNoteLines
+        }
+        currentNoteLines = capturedLines
+
+        // Update NoteStore synchronously before async writes
+        val existing = NoteStore.getNoteById(savedNoteId)
+        if (existing != null) {
+            NoteStore.updateNote(savedNoteId, existing.copy(content = content), persist = false)
+        }
+        MetadataHasher.invalidateCache()
+
+        viewModelScope.launch {
+            val failedNoteIds = mutableListOf<String>()
+            var lastError: Throwable? = null
+
+            // Save main note (without persistCurrentNote's status side effects)
+            val mainResult = repository.saveNoteWithChildren(savedNoteId, capturedLines)
+            mainResult.onSuccess { newIdsMap ->
+                if (newIdsMap.isNotEmpty()) {
+                    val updated = currentNoteLines.toMutableList()
+                    for ((index, newId) in newIdsMap) {
+                        if (index < updated.size) {
+                            updated[index] = updated[index].copy(noteId = newId)
+                        }
+                    }
+                    currentNoteLines = updated
+                    _newlyAssignedNoteIds.tryEmit(newIdsMap)
+                }
+                alarmManager.syncAlarmLineContent(capturedLines)
+                alarmManager.syncAlarmNoteIds(capturedLines)
+                directiveManager.onSaveCompleted(content)
+            }.onFailure { e ->
+                failedNoteIds.add(savedNoteId)
+                lastError = e
+            }
+
+            // Save all dirty inline sessions
+            for (session in dirtySessions) {
+                try {
+                    directiveManager.saveInlineEditSessionSync(session)
+                    session.markSaved()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to save inline session ${session.noteId}", e)
+                    failedNoteIds.add(session.noteId)
+                    lastError = e
+                }
+            }
+
+            if (failedNoteIds.isEmpty()) {
+                _saveStatus.value = UnifiedSaveStatus.Saved(savedNoteId)
+                _saveCompleted.tryEmit(Unit)
+                markAsSaved()
+            } else {
+                _saveStatus.value = UnifiedSaveStatus.PartialError(failedNoteIds, lastError!!)
+            }
+        }
+    }
+
+    /**
+     * Sets the save status to Dirty. Called by the screen when the user edits content.
+     */
+    fun markAsDirty() {
+        if (_saveStatus.value !is UnifiedSaveStatus.Saving) {
+            _saveStatus.value = UnifiedSaveStatus.Dirty
+        }
+    }
 }
 
-sealed class SaveStatus {
-    object Saving : SaveStatus()
+sealed class UnifiedSaveStatus {
+    object Idle : UnifiedSaveStatus()
+    object Dirty : UnifiedSaveStatus()
+    object Saving : UnifiedSaveStatus()
     /** @param noteId the note that was saved (may differ from currentNoteId after a tab switch) */
-    data class Success(val noteId: String) : SaveStatus()
-    data class Error(val throwable: Throwable) : SaveStatus()
+    data class Saved(val noteId: String) : UnifiedSaveStatus()
+    data class PartialError(val failedNoteIds: List<String>, val error: Throwable) : UnifiedSaveStatus()
 }
 
 sealed class LoadStatus {

@@ -8,7 +8,7 @@ import { InlineEditSession } from '@/editor/InlineEditSession'
 import { useActiveEditor } from '@/editor/ActiveEditorContext'
 import { useEditorInteractions } from '@/editor/useEditorInteractions'
 import { EditorLine } from './EditorLine'
-import { EMPTY_VIEW, SAVE, SAVING, SAVE_ERROR_BANNER, SAVE_ERROR_DISMISS } from '@/strings'
+import { EMPTY_VIEW, SAVE_ERROR_BANNER, SAVE_ERROR_DISMISS } from '@/strings'
 import styles from './ViewDirectiveRenderer.module.css'
 
 export type ViewNoteSaveHandler = (noteId: string, trackedLines: NoteLine[]) => Promise<Map<number, string>>
@@ -32,35 +32,10 @@ export function ViewDirectiveRenderer({
   onEditDirective,
 }: ViewDirectiveRendererProps) {
   const { notes } = viewVal
-  const { viewSaveRef } = useActiveEditor()
-  const [dirtyNoteId, setDirtyNoteId] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
-  const saveRef = useRef<(() => Promise<void>) | null>(null)
+  const { sessionManager } = useActiveEditor()
 
-  const dirtyCallbacks = useRef(new Map<string, (dirty: boolean) => void>())
-  const getDirtyCallback = useCallback((noteId: string) => {
-    let cb = dirtyCallbacks.current.get(noteId)
-    if (!cb) {
-      cb = (dirty: boolean) => {
-        setDirtyNoteId(prev => dirty ? noteId : (prev === noteId ? null : prev))
-      }
-      dirtyCallbacks.current.set(noteId, cb)
-    }
-    return cb
-  }, [])
-
-  const handleOverlaySave = useCallback(async () => {
-    if (!saveRef.current) return
-    setSaving(true)
-    try {
-      await saveRef.current()
-    } finally {
-      setSaving(false)
-    }
-  }, [])
-
-  // Expose the save function so Ctrl+S can route through the same path (with saving UI)
-  viewSaveRef.current = dirtyNoteId ? handleOverlaySave : null
+  // Eagerly create sessions for all notes in this view directive
+  useMemo(() => sessionManager.ensureSessions(notes), [notes, sessionManager])
 
   const gearButton = onEditDirective ? (
     <button
@@ -84,16 +59,6 @@ export function ViewDirectiveRenderer({
 
   return (
     <div className={styles.viewWrapper}>
-      {dirtyNoteId && (
-        <button
-          className={styles.inlineSaveButton}
-          onClick={(e) => { e.stopPropagation(); e.preventDefault(); void handleOverlaySave() }}
-          onMouseDown={(e) => e.preventDefault()}
-          disabled={saving}
-        >
-          {saving ? SAVING : SAVE}
-        </button>
-      )}
       {gearButton}
       <div className={styles.viewContainer}>
       {notes.map((note, noteIndex) => (
@@ -101,9 +66,8 @@ export function ViewDirectiveRenderer({
           {noteIndex > 0 && <hr className={styles.separator} />}
           <ViewNoteSection
             note={note}
+            session={sessionManager.getSession(note.id)!}
             onSave={onNoteSave ? (trackedLines) => onNoteSave(note.id, trackedLines) : undefined}
-            onDirtyChange={getDirtyCallback(note.id)}
-            saveRef={dirtyNoteId === note.id ? saveRef : undefined}
           />
         </div>
       ))}
@@ -114,84 +78,44 @@ export function ViewDirectiveRenderer({
 
 interface ViewNoteSectionProps {
   note: Note
+  session: InlineEditSession
   onSave?: (trackedLines: NoteLine[]) => Promise<Map<number, string>>
-  onDirtyChange?: (dirty: boolean) => void
-  saveRef?: React.MutableRefObject<(() => Promise<void>) | null>
 }
 
 const PENDING_VIEW_SAVE_ERROR_KEY = 'pendingViewSaveError'
 
 function ViewNoteSection({
   note,
+  session: preCreatedSession,
   onSave,
-  onDirtyChange,
-  saveRef,
 }: ViewNoteSectionProps) {
-  const { activateSession, deactivateSession, activeSession, notifyActiveChange } = useActiveEditor()
+  const { activateSession, deactivateSession, activeSession, notifyActiveChange, sessionManager } = useActiveEditor()
   const [saveError, setSaveError] = useState<string | null>(null)
   const [, setRenderVersion] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
-  const lastSavedContentRef = useRef<string | null>(null)
-  const onSaveRef = useRef(onSave)
-  onSaveRef.current = onSave
-
-  // Create or retrieve the session for this note.
-  // The session is recreated when note.content changes (e.g., after save reloads data),
-  // but only if we're not currently editing this note.
-  const sessionRef = useRef<InlineEditSession | null>(null)
+  const sessionRef = useRef<InlineEditSession | null>(preCreatedSession)
+  sessionRef.current = preCreatedSession
   const isActiveHere = activeSession?.noteId === note.id
   const isActiveHereRef = useRef(isActiveHere)
   isActiveHereRef.current = isActiveHere
 
-  // Derive per-line noteIds from NoteStore's tree structure
-  const lineNoteIds = useMemo(() => {
-    const noteLines = noteStore.getNoteLinesById(note.id)
-    if (!noteLines) return undefined
-    return noteLines.map(nl => nl.noteId ? [nl.noteId] : [])
-  }, [note.id, note.content])
-
-  const getOrCreateSession = useCallback(() => {
-    if (!sessionRef.current || sessionRef.current.noteId !== note.id) {
-      const s = new InlineEditSession(note.id, note.content, lineNoteIds)
-      // Connect change handlers immediately so clicks trigger re-renders
-      // even before the session is activated via the ActiveEditorContext.
-      s.editorState.onTextChange = () => {
-        sessionRef.current?.updateHiddenIndices()
-        setRenderVersion(v => v + 1)
-      }
-      s.editorState.onSelectionChange = () => {
-        setRenderVersion(v => v + 1)
-        notifyActiveChange()
-      }
-      sessionRef.current = s
-    }
-    return sessionRef.current
-  }, [note.id, note.content, lineNoteIds, notifyActiveChange])
-
-  // Sync external content changes into the existing session in place (same
-  // pattern as the main editor's initFromNoteLines). Never recreate the session
-  // — that orphans event handlers and loses cursor state.
-  // Skip when session has unsaved edits (isDirty) to avoid wiping user's work.
+  // Connect change handlers to the session
   useEffect(() => {
-    const s = sessionRef.current
-    if (!s || s.getText() === note.content) return
-    if (s.isDirty) return
-
-    const storeLines = noteStore.getNoteLinesById(note.id)
-    if (storeLines) {
-      const noteLines = storeLines.map((nl) => ({
-        text: nl.content,
-        noteIds: nl.noteId ? [nl.noteId] : [],
-      }))
-      s.editorState.initFromNoteLines(noteLines, true)
-    } else {
-      s.editorState.updateFromText(note.content)
+    preCreatedSession.editorState.onTextChange = () => {
+      preCreatedSession.updateHiddenIndices()
+      setRenderVersion(v => v + 1)
     }
-    s.syncOriginalContent(note.content)
-    s.updateHiddenIndices()
-    s.editorState.requestFocusUpdate()
+    preCreatedSession.editorState.onSelectionChange = () => {
+      setRenderVersion(v => v + 1)
+      notifyActiveChange()
+    }
+  }, [preCreatedSession, notifyActiveChange])
+
+  // Sync external content changes via the centralized session manager
+  useEffect(() => {
+    sessionManager.syncExternalChanges(note.id, note.content)
     setRenderVersion(v => v + 1)
-  }, [note.content, note.id])
+  }, [note.content, note.id, sessionManager])
 
   // Check for save errors persisted from a previous unmount
   useEffect(() => {
@@ -205,53 +129,6 @@ function ViewNoteSection({
         }
       }
     } catch { /* sessionStorage may be unavailable */ }
-  }, [note.id])
-
-  // Report dirty state to parent
-  const session = sessionRef.current
-  const isDirty = session ? session.isDirty : false
-  useEffect(() => {
-    onDirtyChange?.(isDirty)
-  }, [isDirty, onDirtyChange])
-
-  const handleSave = useCallback(async () => {
-    const s = sessionRef.current
-    if (!onSave || !s || !s.isDirty) return
-    s.controller.sortCompletedToBottom()
-    const trackedLines = s.getTrackedLines()
-    const content = s.getText()
-    lastSavedContentRef.current = content
-    setSaveError(null)
-    try {
-      const createdIds = await onSave(trackedLines)
-      s.applyCreatedIds(createdIds)
-      s.markSaved(content)
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : SAVE_ERROR_BANNER
-      setSaveError(msg)
-      lastSavedContentRef.current = null
-    }
-  }, [onSave])
-
-  useEffect(() => {
-    if (saveRef) saveRef.current = handleSave
-    return () => { if (saveRef) saveRef.current = null }
-  }, [saveRef, handleSave])
-
-  // Fire-and-forget save on unmount
-  useEffect(() => {
-    const noteId = note.id
-    return () => {
-      const s = sessionRef.current
-      const save = onSaveRef.current
-      if (save && s?.isDirty) {
-        s.controller.sortCompletedToBottom()
-        void save(s.getTrackedLines()).catch((err) => {
-          const msg = err instanceof Error ? err.message : SAVE_ERROR_BANNER
-          try { sessionStorage.setItem(PENDING_VIEW_SAVE_ERROR_KEY, JSON.stringify({ noteId, message: msg })) } catch { /* ignore */ }
-        })
-      }
-    }
   }, [note.id])
 
   // --- Shared editor interactions (gutter selection, drag, move) ---
@@ -270,9 +147,8 @@ function ViewNoteSection({
   // EditorLine's mouseDown, ensuring the session is active when setCursorFromGlobalOffset
   // runs), on focus (fallback for keyboard/Tab navigation), save+deactivate on blur.
   const handleActivate = useCallback(() => {
-    const s = getOrCreateSession()
-    activateSession(s)
-  }, [getOrCreateSession, activateSession])
+    activateSession(preCreatedSession)
+  }, [preCreatedSession, activateSession])
 
   const handleContainerBlur = useCallback((e: React.FocusEvent) => {
     // relatedTarget is null/undefined when focus is lost transiently (e.g., during
@@ -280,21 +156,25 @@ function ViewNoteSection({
     // case — only deactivate when focus explicitly moved to an element outside.
     if (!e.relatedTarget) return
     if (containerRef.current?.contains(e.relatedTarget as Node)) return
-    // Always save dirty content on blur
-    const s = sessionRef.current
-    if (s?.isDirty && onSave) {
-      s.controller.sortCompletedToBottom()
-      void onSave(s.getTrackedLines()).then(ids => s?.applyCreatedIds(ids)).catch(() => { /* handled by unmount fallback */ })
+    // On blur: push optimistic update to NoteStore (no Firestore write).
+    // This lets other view directives referencing the same note see edits.
+    if (preCreatedSession.isDirty) {
+      const existing = noteStore.getNoteById(preCreatedSession.noteId)
+      if (existing) {
+        noteStore.updateNoteSilently(preCreatedSession.noteId, {
+          ...existing,
+          content: preCreatedSession.getText(),
+        })
+      }
     }
     // Only deactivate if this section's session is still the active one —
     // a sibling ViewNoteSection may have already activated its own session.
-    deactivateSession(s ?? undefined)
-  }, [deactivateSession, onSave])
+    deactivateSession(preCreatedSession)
+  }, [deactivateSession, preCreatedSession])
 
-  const activeOrFallback = (isActiveHere ? session : null) ?? getOrCreateSession()
-  const displayLines = activeOrFallback.editorState.lines
-  const displayController = activeOrFallback.controller
-  const displayState = activeOrFallback.editorState
+  const displayLines = preCreatedSession.editorState.lines
+  const displayController = preCreatedSession.controller
+  const displayState = preCreatedSession.editorState
 
   return (
     <div

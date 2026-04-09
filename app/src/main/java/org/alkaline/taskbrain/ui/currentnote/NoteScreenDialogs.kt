@@ -20,7 +20,7 @@ import org.alkaline.taskbrain.ui.currentnote.components.RecurrenceConfig
  */
 @Composable
 fun NoteScreenDialogs(
-    saveStatus: SaveStatus?,
+    saveStatus: UnifiedSaveStatus?,
     loadStatus: LoadStatus?,
     tabsError: TabsError?,
     alarmError: Throwable?,
@@ -61,10 +61,10 @@ fun NoteScreenDialogs(
     onFetchRecurrenceConfig: (Alarm?) -> Unit,
 ) {
     // Error dialogs
-    if (saveStatus is SaveStatus.Error) {
+    if (saveStatus is UnifiedSaveStatus.PartialError) {
         ErrorDialog(
             title = stringResource(R.string.error_save),
-            throwable = saveStatus.throwable,
+            throwable = saveStatus.error,
             onDismiss = onClearSaveError
         )
     }

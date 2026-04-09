@@ -1,7 +1,8 @@
-import { createContext, useContext, type MutableRefObject } from 'react'
+import { createContext, useContext } from 'react'
 import type { EditorController } from './EditorController'
 import type { EditorState } from './EditorState'
 import type { InlineEditSession } from './InlineEditSession'
+import type { InlineSessionManager } from './InlineSessionManager'
 
 export interface ActiveEditorContextValue {
   /** The controller that command bar buttons should route to. */
@@ -18,9 +19,8 @@ export interface ActiveEditorContextValue {
   deactivateSession: (expectedSession?: InlineEditSession) => InlineEditSession | null
   /** Notify that the active session's state changed (triggers CommandBar re-render). */
   notifyActiveChange: () => void
-  /** Ref populated by ViewDirectiveRenderer with its save function (manages saving UI state).
-   *  Ctrl+S reads this to route through the same path as the Save button. */
-  viewSaveRef: MutableRefObject<(() => Promise<void>) | null>
+  /** Centralized manager for inline edit sessions (eagerly created for all embedded notes). */
+  sessionManager: InlineSessionManager
 }
 
 export const ActiveEditorContext = createContext<ActiveEditorContextValue | null>(null)

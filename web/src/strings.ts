@@ -47,10 +47,10 @@ export const NO_NOTES_FOUND = 'No notes found'
 export const NO_DELETED_NOTES = 'No deleted notes'
 export const EMPTY_NOTE = 'Empty Note'
 
-// Status (Android: action_save, status_saved, status_unsaved)
+// Status (Android: action_save, status_saved, status_unsaved, status_saving)
 export const SAVE = 'Save'
 export const CREATE = 'Create'
-export const SAVING = 'Saving...'
+export const SAVING = 'Saving\u2026'
 export const SAVED = 'Saved'
 export const UNSAVED = 'Unsaved'
 export const LOADING = 'Loading\u2026'

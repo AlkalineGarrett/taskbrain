@@ -44,6 +44,19 @@ class UndoManager(private val maxHistorySize: Int = 50) {
     // the edits are committed to the undo stack (which happens on focus change).
     private var hasUncommittedChanges: Boolean = false
 
+    /** Whether this editor has uncommitted changes. Exposed for UnifiedUndoManager. */
+    val currentHasUncommittedChanges: Boolean get() = hasUncommittedChanges
+
+    /** Callback fired when a new undo entry is committed (not during undo/redo operations). */
+    var onEntryPushed: (() -> Unit)? = null
+
+    /** Callback fired when the redo stack is cleared (not during undo/redo operations). */
+    var onRedoCleared: (() -> Unit)? = null
+
+    /** When true, suppresses onEntryPushed/onRedoCleared callbacks.
+     *  Set by undo()/redo() to prevent callback feedback loops. */
+    private var suppressCallbacks = false
+
     // Version number for reactivity - incremented when undo/redo state changes
     // UI components should read this to trigger recomposition when undo/redo availability changes
     // Uses Compose mutableStateOf so that reading this value in a composable creates a reactive subscription
@@ -62,10 +75,7 @@ class UndoManager(private val maxHistorySize: Int = 50) {
     fun markContentChanged() {
         if (pendingSnapshot != null && !hasUncommittedChanges) {
             hasUncommittedChanges = true
-            // Clear redo stack without notification - we'll notify once at the end
-            if (redoStack.isNotEmpty()) {
-                redoStack.clear()
-            }
+            clearRedoStack()
             notifyStateChanged()
         }
     }
@@ -300,34 +310,39 @@ class UndoManager(private val maxHistorySize: Int = 50) {
      * Returns null if already at baseline (nothing to undo).
      */
     fun undo(currentState: EditorState): UndoSnapshot? {
-        // Commit any pending edits first
-        commitPendingUndoState(currentState)
+        suppressCallbacks = true
+        try {
+            // Commit any pending edits first
+            commitPendingUndoState(currentState)
 
-        // Check if we have anything to undo to
-        if (undoStack.isEmpty() && (baselineSnapshot == null || isAtBaseline)) return null
+            // Check if we have anything to undo to
+            if (undoStack.isEmpty() && (baselineSnapshot == null || isAtBaseline)) return null
 
-        // Determine the target snapshot
-        val targetSnapshot = if (undoStack.isNotEmpty()) {
-            val snapshot = undoStack.removeAt(undoStack.lastIndex)
-            // If stack is now empty, we've reached the baseline state
-            if (undoStack.isEmpty() && baselineSnapshot != null) {
+            // Determine the target snapshot
+            val targetSnapshot = if (undoStack.isNotEmpty()) {
+                val snapshot = undoStack.removeAt(undoStack.lastIndex)
+                // If stack is now empty, we've reached the baseline state
+                if (undoStack.isEmpty() && baselineSnapshot != null) {
+                    isAtBaseline = true
+                }
+                snapshot
+            } else {
+                // Use baseline as floor - mark that we're now at baseline
                 isAtBaseline = true
+                baselineSnapshot!!
             }
-            snapshot
-        } else {
-            // Use baseline as floor - mark that we're now at baseline
-            isAtBaseline = true
-            baselineSnapshot!!
-        }
 
-        // Only push to redo stack if current state differs from target (avoid no-op redos)
-        val currentSnapshot = captureSnapshot(currentState)
-        if (currentSnapshot.lineContents != targetSnapshot.lineContents) {
-            redoStack.add(currentSnapshot)
-        }
-        notifyStateChanged()
+            // Only push to redo stack if current state differs from target (avoid no-op redos)
+            val currentSnapshot = captureSnapshot(currentState)
+            if (currentSnapshot.lineContents != targetSnapshot.lineContents) {
+                redoStack.add(currentSnapshot)
+            }
+            notifyStateChanged()
 
-        return targetSnapshot
+            return targetSnapshot
+        } finally {
+            suppressCallbacks = false
+        }
     }
 
     /**
@@ -335,16 +350,21 @@ class UndoManager(private val maxHistorySize: Int = 50) {
      * Caller is responsible for handling alarm recreation if snapshot has createdAlarm.
      */
     fun redo(currentState: EditorState): UndoSnapshot? {
-        if (redoStack.isEmpty()) return null
+        suppressCallbacks = true
+        try {
+            if (redoStack.isEmpty()) return null
 
-        // Save current state to undo stack (without alarm - it was the state before the original action)
-        val currentSnapshot = captureSnapshot(currentState)
-        pushUndo(currentSnapshot)
+            // Save current state to undo stack (without alarm - it was the state before the original action)
+            val currentSnapshot = captureSnapshot(currentState)
+            pushUndo(currentSnapshot)
 
-        // Pop and return the state to restore
-        val snapshot = redoStack.removeAt(redoStack.lastIndex)
-        notifyStateChanged()
-        return snapshot
+            // Pop and return the state to restore
+            val snapshot = redoStack.removeAt(redoStack.lastIndex)
+            notifyStateChanged()
+            return snapshot
+        } finally {
+            suppressCallbacks = false
+        }
     }
 
     /**
@@ -373,6 +393,7 @@ class UndoManager(private val maxHistorySize: Int = 50) {
         notifyStateChanged()
         // Note: Redo stack clearing is handled by callers, not here,
         // because redo() also uses pushUndo but should not clear redo.
+        if (!suppressCallbacks) onEntryPushed?.invoke()
     }
 
     /**
@@ -382,6 +403,7 @@ class UndoManager(private val maxHistorySize: Int = 50) {
         if (redoStack.isNotEmpty()) {
             redoStack.clear()
             notifyStateChanged()
+            if (!suppressCallbacks) onRedoCleared?.invoke()
         }
     }
 

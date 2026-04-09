@@ -1,10 +1,11 @@
+// @vitest-environment jsdom
 import { describe, it, expect } from 'vitest'
 import {
   parseInternalLines,
   parseMarkdownLines,
   parseHtmlLines,
   parseClipboardContent,
-} from '@/editor/ClipboardParser'
+} from '../../editor/ClipboardParser'
 
 describe('parseInternalLines', () => {
   it('parses plain text', () => {

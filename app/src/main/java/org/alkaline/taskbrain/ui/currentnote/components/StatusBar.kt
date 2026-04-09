@@ -33,13 +33,14 @@ import androidx.compose.ui.unit.dp
 import org.alkaline.taskbrain.R
 import org.alkaline.taskbrain.ui.Dimens
 import org.alkaline.taskbrain.ui.components.ActionButtonBar
+import org.alkaline.taskbrain.ui.currentnote.UnifiedSaveStatus
 
 /**
  * A status bar showing save status, save button, undo/redo buttons, and overflow menu.
  */
 @Composable
 fun StatusBar(
-    isSaved: Boolean,
+    saveStatus: UnifiedSaveStatus,
     onSaveClick: () -> Unit,
     canUndo: Boolean = false,
     canRedo: Boolean = false,
@@ -51,6 +52,13 @@ fun StatusBar(
     showCompleted: Boolean = true,
     onShowCompletedToggle: () -> Unit = {}
 ) {
+    val isSaveEnabled = saveStatus is UnifiedSaveStatus.Dirty
+    val saveButtonText = when (saveStatus) {
+        is UnifiedSaveStatus.Saving -> stringResource(R.string.status_saving)
+        is UnifiedSaveStatus.Saved -> stringResource(R.string.status_saved)
+        else -> stringResource(R.string.action_save)
+    }
+    val isSaved = saveStatus is UnifiedSaveStatus.Idle || saveStatus is UnifiedSaveStatus.Saved
     var showMenu by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
@@ -78,11 +86,23 @@ fun StatusBar(
         )
     }
     ActionButtonBar {
+        Icon(
+            painter = if (isSaved) painterResource(id = R.drawable.ic_check_circle) else painterResource(id = R.drawable.ic_warning),
+            contentDescription = null,
+            tint = if (isSaved) colorResource(R.color.status_saved_icon) else colorResource(R.color.status_unsaved_icon),
+            modifier = Modifier.size(Dimens.StatusIconSize)
+        )
+
+        Spacer(modifier = Modifier.width(Dimens.StatusTextIconSpacing))
+
         Button(
             onClick = onSaveClick,
+            enabled = isSaveEnabled,
             colors = ButtonDefaults.buttonColors(
                 containerColor = colorResource(R.color.action_button_background),
-                contentColor = colorResource(R.color.action_button_text)
+                contentColor = colorResource(R.color.action_button_text),
+                disabledContainerColor = colorResource(R.color.action_button_disabled_background),
+                disabledContentColor = colorResource(R.color.action_button_disabled_text)
             ),
             shape = RoundedCornerShape(Dimens.StatusBarButtonCornerRadius),
             contentPadding = PaddingValues(horizontal = Dimens.StatusBarButtonHorizontalPadding, vertical = 0.dp),
@@ -92,31 +112,14 @@ fun StatusBar(
                 painter = painterResource(id = R.drawable.ic_save),
                 contentDescription = stringResource(id = R.string.action_save),
                 modifier = Modifier.size(Dimens.StatusBarButtonIconSize),
-                tint = colorResource(R.color.action_button_text)
+                tint = colorResource(if (isSaveEnabled) R.color.action_button_text else R.color.action_button_disabled_text)
             )
             Spacer(modifier = Modifier.width(Dimens.StatusBarButtonIconTextSpacing))
             Text(
-                text = stringResource(id = R.string.action_save),
+                text = saveButtonText,
                 fontSize = Dimens.StatusBarButtonTextSize
             )
         }
-
-        Spacer(modifier = Modifier.width(Dimens.StatusBarItemSpacing))
-
-        Text(
-            text = if (isSaved) stringResource(id = R.string.status_saved) else stringResource(id = R.string.status_unsaved),
-            color = colorResource(R.color.icon_default),
-            fontSize = Dimens.StatusTextSize
-        )
-
-        Spacer(modifier = Modifier.width(Dimens.StatusTextIconSpacing))
-
-        Icon(
-            painter = if (isSaved) painterResource(id = R.drawable.ic_check_circle) else painterResource(id = R.drawable.ic_warning),
-            contentDescription = null,
-            tint = if (isSaved) colorResource(R.color.status_saved_icon) else colorResource(R.color.status_unsaved_icon),
-            modifier = Modifier.size(Dimens.StatusIconSize)
-        )
 
         // Flexible spacer pushes undo/redo to right
         Spacer(modifier = Modifier.weight(1f))

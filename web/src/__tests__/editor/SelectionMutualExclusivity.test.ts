@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { EditorState } from '@/editor/EditorState'
-import { EditorController } from '@/editor/EditorController'
-import { InlineEditSession } from '@/editor/InlineEditSession'
+import { EditorState } from '../../editor/EditorState'
+import { EditorController } from '../../editor/EditorController'
+import { InlineEditSession } from '../../editor/InlineEditSession'
 
 /**
  * Tests for selection mutual exclusivity between parent and view editors.

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { InlineEditSession } from '@/editor/InlineEditSession'
+import { InlineEditSession } from '../../editor/InlineEditSession'
 
 describe('InlineEditSession.markSaved', () => {
   it('clears dirty state after markSaved', () => {

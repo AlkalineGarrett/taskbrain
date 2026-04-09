@@ -52,6 +52,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.flow.StateFlow
 import org.alkaline.taskbrain.dsl.runtime.MutationType
 import org.alkaline.taskbrain.dsl.runtime.values.ViewVal
+import org.alkaline.taskbrain.ui.currentnote.undo.UnifiedUndoManager
 import org.alkaline.taskbrain.BuildConfig
 import org.alkaline.taskbrain.ui.currentnote.components.AgentCommandSection
 import org.alkaline.taskbrain.ui.currentnote.components.CommandBar
@@ -139,6 +140,7 @@ fun CurrentNoteScreen(
     fun updateContent(newContent: String) {
         userContent = newContent
         currentNoteViewModel.dirty = true
+        currentNoteViewModel.markAsDirty()
     }
 
     // Push editor content to NoteStore on tab switch only (not every keystroke —
@@ -181,11 +183,14 @@ fun CurrentNoteScreen(
     }
 
     // Load alarm states for notes displayed in view directives so overlays render correctly.
-    LaunchedEffect(directiveResults) {
-        val viewNoteContents = directiveResults.values
+    // Also eagerly create inline edit sessions for all embedded notes.
+    val viewNotes = remember(directiveResults) {
+        directiveResults.values
             .mapNotNull { (it.toValue() as? ViewVal)?.notes }
             .flatten()
-            .map { it.content }
+    }
+    LaunchedEffect(viewNotes) {
+        val viewNoteContents = viewNotes.map { it.content }
         if (viewNoteContents.isNotEmpty()) {
             currentNoteViewModel.alarmManager.loadAlarmStatesForContent(viewNoteContents)
         }
@@ -198,6 +203,14 @@ fun CurrentNoteScreen(
 
     // Inline editing state for view directives
     val inlineEditState = rememberInlineEditState()
+
+    // Eagerly create edit sessions for all embedded notes so clicking is instant
+    remember(viewNotes) {
+        inlineEditState.ensureSessionsForNotes(viewNotes)
+        val activeNoteIds = viewNotes.map { it.id }.toSet()
+        inlineEditState.removeStaleSessionsExcept(activeNoteIds)
+    }
+
     LaunchedEffect(inlineEditState) {
         inlineEditState.onExecuteDirectives = { content, onResults ->
             currentNoteViewModel.directiveManager.executeDirectivesForContent(content, onResults)
@@ -239,13 +252,45 @@ fun CurrentNoteScreen(
         if (noteId == null && currentNoteId != null) displayedNoteId = currentNoteId
     }
 
+    // Unified undo/redo across main editor + all inline sessions
+    val unifiedUndoManager = remember { UnifiedUndoManager() }
+    DisposableEffect(controller) {
+        unifiedUndoManager.registerEditor("main", controller)
+        onDispose { unifiedUndoManager.unregisterEditor("main") }
+    }
+    // Register inline sessions with unified undo manager
+    DisposableEffect(viewNotes) {
+        for (note in viewNotes) {
+            val session = inlineEditState.viewSessions[note.id]
+            if (session != null) {
+                unifiedUndoManager.registerEditor("inline:${note.id}", session.controller)
+            }
+        }
+        onDispose {
+            for (note in viewNotes) {
+                unifiedUndoManager.unregisterEditor("inline:${note.id}")
+            }
+        }
+    }
+
     // Undo/redo state observation
     @Suppress("UNUSED_VARIABLE")
     val editorStateVersion = editorState.stateVersion
     @Suppress("UNUSED_VARIABLE")
-    val undoStateVersion = controller.undoManager.stateVersion
-    val canUndo = controller.canUndo
-    val canRedo = controller.canRedo
+    val undoStateVersion = unifiedUndoManager.stateVersion
+    val canUndo = unifiedUndoManager.canUndo
+    val canRedo = unifiedUndoManager.canRedo
+
+    // Track inline session edits to keep save button in sync.
+    // Reading stateVersion subscribes to each session's changes.
+    val anyInlineDirty = inlineEditState.viewSessions.values.any { session ->
+        @Suppress("UNUSED_VARIABLE")
+        val v = session.editorState.stateVersion
+        session.isDirty
+    }
+    SideEffect {
+        if (anyInlineDirty) currentNoteViewModel.markAsDirty()
+    }
 
     // Alarm dialog state
     var showAlarmDialog by remember { mutableStateOf(false) }
@@ -284,7 +329,8 @@ fun CurrentNoteScreen(
         userContent = userContent,
         isSaved = isSaved,
         isNoteDeleted = isNoteDeleted,
-        currentNoteId = currentNoteId
+        currentNoteId = currentNoteId,
+        inlineEditState = inlineEditState
     )
 
     DataLoadingEffects(
@@ -332,7 +378,7 @@ fun CurrentNoteScreen(
             updateContent(content)
             textFieldValue = tfv
         },
-        onMarkUnsaved = { isSaved = false }
+        onMarkUnsaved = { isSaved = false; currentNoteViewModel.markAsDirty() }
     )
 
     // Switches the directive text in the editor if the directive type changed.
@@ -471,7 +517,8 @@ fun CurrentNoteScreen(
             currentNoteId = displayedNoteId ?: "",
             onTabClick = { targetNoteId ->
                 if (!isSaved && userContent.isNotEmpty()) {
-                    currentNoteViewModel.saveContent(userContent, editorState.lines.map { it.noteIds })
+                    val dirtySessions = inlineEditState.getAllDirtySessions()
+                    currentNoteViewModel.saveAll(userContent, editorState.lines.map { it.noteIds }, dirtySessions)
                 }
                 displayedNoteId = targetNoteId
             },
@@ -486,17 +533,20 @@ fun CurrentNoteScreen(
         )
 
         NoteStatusBar(
-            isSaved = isSaved,
+            saveStatus = saveStatus,
             canUndo = canUndo && !isAlarmOperationPending,
             canRedo = canRedo && !isAlarmOperationPending,
             isNoteDeleted = isNoteDeleted,
             userContent = userContent,
             editorState = editorState,
             controller = controller,
+            coordinator = coordinator,
+            unifiedUndoManager = unifiedUndoManager,
             currentNoteViewModel = currentNoteViewModel,
             inlineEditState = inlineEditState,
             onContentChanged = { updateContent(it) },
-            onMarkUnsaved = { isSaved = false },
+            onSyncUserContent = { userContent = it },
+            onMarkUnsaved = { isSaved = false; currentNoteViewModel.markAsDirty() },
             showCompleted = showCompleted,
             onShowCompletedToggle = { currentNoteViewModel.toggleShowCompleted() },
             onDeleteNote = {
@@ -540,7 +590,7 @@ fun CurrentNoteScreen(
                 inlineEditState = inlineEditState,
                 userContent = userContent,
                 onContentChanged = { updateContent(it) },
-                onMarkUnsaved = { isSaved = false }
+                onMarkUnsaved = { isSaved = false; currentNoteViewModel.markAsDirty() }
             )
             val buttonCallbacks = rememberButtonCallbacks(
                 currentNoteViewModel = currentNoteViewModel,
@@ -646,7 +696,7 @@ fun CurrentNoteScreen(
                 val lineContent = activeState.currentLine?.text ?: ""
                 alarmDialogLineContent = TextLineUtils.trimLineForAlarm(lineContent)
                 alarmDialogLineIndex = activeState.focusedLineIndex
-                alarmDialogInlineSession = if (inlineEditState.isActive) inlineEditState.activeSession else null
+                alarmDialogInlineSession = coordinator.activeSession
                 alarmDialogAlarm = null
                 alarmDialogInitialMode = AlarmDialogMode.INSTANCE
                 tappedDirectiveText = null
@@ -677,6 +727,7 @@ fun CurrentNoteScreen(
 
 /**
  * Handles auto-save on lifecycle events (background, dispose) and undo state persistence.
+ * Saves both the main note and all dirty inline edit sessions.
  */
 @Composable
 private fun LifecycleAutoSaveEffect(
@@ -687,6 +738,7 @@ private fun LifecycleAutoSaveEffect(
     isSaved: Boolean,
     isNoteDeleted: Boolean,
     currentNoteId: String?,
+    inlineEditState: InlineEditState?,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -694,9 +746,10 @@ private fun LifecycleAutoSaveEffect(
     val currentIsSaved by rememberUpdatedState(isSaved)
     val currentIsNoteDeleted by rememberUpdatedState(isNoteDeleted)
     val currentNoteIdForPersistence by rememberUpdatedState(currentNoteId)
+    val currentInlineEditState by rememberUpdatedState(inlineEditState)
 
     // Track whether the dirty-note save has already fired (ON_STOP or onDispose —
-    // whichever runs first). Without this guard, both fire saveContent with the same
+    // whichever runs first). Without this guard, both fire saveAll with the same
     // content, launching two concurrent persistCurrentNote coroutines that race and
     // can produce duplicate or conflicting Firestore writes.
     val alreadySaved = remember { mutableStateOf(false) }
@@ -710,7 +763,12 @@ private fun LifecycleAutoSaveEffect(
                 }
                 if (!alreadySaved.value && !currentIsSaved && currentUserContent.isNotEmpty()) {
                     alreadySaved.value = true
-                    currentNoteViewModel.saveContent(currentUserContent, controller.state.lines.map { it.noteIds })
+                    val dirtySessions = currentInlineEditState?.getAllDirtySessions() ?: emptyList()
+                    currentNoteViewModel.saveAll(
+                        currentUserContent,
+                        controller.state.lines.map { it.noteIds },
+                        dirtySessions
+                    )
                 }
             }
         }
@@ -731,7 +789,12 @@ private fun LifecycleAutoSaveEffect(
                 )
                 recentTabsViewModel.updateTabDisplayText(currentNoteIdForPersistence!!, currentUserContent)
                 if (!alreadySaved.value) {
-                    currentNoteViewModel.saveContent(currentUserContent, controller.state.lines.map { it.noteIds })
+                    val dirtySessions = currentInlineEditState?.getAllDirtySessions() ?: emptyList()
+                    currentNoteViewModel.saveAll(
+                        currentUserContent,
+                        controller.state.lines.map { it.noteIds },
+                        dirtySessions
+                    )
                 }
             }
         }
@@ -881,7 +944,7 @@ private fun DataLoadingEffects(
 private fun ContentSyncEffects(
     currentNoteId: String?,
     loadStatus: LoadStatus?,
-    saveStatus: SaveStatus?,
+    saveStatus: UnifiedSaveStatus?,
     contentModified: Boolean,
     alarmCreated: AlarmCreatedEvent?,
     userContent: String,
@@ -912,7 +975,7 @@ private fun ContentSyncEffects(
 
     // Handle save status changes
     LaunchedEffect(saveStatus) {
-        if (saveStatus is SaveStatus.Success) {
+        if (saveStatus is UnifiedSaveStatus.Saved) {
             onSavedChanged(true)
             currentNoteViewModel.markAsSaved()
             // Use saveStatus.noteId (not currentNoteId) because a tab switch
@@ -1013,58 +1076,67 @@ private fun DirectiveMutationEffect(
  */
 @Composable
 private fun NoteStatusBar(
-    isSaved: Boolean,
+    saveStatus: UnifiedSaveStatus?,
     canUndo: Boolean,
     canRedo: Boolean,
     isNoteDeleted: Boolean,
     userContent: String,
     editorState: EditorState,
     controller: EditorController,
+    coordinator: SelectionCoordinator,
+    unifiedUndoManager: UnifiedUndoManager,
     currentNoteViewModel: CurrentNoteViewModel,
     inlineEditState: InlineEditState?,
     onContentChanged: (String) -> Unit,
+    onSyncUserContent: (String) -> Unit,
     onMarkUnsaved: () -> Unit,
     showCompleted: Boolean,
     onShowCompletedToggle: () -> Unit,
     onDeleteNote: () -> Unit,
 ) {
+    val activeContextId = coordinator.activeSession?.let { "inline:${it.noteId}" } ?: "main"
+    val activateEditorByContextId: (String) -> Unit = { contextId ->
+        if (contextId == "main") {
+            coordinator.activate(EditorId.Parent)
+        } else {
+            coordinator.activate(EditorId.View(contextId.removePrefix("inline:")))
+        }
+    }
+
     StatusBar(
-        isSaved = isSaved,
+        saveStatus = saveStatus ?: UnifiedSaveStatus.Idle,
         onSaveClick = {
-            // Save inline edit session if one is active and dirty
-            inlineEditState?.activeSession?.let { session ->
-                if (session.isDirty) {
-                    currentNoteViewModel.directiveManager.saveInlineEditSession(session)
-                }
-            }
             controller.sortCompletedToBottom()
             controller.commitUndoState(continueEditing = true)
-            currentNoteViewModel.saveContent(editorState.text, editorState.lines.map { it.noteIds })
+            val dirtySessions = inlineEditState?.getAllDirtySessions() ?: emptyList()
+            currentNoteViewModel.saveAll(
+                editorState.text,
+                editorState.lines.map { it.noteIds },
+                dirtySessions
+            )
         },
         canUndo = canUndo,
         canRedo = canRedo,
         onUndoClick = {
             val expandedHashes = currentNoteViewModel.directiveManager.getExpandedDirectiveHashes()
-            controller.commitUndoState()
-            val snapshot = controller.undo()
-            if (snapshot != null) {
-                onContentChanged(editorState.text)
+            val result = unifiedUndoManager.undo(activeContextId, activateEditorByContextId)
+            if (result != null) {
+                onSyncUserContent(editorState.text)
                 onMarkUnsaved()
                 currentNoteViewModel.directiveManager.restoreExpandedDirectiveHashes(expandedHashes)
-                snapshot.createdAlarm?.let { alarm ->
+                result.snapshot.createdAlarm?.let { alarm ->
                     currentNoteViewModel.alarmManager.deleteAlarmPermanently(alarm.id)
                 }
             }
         },
         onRedoClick = {
             val expandedHashes = currentNoteViewModel.directiveManager.getExpandedDirectiveHashes()
-            controller.commitUndoState()
-            val snapshot = controller.redo()
-            if (snapshot != null) {
-                onContentChanged(editorState.text)
+            val result = unifiedUndoManager.redo(activeContextId, activateEditorByContextId)
+            if (result != null) {
+                onSyncUserContent(editorState.text)
                 onMarkUnsaved()
                 currentNoteViewModel.directiveManager.restoreExpandedDirectiveHashes(expandedHashes)
-                snapshot.createdAlarm?.let { alarm ->
+                result.snapshot.createdAlarm?.let { alarm ->
                     currentNoteViewModel.alarmManager.recreateAlarm(
                         alarmSnapshot = alarm,
                         onAlarmCreated = { newId ->

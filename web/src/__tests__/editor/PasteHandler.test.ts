@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { LineState } from '@/editor/LineState'
-import { SELECTION_NONE, type EditorSelection } from '@/editor/EditorSelection'
-import { executePaste, isFullLineSelection } from '@/editor/PasteHandler'
-import { type ParsedLine, parseClipboardContent } from '@/editor/ClipboardParser'
+import { LineState } from '../../editor/LineState'
+import { SELECTION_NONE, type EditorSelection } from '../../editor/EditorSelection'
+import { executePaste, isFullLineSelection } from '../../editor/PasteHandler'
+import { type ParsedLine, parseClipboardContent } from '../../editor/ClipboardParser'
 
 function lines(...texts: string[]): LineState[] {
   return texts.map(t => new LineState(t))

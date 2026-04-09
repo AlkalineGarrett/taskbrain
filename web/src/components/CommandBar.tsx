@@ -30,22 +30,26 @@ const IC_ARROW_DOWN = "M20,12l-1.41,-1.41L13,16.17V4h-2v12.17l-5.58,-5.59L4,12l8
 const IC_UNDO = "M12.5,8c-2.65,0 -5.05,0.99 -6.9,2.6L2,7v9h9l-3.62,-3.62c1.39,-1.16 3.16,-1.88 5.12,-1.88 3.54,0 6.55,2.31 7.6,5.5l2.37,-0.78C21.08,11.03 17.15,8 12.5,8z"
 const IC_REDO = "M18.4,10.6C16.55,8.99 14.15,8 11.5,8c-4.65,0 -8.58,3.03 -9.96,7.22L3.9,16c1.05,-3.19 4.05,-5.5 7.6,-5.5 1.95,0 3.73,0.72 5.12,1.88L13,16h9V7l-3.6,3.6z"
 
+export type SaveStatus = 'idle' | 'saving' | 'saved' | 'partial-error'
+
 interface CommandBarProps {
   controller: EditorController
   onSave: () => void
   onUndo?: () => void
   onRedo?: () => void
+  canUndo?: boolean
+  canRedo?: boolean
   onDelete?: () => void
   onRestore?: () => void
   isDeleted?: boolean
-  dirty: boolean
-  saving: boolean
+  anyDirty: boolean
+  saveStatus: SaveStatus
   showCompleted: boolean
   onToggleShowCompleted: () => void
 }
 
 export function CommandBar({
-  controller, onSave, onUndo, onRedo, onDelete, onRestore, isDeleted, dirty, saving,
+  controller, onSave, onUndo, onRedo, canUndo, canRedo, onDelete, onRestore, isDeleted, anyDirty, saveStatus,
   showCompleted, onToggleShowCompleted,
 }: CommandBarProps) {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -120,17 +124,17 @@ export function CommandBar({
       <div className={styles.group}>
         <button
           className={styles.button}
-          onClick={onUndo ?? (() => controller.undo())}
+          onClick={onUndo}
           title="Undo (Ctrl+Z)"
-          disabled={!controller.canUndo}
+          disabled={canUndo !== undefined ? !canUndo : !controller.canUndo}
         >
           <MdIcon path={IC_UNDO} />
         </button>
         <button
           className={styles.button}
-          onClick={onRedo ?? (() => controller.redo())}
+          onClick={onRedo}
           title="Redo (Ctrl+Y)"
-          disabled={!controller.canRedo}
+          disabled={canRedo !== undefined ? !canRedo : !controller.canRedo}
         >
           <MdIcon path={IC_REDO} />
         </button>
@@ -141,10 +145,10 @@ export function CommandBar({
       <button
         className={`${styles.button} ${styles.saveButton}`}
         onClick={onSave}
-        disabled={!dirty || saving}
+        disabled={saveStatus === 'saving' || (!anyDirty && saveStatus !== 'partial-error')}
         title={`${SAVE} (Ctrl+S)`}
       >
-        {saving ? SAVING : dirty ? SAVE : SAVED}
+        {saveStatus === 'saving' ? SAVING : (anyDirty || saveStatus === 'partial-error') ? SAVE : SAVED}
       </button>
 
         <div className={styles.menuContainer} ref={menuRef}>

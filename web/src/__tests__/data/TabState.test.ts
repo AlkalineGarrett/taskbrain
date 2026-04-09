@@ -4,8 +4,8 @@ import {
   updateDisplayTextState,
   removeTabState,
   extractDisplayText,
-} from '@/data/TabState'
-import type { RecentTab } from '@/data/RecentTabsRepository'
+} from '../../data/TabState'
+import type { RecentTab } from '../../data/RecentTabsRepository'
 
 function tab(noteId: string, displayText = noteId): RecentTab {
   return { noteId, displayText, lastAccessedAt: null }

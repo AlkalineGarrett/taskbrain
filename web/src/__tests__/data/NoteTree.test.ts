@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest'
-import type { Note, NoteLine } from '@/data/Note'
-import { flattenTreeToLines, buildTreeFromLines } from '@/data/NoteTree'
+import type { Note, NoteLine } from '../../data/Note'
+import { flattenTreeToLines, buildTreeFromLines } from '../../data/NoteTree'
 
 function note(
   id: string,

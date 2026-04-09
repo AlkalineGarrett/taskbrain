@@ -14,6 +14,8 @@
     
     <color name="action_button_background">#FF6200EE</color>
     <color name="action_button_text">#FFFFFFFF</color>
+    <color name="action_button_disabled_background">#FFBDBDBD</color>
+    <color name="action_button_disabled_text">#B3FFFFFF</color>
 
     <color name="destructive_text">#FFB71C1C</color>
 
@@ -22,7 +24,7 @@
 
     <!-- Status indicator icons (web: color-success, color-status-unsaved) -->
     <color name="status_saved_icon">#FF4CAF50</color>
-    <color name="status_unsaved_icon">#FFFFC107</color>
+    <color name="status_unsaved_icon">#FFE65100</color>
 
     <!-- Icon tints (web: color-icon-default, color-icon-disabled) -->
     <color name="icon_default">#FF000000</color>

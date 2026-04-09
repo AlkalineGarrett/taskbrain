@@ -72,6 +72,8 @@ class SelectionCoordinator(
     /** Activate an editor, clearing all other selections. */
     fun activate(editorId: EditorId) {
         if (editorId == activeEditorId) return
+        // Commit pending undo state on the outgoing editor so edits become undo entries
+        activeController.commitUndoState()
         clearAllSelections()
         activeEditorId = editorId
         // Also activate the InlineEditState session for directive execution etc.
@@ -80,9 +82,9 @@ class SelectionCoordinator(
             if (session != null) {
                 inlineEditState?.activateExistingSession(session)
             }
-        } else {
-            inlineEditState?.endSession()
         }
+        // Note: we no longer call endSession() when switching to parent.
+        // Sessions are eagerly created and persist until note navigation.
     }
 
     /** Deactivate the current view editor, returning to parent. */

@@ -94,30 +94,6 @@
 }
 
 
-.inlineSaveButton {
-  position: absolute;
-  top: 4px;
-  right: 30px;
-  background: var(--color-primary);
-  color: var(--color-on-primary);
-  border: none;
-  border-radius: 4px;
-  padding: 2px 8px;
-  font-size: 0.75rem;
-  cursor: pointer;
-  height: 1.5rem;
-  z-index: 1;
-}
-
-.inlineSaveButton:hover {
-  background: var(--color-primary-hover);
-}
-
-.inlineSaveButton:disabled {
-  background: var(--color-disabled-bg);
-  cursor: default;
-}
-
 .inlineSaveError {
   display: flex;
   align-items: center;

@@ -31,6 +31,16 @@ export class UndoManager {
   private lastMoveLineRange: [number, number] | null = null
   private hasUncommittedChanges = false
   private _stateVersion = 0
+  private suppressCallbacks = false
+
+  /** Whether this editor has uncommitted changes. Exposed for UnifiedUndoManager. */
+  get currentHasUncommittedChanges(): boolean { return this.hasUncommittedChanges }
+
+  /** Callback fired when a new undo entry is committed (not during undo/redo). */
+  onEntryPushed: (() => void) | null = null
+
+  /** Callback fired when the redo stack is cleared (not during undo/redo). */
+  onRedoCleared: (() => void) | null = null
 
   private readonly maxHistorySize: number
 
@@ -49,9 +59,7 @@ export class UndoManager {
   markContentChanged(): void {
     if (this.pendingSnapshot != null && !this.hasUncommittedChanges) {
       this.hasUncommittedChanges = true
-      if (this.redoStack.length > 0) {
-        this.redoStack.length = 0
-      }
+      this.clearRedoStack()
       this.notifyStateChanged()
     }
   }
@@ -227,44 +235,54 @@ export class UndoManager {
     lines: { text: string; cursorPosition: number }[],
     focusedLineIndex: number,
   ): UndoSnapshot | null {
-    this.commitPendingUndoState(lines, focusedLineIndex)
+    this.suppressCallbacks = true
+    try {
+      this.commitPendingUndoState(lines, focusedLineIndex)
 
-    if (this.undoStack.length === 0 && (this.baselineSnapshot == null || this.isAtBaseline)) {
-      return null
-    }
-
-    let targetSnapshot: UndoSnapshot
-    if (this.undoStack.length > 0) {
-      targetSnapshot = this.undoStack.pop()!
-      if (this.undoStack.length === 0 && this.baselineSnapshot != null) {
-        this.isAtBaseline = true
+      if (this.undoStack.length === 0 && (this.baselineSnapshot == null || this.isAtBaseline)) {
+        return null
       }
-    } else {
-      this.isAtBaseline = true
-      targetSnapshot = this.baselineSnapshot!
-    }
 
-    const currentSnapshot = this.captureSnapshot(lines, focusedLineIndex)
-    if (!arraysEqual(currentSnapshot.lineContents, targetSnapshot.lineContents)) {
-      this.redoStack.push(currentSnapshot)
-    }
-    this.notifyStateChanged()
+      let targetSnapshot: UndoSnapshot
+      if (this.undoStack.length > 0) {
+        targetSnapshot = this.undoStack.pop()!
+        if (this.undoStack.length === 0 && this.baselineSnapshot != null) {
+          this.isAtBaseline = true
+        }
+      } else {
+        this.isAtBaseline = true
+        targetSnapshot = this.baselineSnapshot!
+      }
 
-    return targetSnapshot
+      const currentSnapshot = this.captureSnapshot(lines, focusedLineIndex)
+      if (!arraysEqual(currentSnapshot.lineContents, targetSnapshot.lineContents)) {
+        this.redoStack.push(currentSnapshot)
+      }
+      this.notifyStateChanged()
+
+      return targetSnapshot
+    } finally {
+      this.suppressCallbacks = false
+    }
   }
 
   redo(
     lines: { text: string; cursorPosition: number }[],
     focusedLineIndex: number,
   ): UndoSnapshot | null {
-    if (this.redoStack.length === 0) return null
+    this.suppressCallbacks = true
+    try {
+      if (this.redoStack.length === 0) return null
 
-    const currentSnapshot = this.captureSnapshot(lines, focusedLineIndex)
-    this.pushUndo(currentSnapshot)
+      const currentSnapshot = this.captureSnapshot(lines, focusedLineIndex)
+      this.pushUndo(currentSnapshot)
 
-    const snapshot = this.redoStack.pop()!
-    this.notifyStateChanged()
-    return snapshot
+      const snapshot = this.redoStack.pop()!
+      this.notifyStateChanged()
+      return snapshot
+    } finally {
+      this.suppressCallbacks = false
+    }
   }
 
   private pushUndo(snapshot: UndoSnapshot): void {
@@ -274,12 +292,14 @@ export class UndoManager {
       this.undoStack.shift()
     }
     this.notifyStateChanged()
+    if (!this.suppressCallbacks) this.onEntryPushed?.()
   }
 
   clearRedoStack(): void {
     if (this.redoStack.length > 0) {
       this.redoStack.length = 0
       this.notifyStateChanged()
+      if (!this.suppressCallbacks) this.onRedoCleared?.()
     }
   }
 

@@ -7,6 +7,8 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
@@ -272,14 +274,19 @@ class NoteRepository(
             }
             val toDelete = existingDescendantIds - survivingIds
 
-            // Content-drop guard: if saving would soft-delete most existing
-            // descendants, something has likely gone wrong (race condition,
-            // stale editor state, etc.). Abort to prevent data loss.
-            if (existingDescendantIds.size >= 3 && toDelete.size > existingDescendantIds.size / 2) {
+            // Content-drop guard: compare against the note's containedNotes
+            // (its actual children) rather than the rootNoteId query. The
+            // rootNoteId query can include stale references from notes that
+            // were unlinked but never had their rootNoteId cleared.
+            val existingContainedNotes = (NoteStore.getNoteById(noteId)?.containedNotes
+                ?: emptyList()).filter { it.isNotEmpty() }.toSet()
+            val directToDelete = existingContainedNotes - survivingIds
+            if (existingContainedNotes.size >= 3 && directToDelete.size > existingContainedNotes.size / 2) {
                 val diagnostics = buildContentDropDiagnostics(
                     noteId, trackedLines, linesToSave, existingDescendantIds, survivingIds, toDelete
                 )
                 Log.e(TAG, diagnostics)
+                launchDescendantDiagnostics(noteId, toDelete)
                 throw ContentDropAbortException(
                     "Save aborted: would delete ${toDelete.size} of " +
                         "${existingDescendantIds.size} child notes " +
@@ -643,26 +650,37 @@ class NoteRepository(
         appendLine("noteId: $noteId")
         appendLine("originalTrackedLines: ${originalTrackedLines.size}")
         appendLine("linesToSave (after trailing-empty drop): ${linesToSave.size}")
-        appendLine("existingDescendants: ${existingDescendantIds.size} $existingDescendantIds")
+        appendLine("existingDescendants (rootNoteId query): ${existingDescendantIds.size} $existingDescendantIds")
         appendLine("survivingIds: ${survivingIds.size} $survivingIds")
         appendLine("toDelete: ${toDelete.size} $toDelete")
+
+        appendLine("--- containedNotes guard ---")
+        val storeNote = NoteStore.getNoteById(noteId)
+        val containedNotes = storeNote?.containedNotes?.filter { it.isNotEmpty() } ?: emptyList()
+        appendLine("  containedNotes: ${containedNotes.size} $containedNotes")
+        val directToDelete = containedNotes.toSet() - survivingIds
+        appendLine("  directToDelete (containedNotes - surviving): ${directToDelete.size} $directToDelete")
+
         appendLine("--- trackedLines detail ---")
         for ((i, line) in originalTrackedLines.withIndex()) {
             val preview = line.content.take(60).replace("\n", "\\n")
             appendLine("  [$i] noteId=${line.noteId ?: "null"} content='$preview'")
         }
+
         appendLine("--- NoteStore state ---")
-        val storeNote = NoteStore.getNoteById(noteId)
         if (storeNote != null) {
+            appendLine("  parentNoteId: ${storeNote.parentNoteId ?: "null"}")
+            appendLine("  rootNoteId: ${storeNote.rootNoteId ?: "null"}")
+            appendLine("  state: ${storeNote.state ?: "active"}")
             val storeLines = storeNote.content.lines()
-            appendLine("  NoteStore has ${storeLines.size} lines for this note")
+            appendLine("  content lines: ${storeLines.size}")
             for ((i, line) in storeLines.withIndex()) {
-                val preview = line.take(60).replace("\n", "\\n")
-                appendLine("  [$i] '$preview'")
+                appendLine("  [$i] '${line.take(60)}'")
             }
         } else {
             appendLine("  NoteStore has NO entry for $noteId")
         }
+
         appendLine("--- Thread ---")
         appendLine("  ${Thread.currentThread().name}")
         appendLine("--- Stack trace ---")
@@ -670,6 +688,51 @@ class NoteRepository(
             appendLine("  at $frame")
         }
         appendLine("=== END CONTENT DROP GUARD ===")
+    }
+
+    /**
+     * Fetches Firestore details for each note in [toDelete] and logs them.
+     * Called after the main diagnostics to provide full context without
+     * blocking the guard (runs as a separate coroutine).
+     */
+    private fun launchDescendantDiagnostics(noteId: String, toDelete: Set<String>) {
+        GlobalScope.launch(Dispatchers.IO) {
+            try {
+                val sb = StringBuilder()
+                sb.appendLine("=== DESCENDANT DETAIL FOR $noteId (${toDelete.size} notes to delete) ===")
+                // Fetch in batches of 30 (Firestore whereIn limit)
+                val sorted = toDelete.sorted()
+                for (batch in sorted.chunked(30)) {
+                    try {
+                        val snapshot = notesCollection
+                            .whereIn(com.google.firebase.firestore.FieldPath.documentId(), batch)
+                            .get().await()
+                        val fetched = snapshot.documents.associateBy { it.id }
+                        for (id in batch) {
+                            val doc = fetched[id]
+                            if (doc == null || !doc.exists()) {
+                                sb.appendLine("  $id: DOES NOT EXIST in Firestore")
+                                continue
+                            }
+                            val data = doc.data ?: emptyMap()
+                            val parentId = data["parentNoteId"] as? String
+                            val rootId = data["rootNoteId"] as? String
+                            val state = data["state"] as? String
+                            val content = (data["content"] as? String)?.take(60) ?: ""
+                            @Suppress("UNCHECKED_CAST")
+                            val contained = (data["containedNotes"] as? List<String>)?.size ?: 0
+                            sb.appendLine("  $id: parent=$parentId root=$rootId state=${state ?: "active"} containedNotes=$contained content='$content'")
+                        }
+                    } catch (e: Exception) {
+                        sb.appendLine("  batch ${batch.first()}..${batch.last()}: FETCH ERROR: ${e.message}")
+                    }
+                }
+                sb.appendLine("=== END DESCENDANT DETAIL ===")
+                Log.e(TAG, sb.toString())
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to fetch descendant diagnostics", e)
+            }
+        }
     }
 
     companion object {

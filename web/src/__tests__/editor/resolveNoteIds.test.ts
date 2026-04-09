@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveNoteIds } from '@/editor/resolveNoteIds'
+import { resolveNoteIds } from '../../editor/resolveNoteIds'
 
 describe('resolveNoteIds', () => {
   it('passes through unique noteIds unchanged', () => {

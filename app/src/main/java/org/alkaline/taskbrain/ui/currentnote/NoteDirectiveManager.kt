@@ -651,13 +651,37 @@ class NoteDirectiveManager(
     ) {
         session.controller.sortCompletedToBottom()
         val trackedLines = session.getTrackedLines()
+        val newContent = trackedLines.joinToString("\n") { it.content }
         launchInlineSave(
             noteId = session.noteId,
-            newContent = trackedLines.joinToString("\n") { it.content },
-            saveAction = { repository.saveNoteWithChildren(session.noteId, trackedLines) },
+            newContent = newContent,
+            saveAction = { repository.saveNoteWithFullContent(session.noteId, newContent) },
             onSuccess = onSuccess,
             onFailure = onFailure,
         )
+    }
+
+    /**
+     * Synchronous (suspend) variant of [saveInlineEditSession] for use in coroutines
+     * that need to await completion before proceeding (e.g., unified save).
+     */
+    suspend fun saveInlineEditSessionSync(session: InlineEditSession) {
+        session.controller.sortCompletedToBottom()
+        val trackedLines = session.getTrackedLines()
+        val newContent = trackedLines.joinToString("\n") { it.content }
+
+        // Optimistic NoteStore update
+        val existing = NoteStore.getNoteById(session.noteId)
+        if (existing != null) {
+            NoteStore.updateNote(session.noteId, existing.copy(content = newContent), persist = false)
+        }
+
+        // Use saveNoteWithFullContent: the inline editor only has this note's
+        // direct lines, not nested sub-trees from view directives.
+        // saveNoteWithFullContent loads the existing tree structure and matches
+        // the editor content against it, preserving grandchild relationships.
+        repository.saveNoteWithFullContent(session.noteId, newContent).getOrThrow()
+        MetadataHasher.invalidateCache()
     }
 
     /**

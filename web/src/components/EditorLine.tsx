@@ -592,8 +592,8 @@ export function EditorLine({
   ) : undefined
   const hasViewDirective = viewSegment != null
   // Only hide the parent gutter when the view has content (its own gutter replaces it).
-  const viewNotes = hasViewDirective && viewSegment.kind === 'Directive'
-    ? (directiveResultToValue(viewSegment.result!) as { notes: unknown[] } | null)?.notes : undefined
+  const viewNotes = hasViewDirective && viewSegment.kind === 'Directive' && viewSegment.result
+    ? (directiveResultToValue(viewSegment.result) as { notes: unknown[] } | null)?.notes : undefined
   const hasNonEmptyView = (viewNotes?.length ?? 0) > 0
 
   // Show directive chips for unfocused lines, or always for lines with view directives

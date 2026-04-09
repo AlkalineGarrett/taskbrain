@@ -8,7 +8,7 @@ import { MutationType, type NoteMutation } from '@/dsl/runtime/NoteMutation'
 import { NoteRepositoryOperations } from '@/dsl/runtime/NoteRepositoryOperations'
 import { useEditor } from '@/hooks/useEditor'
 import { useDirectives } from '@/hooks/useDirectives'
-import { CommandBar } from '@/components/CommandBar'
+import { CommandBar, type SaveStatus } from '@/components/CommandBar'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { EditorLine } from '@/components/EditorLine'
 import { CompletedPlaceholderRow } from '@/components/CompletedPlaceholderRow'
@@ -19,6 +19,8 @@ import { db, auth } from '@/firebase/config'
 import { LineState } from '@/editor/LineState'
 import { ActiveEditorContext, type ActiveEditorContextValue } from '@/editor/ActiveEditorContext'
 import type { InlineEditSession } from '@/editor/InlineEditSession'
+import { InlineSessionManager } from '@/editor/InlineSessionManager'
+import { UnifiedUndoManager } from '@/editor/UnifiedUndoManager'
 import { computeHiddenIndices, computeDisplayItemsFromHidden, computeEffectiveHidden, computeFadedIndices, nearestVisibleLine } from '@/editor/CompletedLineUtils'
 import { findDirectives } from '@/dsl/directives/DirectiveFinder'
 import { useEditorInteractions } from '@/editor/useEditorInteractions'
@@ -29,10 +31,14 @@ const noteRepo = new NoteRepository(db, auth)
 export function NoteEditorScreen() {
   const { noteId: urlNoteId } = useParams<{ noteId: string }>()
   const navigate = useNavigate()
-  const { controller, editorState, loading, loadedNoteId, showLoading, saving, error, saveError, clearSaveError, dirty, save, showCompleted, toggleShowCompleted } = useEditor(urlNoteId)
+  const { controller, editorState, loading, loadedNoteId, showLoading, error, saveError, clearSaveError, dirty, save, showCompleted, toggleShowCompleted } = useEditor(urlNoteId)
   // Use loadedNoteId for all rendering — keeps showing the old note until
   // the new one is fully loaded, preventing transition flashes.
   const noteId = loadedNoteId ?? urlNoteId
+
+  // Unified undo/redo across main editor + all inline sessions
+  const [unifiedUndoManager] = useState(() => new UnifiedUndoManager())
+  const [sessionManager] = useState(() => new InlineSessionManager())
 
   // All notes from singleton store — single source of truth for directive context
   const allNotes = useAllNotes()
@@ -93,6 +99,26 @@ export function NoteEditorScreen() {
     }
   }, [noteId, editorState, controller])
 
+  // Register main editor with unified undo manager
+  useEffect(() => {
+    unifiedUndoManager.registerEditor('main', controller)
+    return () => unifiedUndoManager.unregisterEditor('main')
+  }, [unifiedUndoManager, controller])
+
+  // Register inline sessions with unified undo manager when sessions change.
+  // Key on allNotes (which drives directive results → ViewVal → ensureSessions).
+  const inlineSessionIds = sessionManager.getAllSessions().map(s => s.noteId).join(',')
+  useEffect(() => {
+    for (const session of sessionManager.getAllSessions()) {
+      unifiedUndoManager.registerEditor(`inline:${session.noteId}`, session.controller)
+    }
+    return () => {
+      for (const session of sessionManager.getAllSessions()) {
+        unifiedUndoManager.unregisterEditor(`inline:${session.noteId}`)
+      }
+    }
+  }, [inlineSessionIds, sessionManager, unifiedUndoManager])
+
   const activeNotes = useMemo(
     () => allNotes.filter((n) => n.state !== 'deleted'),
     [allNotes],
@@ -121,8 +147,11 @@ export function NoteEditorScreen() {
     if (existing) {
       noteStore.updateNote(viewedNoteId, { ...existing, content: newContent })
     }
-    // Save directly with editor-tracked noteIds (same path as main editor)
-    const savePromise = noteRepo.saveNoteWithChildren(viewedNoteId, trackedLines)
+    // Use saveNoteWithFullContent: the inline editor only has this note's
+    // direct lines, not nested sub-trees from view directives.
+    // saveNoteWithFullContent loads the existing tree and matches content
+    // against it, preserving grandchild relationships.
+    const savePromise = noteRepo.saveNoteWithFullContent(viewedNoteId, newContent)
     noteStore.trackSave(viewedNoteId, savePromise)
     const createdIds = await savePromise
     invalidateAndRecompute()
@@ -172,19 +201,6 @@ export function NoteEditorScreen() {
     }
   }, [editorState, controller, invalidateAndRecompute])
 
-  // Undo/redo routed through active controller (view or parent)
-  const handleUndo = useCallback(() => {
-    const ctrl = activeSessionRef.current?.controller ?? controller
-    ctrl.undo()
-    invalidateAndRecompute()
-  }, [controller, invalidateAndRecompute])
-
-  const handleRedo = useCallback(() => {
-    const ctrl = activeSessionRef.current?.controller ?? controller
-    ctrl.redo()
-    invalidateAndRecompute()
-  }, [controller, invalidateAndRecompute])
-
   const handleDeleteNote = useCallback(async () => {
     if (!noteId) return
     try {
@@ -209,18 +225,165 @@ export function NoteEditorScreen() {
     }
   }, [noteId])
 
+  // --- Active editor context (routes commands to parent or view controller) ---
+  const [activeSession, setActiveSession] = useState<InlineEditSession | null>(null)
+  const activeSessionRef = useRef<InlineEditSession | null>(null)
+  // Force NoteEditorScreen re-render when the active session's state changes
+  // (e.g., selection changes within the view). Without this, React skips the
+  // re-render when setActiveSession is called with the same session object,
+  // leaving CommandBar's disabled states stale.
+  const [, setActiveSessionVersion] = useState(0)
+
+  const activateSession = useCallback((session: InlineEditSession) => {
+    const prev = activeSessionRef.current
+    if (prev !== session) {
+      // Commit pending undo state on the outgoing editor so edits become undo entries
+      const outgoingCtrl = prev?.controller ?? controller
+      outgoingCtrl.commitUndoState()
+      // Mutual exclusivity: clear selections in all other editors when switching
+      editorState.clearSelection()
+      if (prev) prev.editorState.clearSelection()
+    }
+    activeSessionRef.current = session
+    setActiveSession(session)
+    // Bump version so CommandBar re-evaluates disabled states immediately
+    setActiveSessionVersion(v => v + 1)
+  }, [editorState, controller])
+
+  const deactivateSession = useCallback((expectedSession?: InlineEditSession): InlineEditSession | null => {
+    const prev = activeSessionRef.current
+    // If caller specifies which session it expects to deactivate, only proceed if it matches.
+    // This prevents a blurring ViewNoteSection from deactivating a sibling that just activated.
+    if (expectedSession && prev !== expectedSession) return null
+    // Clear the departing session's selection for mutual exclusivity
+    if (prev) prev.editorState.clearSelection()
+    activeSessionRef.current = null
+    setActiveSession(null)
+    return prev
+  }, [])
+
+  const activeController = activeSession?.controller ?? controller
+  const activeState = activeSession?.editorState ?? editorState
+
+  // Undo/redo routed through unified undo manager
+  const getActiveContextId = useCallback(() => {
+    const session = activeSessionRef.current
+    return session ? `inline:${session.noteId}` : 'main'
+  }, [])
+
+  const activateEditorByContextId = useCallback((contextId: string) => {
+    if (contextId === 'main') {
+      if (activeSessionRef.current) deactivateSession()
+    } else {
+      const noteId = contextId.replace('inline:', '')
+      const session = sessionManager.getSession(noteId)
+      if (session) activateSession(session)
+    }
+  }, [sessionManager, activateSession, deactivateSession])
+
+  const handleUndo = useCallback(() => {
+    unifiedUndoManager.undo(getActiveContextId(), activateEditorByContextId)
+    invalidateAndRecompute()
+  }, [unifiedUndoManager, getActiveContextId, activateEditorByContextId, invalidateAndRecompute])
+
+  const handleRedo = useCallback(() => {
+    unifiedUndoManager.redo(getActiveContextId(), activateEditorByContextId)
+    invalidateAndRecompute()
+  }, [unifiedUndoManager, getActiveContextId, activateEditorByContextId, invalidateAndRecompute])
+
+  const notifyActiveChange = useCallback(() => {
+    setActiveSessionVersion(v => v + 1)
+  }, [])
+
+  const activeEditorCtx = useMemo<ActiveEditorContextValue>(() => ({
+    activeController,
+    activeState,
+    activeSession,
+    activateSession,
+    deactivateSession,
+    notifyActiveChange,
+    sessionManager,
+  }), [activeController, activeState, activeSession, activateSession, deactivateSession, notifyActiveChange, sessionManager])
+
+  // --- Unified save: main note + all dirty inline sessions ---
+
+  // Save a single inline session — returns true on success
+  const saveInlineSession = useCallback(async (session: InlineEditSession): Promise<boolean> => {
+    session.controller.sortCompletedToBottom()
+    const trackedLines = session.getTrackedLines()
+    const content = session.getText()
+    const createdIds = await handleViewNoteSave(session.noteId, trackedLines)
+    session.applyCreatedIds(createdIds)
+    session.markSaved(content)
+    return true
+  }, [handleViewNoteSave])
+
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
+  const anyDirty = dirty || sessionManager.getAllDirtySessions().length > 0
+
+  const saveAll = useCallback(async () => {
+    setSaveStatus('saving')
+    try {
+      const mainSave = saveWithDirectives()
+      const inlineSaves = sessionManager.getAllDirtySessions().map(session =>
+        saveInlineSession(session).catch(e => {
+          console.error(`Failed to save inline session ${session.noteId}:`, e)
+          throw e
+        })
+      )
+      const results = await Promise.allSettled([mainSave, ...inlineSaves])
+      const failures = results.filter(r => r.status === 'rejected')
+      if (failures.length > 0) {
+        setSaveStatus('partial-error')
+      } else {
+        setSaveStatus('saved')
+      }
+    } catch {
+      setSaveStatus('partial-error')
+    }
+  }, [saveWithDirectives, sessionManager, saveInlineSession])
+
+  // Reset saveStatus to idle when any editor becomes dirty again
+  useEffect(() => {
+    if (anyDirty && (saveStatus === 'saved' || saveStatus === 'partial-error')) {
+      setSaveStatus('idle')
+    }
+  }, [anyDirty, saveStatus])
+
+  // Refs for cleanup callbacks (avoid stale closures)
+  const saveInlineSessionRef = useRef(saveInlineSession)
+  saveInlineSessionRef.current = saveInlineSession
+  const sessionManagerRef = useRef(sessionManager)
+  sessionManagerRef.current = sessionManager
+
+  const saveAllDirtyInlineSessions = useCallback(() => {
+    for (const session of sessionManagerRef.current.getAllDirtySessions()) {
+      void saveInlineSessionRef.current(session).catch(() => {})
+    }
+  }, [])
+
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (sessionManagerRef.current.getAllDirtySessions().length > 0) {
+        saveAllDirtyInlineSessions()
+        e.preventDefault()
+      }
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [saveAllDirtyInlineSessions])
+
+  // Auto-save dirty inline sessions on note switch (unmount)
+  useEffect(() => {
+    return () => saveAllDirtyInlineSessions()
+  }, [noteId, saveAllDirtyInlineSessions])
+
   // Global keyboard shortcuts — Ctrl+S always, others when no textarea has focus
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault()
-        // If a view session is active and dirty, save via the view's save path
-        // (manages saving UI state); otherwise save the parent
-        if (activeSessionRef.current?.isDirty && viewSaveRef.current) {
-          void viewSaveRef.current()
-        } else {
-          void saveWithDirectives()
-        }
+        void saveAll()
         return
       }
 
@@ -236,14 +399,13 @@ export function NoteEditorScreen() {
       if (e.metaKey || e.ctrlKey) {
         if (e.key === 'z') {
           e.preventDefault()
-          if (e.shiftKey) { ctrl.redo(); invalidateAndRecompute() }
-          else { ctrl.undo(); invalidateAndRecompute() }
+          if (e.shiftKey) handleRedo()
+          else handleUndo()
           return
         }
         if (e.key === 'y') {
           e.preventDefault()
-          ctrl.redo()
-          invalidateAndRecompute()
+          handleRedo()
           return
         }
         if (e.key === 'a') {
@@ -272,61 +434,7 @@ export function NoteEditorScreen() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [saveWithDirectives, handleViewNoteSave, editorState, controller, invalidateAndRecompute])
-
-
-  // --- Active editor context (routes commands to parent or view controller) ---
-  const [activeSession, setActiveSession] = useState<InlineEditSession | null>(null)
-  const activeSessionRef = useRef<InlineEditSession | null>(null)
-  // Force NoteEditorScreen re-render when the active session's state changes
-  // (e.g., selection changes within the view). Without this, React skips the
-  // re-render when setActiveSession is called with the same session object,
-  // leaving CommandBar's disabled states stale.
-  const [, setActiveSessionVersion] = useState(0)
-
-  const activateSession = useCallback((session: InlineEditSession) => {
-    const prev = activeSessionRef.current
-    if (prev !== session) {
-      // Mutual exclusivity: clear selections in all other editors when switching
-      editorState.clearSelection()
-      if (prev) prev.editorState.clearSelection()
-    }
-    activeSessionRef.current = session
-    setActiveSession(session)
-    // Bump version so CommandBar re-evaluates disabled states immediately
-    setActiveSessionVersion(v => v + 1)
-  }, [editorState])
-
-  const deactivateSession = useCallback((expectedSession?: InlineEditSession): InlineEditSession | null => {
-    const prev = activeSessionRef.current
-    // If caller specifies which session it expects to deactivate, only proceed if it matches.
-    // This prevents a blurring ViewNoteSection from deactivating a sibling that just activated.
-    if (expectedSession && prev !== expectedSession) return null
-    // Clear the departing session's selection for mutual exclusivity
-    if (prev) prev.editorState.clearSelection()
-    activeSessionRef.current = null
-    setActiveSession(null)
-    return prev
-  }, [])
-
-  const activeController = activeSession?.controller ?? controller
-  const activeState = activeSession?.editorState ?? editorState
-
-  const notifyActiveChange = useCallback(() => {
-    setActiveSessionVersion(v => v + 1)
-  }, [])
-
-  const viewSaveRef = useRef<(() => Promise<void>) | null>(null)
-
-  const activeEditorCtx = useMemo<ActiveEditorContextValue>(() => ({
-    activeController,
-    activeState,
-    activeSession,
-    activateSession,
-    deactivateSession,
-    notifyActiveChange,
-    viewSaveRef,
-  }), [activeController, activeState, activeSession, activateSession, deactivateSession, notifyActiveChange])
+  }, [saveAll, editorState, controller, invalidateAndRecompute, handleUndo, handleRedo])
 
   // --- Shared editor interactions (gutter, drag, move) ---
   const editorRef = useRef<HTMLDivElement>(null)
@@ -472,14 +580,16 @@ export function NoteEditorScreen() {
 
       <CommandBar
         controller={activeController}
-        onSave={saveWithDirectives}
+        onSave={saveAll}
         onUndo={handleUndo}
         onRedo={handleRedo}
+        canUndo={unifiedUndoManager.canUndo}
+        canRedo={unifiedUndoManager.canRedo}
         onDelete={() => setShowDeleteConfirm(true)}
         onRestore={() => void handleRestoreNote()}
         isDeleted={currentNote?.state === 'deleted'}
-        dirty={dirty}
-        saving={saving}
+        anyDirty={anyDirty}
+        saveStatus={saveStatus}
         showCompleted={showCompleted}
         onToggleShowCompleted={toggleShowCompleted}
       />

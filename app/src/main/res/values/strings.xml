@@ -19,6 +19,7 @@
     <!-- Home Fragment Strings -->
     <string name="status_saved">Saved</string>
     <string name="status_unsaved">Unsaved</string>
+    <string name="status_saving">Saving…</string>
     <string name="action_save">Save</string>
     <string name="action_create">Create</string>
     <string name="action_undo">Undo</string>
