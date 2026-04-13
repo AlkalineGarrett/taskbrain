@@ -50,7 +50,8 @@ fun StatusBar(
     onDeleteClick: () -> Unit = {},
     onUndeleteClick: () -> Unit = {},
     showCompleted: Boolean = true,
-    onShowCompletedToggle: () -> Unit = {}
+    onShowCompletedToggle: () -> Unit = {},
+    showOfflineIcon: Boolean
 ) {
     val isSaveEnabled = saveStatus is UnifiedSaveStatus.Dirty
     val saveButtonText = when (saveStatus) {
@@ -86,6 +87,16 @@ fun StatusBar(
         )
     }
     ActionButtonBar {
+        if (showOfflineIcon) {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_cloud_off),
+                contentDescription = null,
+                tint = colorResource(R.color.status_unsaved_icon),
+                modifier = Modifier.size(Dimens.StatusIconSize)
+            )
+            Spacer(modifier = Modifier.width(Dimens.StatusBarButtonIconTextSpacing))
+        }
+
         Icon(
             painter = if (isSaved) painterResource(id = R.drawable.ic_check_circle) else painterResource(id = R.drawable.ic_warning),
             contentDescription = null,

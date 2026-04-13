@@ -5,6 +5,7 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.tasks.await
 import org.alkaline.taskbrain.data.Note
+import org.alkaline.taskbrain.data.NoteStore
 
 /**
  * Implementation of NoteOperations that uses Firebase Firestore directly.
@@ -27,19 +28,28 @@ class NoteRepositoryOperations(
         toObject(Note::class.java)?.copy(id = id)
 
     /**
-     * Update fields on a note and return the updated note.
+     * Update specific fields on a note and return the updated note.
+     * Avoids a Firestore re-read that stalls offline (server-first timeout).
      */
     private suspend fun updateAndFetch(
         noteId: String,
-        updates: Map<String, Any>
+        content: String? = null,
+        path: String? = null
     ): Note {
-        val noteRef = notesCollection.document(noteId)
-        val updatesWithTimestamp = updates + ("updatedAt" to FieldValue.serverTimestamp())
-        noteRef.update(updatesWithTimestamp).await()
+        val updates = buildMap<String, Any> {
+            content?.let { put("content", it) }
+            path?.let { put("path", it) }
+            put("updatedAt", FieldValue.serverTimestamp())
+        }
+        notesCollection.document(noteId).update(updates).await()
 
-        val doc = noteRef.get().await()
-        return doc.toNote()
+        val base = NoteStore.getRawNoteById(noteId)
             ?: throw NoteOperationException("Note not found after update: $noteId")
+        return base.copy(
+            content = content ?: base.content,
+            path = path ?: base.path,
+            updatedAt = Timestamp.now()
+        )
     }
 
     override suspend fun createNote(path: String, content: String): Note {
@@ -71,11 +81,13 @@ class NoteRepositoryOperations(
     }
 
     override suspend fun getNoteById(noteId: String): Note? {
+        NoteStore.getRawNoteById(noteId)?.let { return it }
         val doc = notesCollection.document(noteId).get().await()
         return if (doc.exists()) doc.toNote() else null
     }
 
     override suspend fun findByPath(path: String): Note? {
+        NoteStore.getNoteByPath(path)?.let { return it }
         val query = notesCollection
             .whereEqualTo("userId", userId)
             .whereEqualTo("path", path)
@@ -96,11 +108,11 @@ class NoteRepositoryOperations(
             throw NoteOperationException("Path already in use: $newPath")
         }
 
-        return updateAndFetch(noteId, mapOf("path" to newPath))
+        return updateAndFetch(noteId, path = newPath)
     }
 
     override suspend fun updateContent(noteId: String, newContent: String): Note {
-        return updateAndFetch(noteId, mapOf("content" to newContent))
+        return updateAndFetch(noteId, content = newContent)
     }
 
     override suspend fun appendToNote(noteId: String, text: String): Note {
@@ -111,7 +123,7 @@ class NoteRepositoryOperations(
         // Append text (with newline if content exists)
         val newContent = if (note.content.isEmpty()) text else "${note.content}\n$text"
 
-        return updateAndFetch(noteId, mapOf("content" to newContent))
+        return updateAndFetch(noteId, content = newContent)
     }
 
     companion object {

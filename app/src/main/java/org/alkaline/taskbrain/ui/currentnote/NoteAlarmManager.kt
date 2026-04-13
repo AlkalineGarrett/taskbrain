@@ -236,6 +236,7 @@ class NoteAlarmManager(
             for (line in trackedLines) {
                 line.noteId?.let { noteId ->
                     alarmRepository.updateLineContentForNote(noteId, line.content)
+                        .onFailure { Log.e(TAG, "Failed to sync alarm line content for $noteId", it) }
                 }
             }
         }

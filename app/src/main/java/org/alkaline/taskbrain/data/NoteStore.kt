@@ -187,6 +187,26 @@ object NoteStore {
     /** Get a raw (unreconstructed) note by ID — includes notes filtered from the top-level list. */
     fun getRawNoteById(noteId: String): Note? = rawNotes[noteId]
 
+    /** Find a note by its path from in-memory data. */
+    fun getNoteByPath(path: String): Note? =
+        rawNotes.values.find { it.path == path && it.state != "deleted" }
+
+    /** IDs of all non-deleted descendants of [noteId] from in-memory state. */
+    fun getDescendantIds(noteId: String): Set<String> =
+        descendantIdsOf(noteId, rawNotes)
+
+    /** IDs of all descendants of [noteId] including deleted ones. */
+    fun getAllDescendantIds(noteId: String): Set<String> =
+        descendantIdsOf(noteId, rawNotes, includeDeleted = true)
+
+    /** In-memory note by ID, falling back to Firestore if not cached. */
+    suspend fun getNoteOrLoad(noteId: String, repository: NoteRepository): Note? =
+        getRawNoteById(noteId) ?: repository.loadNoteById(noteId).getOrNull()
+
+    /** In-memory top-level notes, falling back to Firestore if empty. */
+    suspend fun getNotesOrLoad(repository: NoteRepository): List<Note> =
+        notes.value.ifEmpty { repository.loadAllUserNotes().getOrNull() ?: emptyList() }
+
     /**
      * Returns flattened note lines with proper noteId mappings from the in-memory tree.
      * Uses containedNotes arrays and rawNotes to reconstruct the same output as

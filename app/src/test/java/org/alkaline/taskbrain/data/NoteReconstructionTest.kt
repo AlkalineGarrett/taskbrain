@@ -194,4 +194,78 @@ class NoteReconstructionTest {
         assertEquals("my/path", result.path)
         assertEquals("active", result.state)
     }
+
+    // --- descendantIdsOf ---
+
+    @Test
+    fun `descendantIdsOf - returns empty set for note with no descendants`() {
+        val rawNotes = mapOf("root" to note("root", "Root"))
+        assertEquals(emptySet<String>(), descendantIdsOf("root", rawNotes))
+    }
+
+    @Test
+    fun `descendantIdsOf - returns IDs of non-deleted descendants`() {
+        val rawNotes = mapOf(
+            "root" to note("root", "Root"),
+            "c1" to note("c1", "Child 1", rootNoteId = "root"),
+            "c2" to note("c2", "Child 2", rootNoteId = "root"),
+        )
+        assertEquals(setOf("c1", "c2"), descendantIdsOf("root", rawNotes))
+    }
+
+    @Test
+    fun `descendantIdsOf - excludes deleted descendants`() {
+        val rawNotes = mapOf(
+            "root" to note("root", "Root"),
+            "c1" to note("c1", "Alive", rootNoteId = "root"),
+            "c2" to note("c2", "Deleted", rootNoteId = "root", state = "deleted"),
+        )
+        assertEquals(setOf("c1"), descendantIdsOf("root", rawNotes))
+    }
+
+    @Test
+    fun `descendantIdsOf - does not include notes from other roots`() {
+        val rawNotes = mapOf(
+            "root" to note("root", "Root"),
+            "c1" to note("c1", "My child", rootNoteId = "root"),
+            "other" to note("other", "Other root"),
+            "oc1" to note("oc1", "Other child", rootNoteId = "other"),
+        )
+        assertEquals(setOf("c1"), descendantIdsOf("root", rawNotes))
+    }
+
+    @Test
+    fun `descendantIdsOf - does not include the root note itself`() {
+        // rootNoteId on the root note itself is typically null, but verify
+        val rawNotes = mapOf(
+            "root" to note("root", "Root", rootNoteId = null),
+            "c1" to note("c1", "Child", rootNoteId = "root"),
+        )
+        assertEquals(setOf("c1"), descendantIdsOf("root", rawNotes))
+    }
+
+    @Test
+    fun `descendantIdsOf - includes deeply nested descendants`() {
+        // All descendants share the same rootNoteId regardless of depth
+        val rawNotes = mapOf(
+            "root" to note("root", "Root"),
+            "a" to note("a", "Level 1", rootNoteId = "root", parentNoteId = "root"),
+            "b" to note("b", "Level 2", rootNoteId = "root", parentNoteId = "a"),
+            "c" to note("c", "Level 3", rootNoteId = "root", parentNoteId = "b"),
+        )
+        assertEquals(setOf("a", "b", "c"), descendantIdsOf("root", rawNotes))
+    }
+
+    @Test
+    fun `descendantIdsOf - includeDeleted returns all descendants`() {
+        val rawNotes = mapOf(
+            "root" to note("root", "Root"),
+            "c1" to note("c1", "Alive", rootNoteId = "root"),
+            "c2" to note("c2", "Deleted", rootNoteId = "root", state = "deleted"),
+        )
+        assertEquals(
+            setOf("c1", "c2"),
+            descendantIdsOf("root", rawNotes, includeDeleted = true)
+        )
+    }
 }

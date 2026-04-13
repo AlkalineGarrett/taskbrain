@@ -21,6 +21,9 @@ class PrompterAgent {
      * @return The updated content.
      */
     suspend fun processCommand(currentContent: String, command: String): String {
+        if (!ConnectivityMonitor.isOnline.value) {
+            throw OfflineException("AI features require an internet connection")
+        }
         return withContext(Dispatchers.IO) {
             // Construct the prompt
             // This is where we can elaborate on the prompt engineering or add an agent loop

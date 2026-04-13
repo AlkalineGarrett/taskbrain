@@ -15,6 +15,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import org.alkaline.taskbrain.data.Note
 import org.alkaline.taskbrain.data.NoteRepository
+import org.alkaline.taskbrain.data.NoteStore
 import org.alkaline.taskbrain.dsl.language.Lexer
 import org.alkaline.taskbrain.dsl.language.Parser
 import org.alkaline.taskbrain.dsl.runtime.Environment
@@ -299,6 +300,7 @@ object ScheduleManager {
     suspend fun cancelSchedulesForNote(noteId: String) {
         Log.d(TAG, "Cancelling schedules for note: $noteId")
         scheduleRepository.cancelSchedulesForNote(noteId)
+            .onFailure { Log.e(TAG, "Failed to cancel schedules for note: $noteId", it) }
     }
 
     /**
@@ -378,13 +380,9 @@ object ScheduleManager {
      * Execute the action associated with a schedule.
      */
     private suspend fun executeScheduleAction(schedule: Schedule, userId: String) {
-        // Load notes for the execution context
-        val notesResult = noteRepository.loadAllUserNotes()
-        val notes = notesResult.getOrNull() ?: emptyList()
-
-        // Load the note containing this schedule for currentNote context
+        val notes = NoteStore.getNotesOrLoad(noteRepository)
         val currentNote = if (schedule.noteId.isNotBlank()) {
-            noteRepository.loadNoteById(schedule.noteId).getOrNull()
+            NoteStore.getNoteOrLoad(schedule.noteId, noteRepository)
         } else {
             null
         }
@@ -486,9 +484,9 @@ object ScheduleManager {
         val noteIds = scheduleMap.values.map { it.noteId }.distinct().filter { it.isNotBlank() }
         val noteNameMap = mutableMapOf<String, String>()
         for (noteId in noteIds) {
-            noteRepository.loadNoteById(noteId).getOrNull()?.let { note ->
-                // First line is the note name
-                val firstName = note.content.lines().firstOrNull()?.trim() ?: ""
+            val note = NoteStore.getNoteOrLoad(noteId, noteRepository)
+            note?.let {
+                val firstName = it.content.lines().firstOrNull()?.trim() ?: ""
                 noteNameMap[noteId] = firstName
             }
         }

@@ -61,8 +61,11 @@ import org.alkaline.taskbrain.ui.currentnote.components.StatusBar
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.SideEffect
 import android.util.Log
+import androidx.compose.runtime.collectAsState
+import org.alkaline.taskbrain.data.ConnectivityMonitor
 import org.alkaline.taskbrain.dsl.directives.DirectiveFinder
 import org.alkaline.taskbrain.dsl.directives.DirectiveResult
+import org.alkaline.taskbrain.ui.components.OfflineBanner
 
 /**
  * Main screen for viewing and editing a note.
@@ -562,6 +565,10 @@ fun CurrentNoteScreen(
             }
         )
 
+        // Offline state (must be declared before NoteStatusBar which uses showOfflineIcon)
+        val isOnline by ConnectivityMonitor.isOnline.collectAsState()
+        var showOfflineIcon by remember { mutableStateOf(false) }
+
         NoteStatusBar(
             saveStatus = saveStatus,
             canUndo = canUndo && !isAlarmOperationPending,
@@ -579,6 +586,7 @@ fun CurrentNoteScreen(
             onMarkUnsaved = { isSaved = false; currentNoteViewModel.markAsDirty() },
             showCompleted = showCompleted,
             onShowCompletedToggle = { currentNoteViewModel.toggleShowCompleted() },
+            showOfflineIcon = showOfflineIcon,
             onDeleteNote = {
                 currentNoteViewModel.deleteCurrentNote(onSuccess = {
                     recentTabsViewModel.closeTab(displayedNoteId ?: "")
@@ -589,6 +597,12 @@ fun CurrentNoteScreen(
                     }
                 })
             }
+        )
+
+        // Offline banner
+        OfflineBanner(
+            isOnline = isOnline,
+            onCollapsedStateChange = { showOfflineIcon = it }
         )
 
         // Loading indicator
@@ -747,7 +761,8 @@ fun CurrentNoteScreen(
                     currentNoteViewModel.processAgentCommand(userContent, agentCommand)
                     agentCommand = ""
                 },
-                mainContentFocusRequester = mainContentFocusRequester
+                mainContentFocusRequester = mainContentFocusRequester,
+                enabled = isOnline
             )
         }
     }
@@ -1124,6 +1139,7 @@ private fun NoteStatusBar(
     showCompleted: Boolean,
     onShowCompletedToggle: () -> Unit,
     onDeleteNote: () -> Unit,
+    showOfflineIcon: Boolean,
 ) {
     val activeContextId = coordinator.activeSession?.let { "inline:${it.noteId}" } ?: "main"
     val activateEditorByContextId: (String) -> Unit = { contextId ->
@@ -1199,7 +1215,8 @@ private fun NoteStatusBar(
             currentNoteViewModel.undeleteCurrentNote(onSuccess = {})
         },
         showCompleted = showCompleted,
-        onShowCompletedToggle = onShowCompletedToggle
+        onShowCompletedToggle = onShowCompletedToggle,
+        showOfflineIcon = showOfflineIcon
     )
 }
 

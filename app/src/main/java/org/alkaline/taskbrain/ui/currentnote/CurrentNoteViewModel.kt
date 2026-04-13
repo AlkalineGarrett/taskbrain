@@ -519,6 +519,9 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 
                 // Signal that the content has been modified and is unsaved
                 _contentModified.value = true
+            } catch (e: org.alkaline.taskbrain.data.OfflineException) {
+                Log.w("CurrentNoteViewModel", "Agent unavailable offline", e)
+                _loadStatus.value = LoadStatus.Error(e)
             } catch (e: Exception) {
                 Log.e("CurrentNoteViewModel", "Agent processing failed", e)
                 _loadStatus.value = LoadStatus.Error(e)

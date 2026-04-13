@@ -204,8 +204,8 @@ class NoteRepository(
      *
      * Returns a map of line indices to newly created note IDs.
      *
-     * Note: Firestore transactions can read/write at most 500 documents.
-     * Notes with >500 descendants will fail. Add batched transaction support if needed.
+     * Uses batch writes (not transactions) so saves queue offline.
+     * Batches are chunked at 500 operations (Firestore limit).
      */
     suspend fun saveNoteWithChildren(
         noteId: String,
@@ -282,8 +282,9 @@ class NoteRepository(
                 }
             }
 
-            // Fetch existing descendants for deletion tracking
-            val existingDescendantIds = fetchExistingDescendantIds(noteId)
+            // Get existing descendants from in-memory NoteStore (works offline,
+            // unlike the Firestore query that fetchExistingDescendantIds used).
+            val existingDescendantIds = NoteStore.getDescendantIds(noteId)
 
             // Compute surviving IDs upfront for the content-drop guard
             val survivingIds = mutableSetOf<String>()
@@ -322,71 +323,75 @@ class NoteRepository(
             // to itself, clear parentNoteId/rootNoteId to make it a root note.
             val hasCycle = hasParentCycle(noteId)
 
-            val result = db.runTransaction { transaction ->
-                // Update root
-                val rootData = baseNoteData(userId, rootContent).apply {
-                    put("containedNotes", childrenOfLine[0].toList())
-                    if (hasCycle) {
-                        put("parentNoteId", FieldValue.delete())
-                        put("rootNoteId", FieldValue.delete())
-                    }
+            // Collect all write operations, then commit in batches of 500
+            // (Firestore batch limit). Batch writes queue offline, unlike
+            // transactions which require a server roundtrip.
+            val ops = mutableListOf<BatchOp>()
+
+            // Root note
+            val rootData = baseNoteData(userId, rootContent).apply {
+                put("containedNotes", childrenOfLine[0].toList())
+                if (hasCycle) {
+                    put("parentNoteId", FieldValue.delete())
+                    put("rootNoteId", FieldValue.delete())
                 }
-                transaction.set(parentRef, rootData, SetOptions.merge())
+            }
+            ops.add(BatchOp(parentRef, rootData, merge = true))
 
-                // Write each descendant
-                for (i in 1 until linesToSave.size) {
-                    val content = linesToSave[i].content.trimStart('\t')
-                    if (content.isEmpty()) continue // spacer
+            // Descendants
+            for (i in 1 until linesToSave.size) {
+                val content = linesToSave[i].content.trimStart('\t')
+                if (content.isEmpty()) continue // spacer
 
-                    val id = effectiveId(i)
-                    val parentId = effectiveId(parentOfLine[i])
+                val parentId = effectiveId(parentOfLine[i])
 
-                    if (linesToSave[i].noteId != null) {
-                        transaction.set(
-                            noteRef(id),
-                            mapOf(
-                                "content" to content,
-                                "parentNoteId" to parentId,
-                                "rootNoteId" to noteId,
-                                "containedNotes" to childrenOfLine[i].toList(),
-                                "state" to null, // Clear deleted state for reparented notes
-                                "updatedAt" to FieldValue.serverTimestamp(),
-                            ),
-                            SetOptions.merge()
-                        )
-                    } else {
-                        transaction.set(
-                            newRefs[i]!!,
-                            hashMapOf(
-                                "userId" to userId,
-                                "content" to content,
-                                "parentNoteId" to parentId,
-                                "rootNoteId" to noteId,
-                                "containedNotes" to childrenOfLine[i].toList(),
-                                "createdAt" to FieldValue.serverTimestamp(),
-                                "updatedAt" to FieldValue.serverTimestamp(),
-                            )
-                        )
-                    }
-                }
-
-                // Soft-delete removed notes and clear parent refs to prevent orphan cycles
-                for (id in toDelete) {
-                    transaction.update(
-                        noteRef(id),
+                if (linesToSave[i].noteId != null) {
+                    ops.add(BatchOp(
+                        noteRef(effectiveId(i)),
                         mapOf(
-                            "state" to "deleted",
-                            "parentNoteId" to FieldValue.delete(),
-                            "rootNoteId" to FieldValue.delete(),
+                            "content" to content,
+                            "parentNoteId" to parentId,
+                            "rootNoteId" to noteId,
+                            "containedNotes" to childrenOfLine[i].toList(),
+                            "state" to null,
                             "updatedAt" to FieldValue.serverTimestamp(),
-                        )
-                    )
+                        ),
+                        merge = true
+                    ))
+                } else {
+                    ops.add(BatchOp(
+                        newRefs[i]!!,
+                        hashMapOf(
+                            "userId" to userId,
+                            "content" to content,
+                            "parentNoteId" to parentId,
+                            "rootNoteId" to noteId,
+                            "containedNotes" to childrenOfLine[i].toList(),
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp(),
+                        ),
+                        merge = false
+                    ))
                 }
+            }
 
-                newRefs.mapValues { it.value.id }
-            }.await()
+            // Soft-delete removed notes
+            for (id in toDelete) {
+                ops.add(BatchOp(
+                    noteRef(id),
+                    mapOf(
+                        "state" to "deleted",
+                        "parentNoteId" to FieldValue.delete(),
+                        "rootNoteId" to FieldValue.delete(),
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    ),
+                    merge = true
+                ))
+            }
 
-            result
+            commitInBatches(ops)
+
+            newRefs.mapValues { it.value.id }
         }
     }.onFailure { Log.e(TAG, "Error saving note", it) }
 
@@ -403,20 +408,6 @@ class NoteRepository(
         return false
     }
 
-    /** Fetches IDs of all existing descendants for deletion tracking. */
-    private suspend fun fetchExistingDescendantIds(noteId: String): Set<String> {
-        val userId = requireUserId()
-        val descendants = notesCollection
-            .whereEqualTo("rootNoteId", noteId)
-            .whereEqualTo("userId", userId)
-            .get().await()
-
-        return descendants.documents
-            .filter { it.getString("state") != "deleted" }
-            .map { it.id }
-            .toSet()
-    }
-
     /**
      * Saves a note with full multi-line content, properly handling child notes.
      * Used for inline editing of notes within view directives.
@@ -425,8 +416,9 @@ class NoteRepository(
         withContext(Dispatchers.IO) {
             requireUserId()
 
-            // Load existing structure (tree-aware)
-            val existingLines = loadNoteWithChildren(noteId).getOrThrow().lines
+            // Prefer NoteStore in-memory data (works offline) with Firestore fallback
+            val existingLines = NoteStore.getNoteLinesById(noteId)
+                ?: loadNoteWithChildren(noteId).getOrThrow().lines
             // Remove trailing empty line that loadNoteWithChildren appends for the editor
             val existingLinesNoTrailing = if (existingLines.size > 1 && existingLines.last().content.isEmpty()) {
                 existingLines.dropLast(1)
@@ -537,27 +529,10 @@ class NoteRepository(
      */
     suspend fun softDeleteNote(noteId: String): Result<Unit> = runCatching {
         withContext(Dispatchers.IO) {
-            val userId = requireUserId()
-
-            val idsToDelete = mutableSetOf(noteId)
-
-            val descendants = notesCollection
-                .whereEqualTo("rootNoteId", noteId)
-                .whereEqualTo("userId", userId)
-                .get().await()
-            for (doc in descendants) {
-                idsToDelete.add(doc.id)
-            }
-
-            val batch = db.batch()
-            for (id in idsToDelete) {
-                batch.update(
-                    noteRef(id),
-                    mapOf("state" to "deleted", "updatedAt" to FieldValue.serverTimestamp())
-                )
-            }
-            batch.commit().await()
-            Unit
+            requireUserId()
+            val idsToDelete = NoteStore.getDescendantIds(noteId) + noteId
+            val deleteData = mapOf("state" to "deleted", "updatedAt" to FieldValue.serverTimestamp())
+            commitInBatches(idsToDelete.map { BatchOp(noteRef(it), deleteData, merge = true) })
         }
     }.onFailure { Log.e(TAG, "Error soft-deleting note", it) }
 
@@ -566,27 +541,13 @@ class NoteRepository(
      */
     suspend fun undeleteNote(noteId: String): Result<Unit> = runCatching {
         withContext(Dispatchers.IO) {
-            val userId = requireUserId()
-
-            val idsToRestore = mutableSetOf(noteId)
-
-            val descendants = notesCollection
-                .whereEqualTo("rootNoteId", noteId)
-                .whereEqualTo("userId", userId)
-                .get().await()
-            for (doc in descendants) {
-                idsToRestore.add(doc.id)
-            }
-
-            val batch = db.batch()
-            for (id in idsToRestore) {
-                batch.update(
-                    noteRef(id),
-                    mapOf("state" to null, "updatedAt" to FieldValue.serverTimestamp())
-                )
-            }
-            batch.commit().await()
-            Unit
+            requireUserId()
+            // Use getDescendantIds which excludes deleted notes, plus the root itself.
+            // Also include all rawNotes with matching rootNoteId regardless of state,
+            // since deleted descendants should also be restored.
+            val idsToRestore = NoteStore.getAllDescendantIds(noteId) + noteId
+            val restoreData = mapOf<String, Any?>("state" to null, "updatedAt" to FieldValue.serverTimestamp())
+            commitInBatches(idsToRestore.map { BatchOp(noteRef(it), restoreData, merge = true) })
         }
     }.onFailure { Log.e(TAG, "Error undeleting note", it) }
 
@@ -762,8 +723,29 @@ class NoteRepository(
         }
     }
 
+    private data class BatchOp(
+        val ref: DocumentReference,
+        val data: Map<String, Any?>,
+        val merge: Boolean
+    )
+
+    private suspend fun commitInBatches(ops: List<BatchOp>) {
+        for (chunk in ops.chunked(MAX_BATCH_SIZE)) {
+            val batch = db.batch()
+            for (op in chunk) {
+                if (op.merge) {
+                    batch.set(op.ref, op.data, SetOptions.merge())
+                } else {
+                    batch.set(op.ref, op.data)
+                }
+            }
+            batch.commit().await()
+        }
+    }
+
     companion object {
         private const val TAG = "NoteRepository"
+        private const val MAX_BATCH_SIZE = 500
     }
 }
 

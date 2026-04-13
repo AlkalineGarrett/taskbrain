@@ -9,6 +9,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.alkaline.taskbrain.data.NoteRepository
+import org.alkaline.taskbrain.data.NoteStore
 import org.alkaline.taskbrain.dsl.language.Lexer
 import org.alkaline.taskbrain.dsl.language.Parser
 import org.alkaline.taskbrain.dsl.runtime.Environment
@@ -106,13 +107,9 @@ class ScheduleWorker(
         Log.d(TAG, "Executing schedule: ${schedule.id} (${schedule.directiveSource})")
 
         return try {
-            // Load notes for the execution context
-            val notesResult = noteRepository.loadAllUserNotes()
-            val notes = notesResult.getOrNull() ?: emptyList()
-
-            // Load the note containing this schedule for currentNote context
+            val notes = NoteStore.getNotesOrLoad(noteRepository)
             val currentNote = if (schedule.noteId.isNotBlank()) {
-                noteRepository.loadNoteById(schedule.noteId).getOrNull()
+                NoteStore.getNoteOrLoad(schedule.noteId, noteRepository)
             } else {
                 null
             }

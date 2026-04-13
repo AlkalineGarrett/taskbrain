@@ -28,6 +28,10 @@ class NoteRepositoryTest {
 
         // Default: no descendants
         mockEmptyTreeQuery()
+        mockkObject(NoteStore)
+        every { NoteStore.getDescendantIds(any()) } returns emptySet()
+        every { NoteStore.getAllDescendantIds(any()) } returns emptySet()
+        every { NoteStore.getNoteById(any()) } returns null
 
         repository = NoteRepository(mockFirestore, mockAuth)
     }
@@ -61,15 +65,6 @@ class NoteRepositoryTest {
             }
         }
         every { mockCollection.whereEqualTo("rootNoteId", any()) } returns rootQuery
-    }
-
-    /** Mock transaction that just executes the function. */
-    private fun mockSimpleTransaction() {
-        every { mockFirestore.runTransaction<Map<Int, String>>(any()) } answers {
-            val function = firstArg<Transaction.Function<Map<Int, String>>>()
-            val transaction = mockk<Transaction>(relaxed = true)
-            Tasks.forResult(function.apply(transaction))
-        }
     }
 
     /** Mock batch operations. */
@@ -241,12 +236,12 @@ class NoteRepositoryTest {
     @Test
     fun `saveNoteWithChildren saves parent content`() = runTest {
         mockDocument("note_1", null)
-        mockSimpleTransaction()
+        val batch = mockBatch()
 
         val result = repository.saveNoteWithChildren("note_1", listOf(NoteLine("Content", "note_1")))
 
         assertTrue(result.isSuccess)
-        verify { mockFirestore.runTransaction<Map<Int, String>>(any()) }
+        verify { batch.set(any(), any<Map<String, Any?>>(), any<SetOptions>()) }
     }
 
     @Test
@@ -254,7 +249,7 @@ class NoteRepositoryTest {
         mockDocument("note_1", null)
         val childRef = mockk<DocumentReference> { every { id } returns "new_child" }
         every { mockCollection.document() } returns childRef
-        mockSimpleTransaction()
+        mockBatch()
 
         val result = repository.saveNoteWithChildren(
             "note_1",
@@ -268,7 +263,7 @@ class NoteRepositoryTest {
     fun `saveNoteWithChildren updates existing child notes`() = runTest {
         mockDocument("note_1", Note(containedNotes = listOf("child_1")))
         mockDocument("child_1", null)
-        mockSimpleTransaction()
+        mockBatch()
 
         val result = repository.saveNoteWithChildren(
             "note_1",
@@ -282,7 +277,7 @@ class NoteRepositoryTest {
     fun `saveNoteWithChildren soft-deletes removed children`() = runTest {
         mockDocument("note_1", Note(containedNotes = listOf("old_child")))
         mockDocument("old_child", null)
-        mockSimpleTransaction()
+        mockBatch()
 
         val result = repository.saveNoteWithChildren(
             "note_1",
@@ -297,7 +292,7 @@ class NoteRepositoryTest {
         mockDocument("note_1", null)
         val childRef = mockk<DocumentReference> { every { id } returns "child_1" }
         every { mockCollection.document() } returns childRef
-        mockSimpleTransaction()
+        mockBatch()
 
         val result = repository.saveNoteWithChildren(
             "note_1",
@@ -317,7 +312,7 @@ class NoteRepositoryTest {
         mockDocument("note_1", null)
         val childRef = mockk<DocumentReference> { every { id } returns "child_1" }
         every { mockCollection.document() } returns childRef
-        mockSimpleTransaction()
+        mockBatch()
 
         val result = repository.saveNoteWithChildren(
             "note_1",
@@ -339,7 +334,7 @@ class NoteRepositoryTest {
         mockDocument("note_1", null)
         val childRef = mockk<DocumentReference> { every { id } returns "child_1" }
         every { mockCollection.document() } returns childRef
-        mockSimpleTransaction()
+        mockBatch()
 
         val result = repository.saveNoteWithChildren(
             "note_1",
@@ -360,7 +355,7 @@ class NoteRepositoryTest {
         mockDocument("note_1", null)
         val childRef = mockk<DocumentReference> { every { id } returns "new_child" }
         every { mockCollection.document() } returns childRef
-        mockSimpleTransaction()
+        mockBatch()
 
         val result = repository.saveNoteWithChildren(
             "note_1",
@@ -575,7 +570,7 @@ class NoteRepositoryTest {
         }
         var refIndex = 0
         every { mockCollection.document() } answers { refs[refIndex++] }
-        mockSimpleTransaction()
+        mockBatch()
 
         val result = repository.saveNoteWithChildren(
             "root",
@@ -597,46 +592,62 @@ class NoteRepositoryTest {
         assertEquals(emptyMap<Int, String>(), result)
     }
 
+    @Test
+    fun `saveNoteWithChildren uses multiple batches for many children`() = runTest {
+        mockDocument("root", null)
+        // Create 501 child lines (exceeds 500-op batch limit when combined with root write)
+        val childRefs = (1..501).map { i ->
+            mockk<DocumentReference> { every { id } returns "child_$i" }
+        }
+        var refIndex = 0
+        every { mockCollection.document() } answers { childRefs[refIndex++] }
+        val batch = mockBatch()
+
+        val lines = mutableListOf(NoteLine("Root", "root"))
+        for (i in 1..501) {
+            lines.add(NoteLine("\tChild $i", null))
+        }
+
+        val result = repository.saveNoteWithChildren("root", lines).getOrThrow()
+
+        assertEquals(501, result.size)
+        // Should commit multiple batches (502 ops: 1 root + 501 children)
+        verify(atLeast = 2) { batch.commit() }
+    }
+
     // endregion
 
     // region Delete/Restore Tests
 
     @Test
-    fun `softDeleteNote deletes root and new-format descendants`() = runTest {
-        mockTreeQuery("note_1", listOf(
-            "child_1" to Note(id = "child_1", rootNoteId = "note_1"),
-            "child_2" to Note(id = "child_2", rootNoteId = "note_1"),
-        ))
+    fun `softDeleteNote deletes root and descendants`() = runTest {
+        every { NoteStore.getDescendantIds("note_1") } returns setOf("child_1", "child_2")
         val batch = mockBatch()
 
         repository.softDeleteNote("note_1").getOrThrow()
 
-        // Should update 3 docs: root + 2 children
-        verify(exactly = 3) { batch.update(any(), any<Map<String, Any?>>()) }
+        // Should write 3 docs: root + 2 children
+        verify(exactly = 3) { batch.set(any(), any<Map<String, Any?>>(), any<SetOptions>()) }
     }
 
     @Test
     fun `softDeleteNote deletes only root when no descendants`() = runTest {
-        mockEmptyTreeQuery()
-        mockDocument("note_1", Note(containedNotes = emptyList()))
+        every { NoteStore.getDescendantIds("note_1") } returns emptySet()
         val batch = mockBatch()
 
         repository.softDeleteNote("note_1").getOrThrow()
 
-        verify(exactly = 1) { batch.update(any(), any<Map<String, Any?>>()) }
+        verify(exactly = 1) { batch.set(any(), any<Map<String, Any?>>(), any<SetOptions>()) }
     }
 
     @Test
-    fun `undeleteNote restores root and new-format descendants`() = runTest {
-        mockTreeQuery("note_1", listOf(
-            "child_1" to Note(id = "child_1", rootNoteId = "note_1", state = "deleted"),
-            "child_2" to Note(id = "child_2", rootNoteId = "note_1", state = "deleted"),
-        ))
+    fun `undeleteNote restores root and descendants including deleted`() = runTest {
+        every { NoteStore.getAllDescendantIds("note_1") } returns setOf("child_1", "child_2")
         val batch = mockBatch()
 
         repository.undeleteNote("note_1").getOrThrow()
 
-        verify(exactly = 3) { batch.update(any(), any<Map<String, Any?>>()) }
+        verify(exactly = 3) { batch.set(any(), any<Map<String, Any?>>(), any<SetOptions>()) }
     }
 
     // endregion

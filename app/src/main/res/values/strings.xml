@@ -234,4 +234,9 @@
 
     <!-- Sync warnings -->
     <string name="warning_sync_error">Note sync interrupted — changes from other devices may not appear</string>
+
+    <!-- Offline indicators -->
+    <string name="offline_banner_message">You\'re offline — changes will sync when reconnected</string>
+    <string name="synced_banner_message">Changes synced</string>
+    <string name="ai_unavailable_offline">AI unavailable offline</string>
 </resources>

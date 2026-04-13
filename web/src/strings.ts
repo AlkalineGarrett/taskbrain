@@ -210,5 +210,10 @@ export const SEARCH_NO_RESULTS = 'No matching notes'
 export const SEARCH_HISTORY = 'Recent searches'
 export const SEARCH_HISTORY_BUTTON = 'Search history'
 
+// Offline indicators (Android: offline_banner_message, synced_banner_message, ai_unavailable_offline)
+export const OFFLINE_BANNER_MESSAGE = 'You\u2019re offline \u2014 changes will sync when reconnected'
+export const SYNCED_BANNER_MESSAGE = 'Changes synced'
+export const AI_UNAVAILABLE_OFFLINE = 'AI unavailable offline'
+
 // Tabs
 export const EMPTY_TAB = '(empty)'

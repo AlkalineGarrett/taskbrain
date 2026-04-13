@@ -55,7 +55,8 @@ fun AgentCommandSection(
     onAgentCommandChange: (String) -> Unit,
     isProcessing: Boolean,
     onSendCommand: () -> Unit,
-    mainContentFocusRequester: FocusRequester
+    mainContentFocusRequester: FocusRequester,
+    enabled: Boolean
 ) {
     var hasBeenFocused by remember { mutableStateOf(false) }
 
@@ -68,7 +69,8 @@ fun AgentCommandSection(
 
     AgentSectionHeader(
         isExpanded = isExpanded,
-        onExpand = { onExpandedChange(true) },
+        enabled = enabled,
+        onExpand = { if (enabled) onExpandedChange(true) },
         onCollapse = {
             // Safely request focus - the target component might not be in the composition tree
             try {
@@ -84,7 +86,7 @@ fun AgentCommandSection(
         ProcessingIndicatorBar()
     }
 
-    if (isExpanded) {
+    if (isExpanded && enabled) {
         AgentCommandTextField(
             command = agentCommand,
             onCommandChange = onAgentCommandChange,
@@ -107,6 +109,7 @@ fun AgentCommandSection(
 @Composable
 private fun AgentSectionHeader(
     isExpanded: Boolean,
+    enabled: Boolean,
     onExpand: () -> Unit,
     onCollapse: () -> Unit
 ) {
@@ -120,8 +123,10 @@ private fun AgentSectionHeader(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text = stringResource(id = R.string.agent_chat_label),
-            color = colorResource(R.color.titlebar_text),
+            text = if (enabled) stringResource(id = R.string.agent_chat_label)
+                   else stringResource(id = R.string.ai_unavailable_offline),
+            color = if (enabled) colorResource(R.color.titlebar_text)
+                    else colorResource(R.color.titlebar_text).copy(alpha = 0.5f),
             fontSize = 18.sp
         )
         if (isExpanded) {

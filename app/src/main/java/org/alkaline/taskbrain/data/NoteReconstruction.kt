@@ -91,3 +91,17 @@ fun reconstructNoteContent(
     val lines = flattenTreeToLines(note, descendants)
     return note.copy(content = lines.joinToString("\n") { it.content })
 }
+
+/**
+ * IDs of all non-deleted notes whose [Note.rootNoteId] matches [noteId].
+ * Pure function extracted from NoteStore for testability.
+ */
+fun descendantIdsOf(
+    noteId: String,
+    rawNotes: Map<String, Note>,
+    includeDeleted: Boolean = false
+): Set<String> =
+    rawNotes.values
+        .filter { it.rootNoteId == noteId && (includeDeleted || it.state != "deleted") }
+        .map { it.id }
+        .toSet()
