@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { EditorState } from '@/editor/EditorState'
 import { EditorController } from '@/editor/EditorController'
 import { UndoManager, type UndoManagerState } from '@/editor/UndoManager'
@@ -292,12 +292,6 @@ export function useEditor(noteId: string | undefined) {
     }
   }, [editorState, controller])
 
-  // Save — convenience wrapper using current noteId
-  const save = useCallback(async () => {
-    if (!noteId || !dirty) return
-    await saveNoteById(noteId)
-  }, [noteId, dirty, saveNoteById])
-
   const toggleShowCompleted = useCallback(async () => {
     if (!noteId) return
     const newValue = !showCompleted
@@ -358,6 +352,22 @@ export function useEditor(noteId: string | undefined) {
 
   const clearSaveError = useCallback(() => setSaveError(null), [])
 
+  // Subscribe to the needs-fix set so the command bar can switch the save
+  // button to the warning color when the current note is in it.
+  const notesNeedingFix = useSyncExternalStore(
+    noteStore.subscribeNotesNeedingFix,
+    noteStore.getNotesNeedingFixSnapshot,
+  )
+  const needsFix = !!(noteId && notesNeedingFix.has(noteId))
+
+  // Override `save` so it also fires when only needsFix is true (not just dirty).
+  const saveForFixOrEdit = useCallback(async () => {
+    if (!noteId) return
+    if (!dirty && !needsFix) return
+    await saveNoteById(noteId)
+    if (needsFix) noteStore.markNoteFixed(noteId)
+  }, [noteId, dirty, needsFix, saveNoteById])
+
   return {
     controller,
     editorState,
@@ -369,8 +379,10 @@ export function useEditor(noteId: string | undefined) {
     saveError,
     clearSaveError,
     dirty,
-    save,
+    save: saveForFixOrEdit,
     showCompleted,
     toggleShowCompleted,
+    needsFix,
+    notesNeedingFix,
   }
 }

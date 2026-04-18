@@ -137,8 +137,14 @@ class NoteRepository(
                 .filter { it.rootNoteId != null }
                 .groupBy { it.rootNoteId!! }
 
+            // Re-index by parentNoteId to match NoteStore's reconstruction algorithm.
+            val childrenByParent = allNotes
+                .filter { it.parentNoteId != null }
+                .groupBy { it.parentNoteId!! }
+            val rawById = allNotes.associateBy { it.id }
             topLevelNotes.map { note ->
-                reconstructNoteContent(note, descendantsByRoot[note.id])
+                val (reconstructed, _) = reconstructNoteContent(note, rawById, childrenByParent)
+                reconstructed
             }
         }
     }.onFailure { Log.e(TAG, "Error loading notes with full content", it) }
@@ -297,13 +303,25 @@ class NoteRepository(
             val toDelete = existingDescendantIds - survivingIds
 
             // Content-drop guard: compare against the note's containedNotes
-            // (its actual children) rather than the rootNoteId query. The
-            // rootNoteId query can include stale references from notes that
-            // were unlinked but never had their rootNoteId cleared.
-            val existingContainedNotes = (NoteStore.getNoteById(noteId)?.containedNotes
+            // intersected with real descendants. Orphan refs (containedNotes
+            // entries without a live child) are routinely dropped by the
+            // auto-fix reconstruction; counting them as deletions would cause
+            // a save of a healed note to falsely trip the guard.
+            val declaredContainedNotes = (NoteStore.getNoteById(noteId)?.containedNotes
                 ?: emptyList()).filter { it.isNotEmpty() }.toSet()
-            val directToDelete = existingContainedNotes - survivingIds
-            if (existingContainedNotes.size >= 3 && directToDelete.size > existingContainedNotes.size / 2) {
+            val realContainedNotes = declaredContainedNotes.intersect(existingDescendantIds)
+
+            val orphanRefs = declaredContainedNotes - existingDescendantIds
+            if (orphanRefs.isNotEmpty()) {
+                Log.w(
+                    TAG,
+                    "saveNoteWithChildren($noteId): ignoring ${orphanRefs.size} orphan " +
+                        "containedNotes refs for content-drop guard (no live child): $orphanRefs"
+                )
+            }
+
+            val directToDelete = realContainedNotes - survivingIds
+            if (realContainedNotes.size >= 3 && directToDelete.size > realContainedNotes.size / 2) {
                 val diagnostics = buildContentDropDiagnostics(
                     noteId, trackedLines, linesToSave, existingDescendantIds, survivingIds, toDelete
                 )

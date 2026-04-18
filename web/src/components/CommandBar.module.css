@@ -68,6 +68,15 @@
   background: var(--color-primary-hover);
 }
 
+.saveButtonNeedsFix {
+  background: var(--color-warning-text);
+  border-color: var(--color-warning-text);
+}
+
+.saveButtonNeedsFix:hover:not(:disabled) {
+  background: #9c2f00;
+}
+
 .saveButton:disabled {
   background: var(--color-disabled-bg);
   color: var(--color-disabled-text);

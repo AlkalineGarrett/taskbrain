@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
@@ -24,6 +25,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.ui.res.colorResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +53,7 @@ fun RecentTabsBar(
     currentNoteId: String,
     onTabClick: (String) -> Unit,
     onTabClose: (String) -> Unit,
+    notesNeedingFix: Set<String> = emptySet(),
     modifier: Modifier = Modifier
 ) {
     // Don't show if no tabs
@@ -83,6 +87,7 @@ fun RecentTabsBar(
             TabItem(
                 tab = tab,
                 isCurrentTab = isCurrentTab,
+                needsFix = tab.noteId in notesNeedingFix,
                 onClick = { if (!isCurrentTab) onTabClick(tab.noteId) },
                 onClose = { onTabClose(tab.noteId) },
                 modifier = Modifier.animateItem(
@@ -102,6 +107,7 @@ fun RecentTabsBar(
 private fun TabItem(
     tab: RecentTab,
     isCurrentTab: Boolean,
+    needsFix: Boolean,
     onClick: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
@@ -128,6 +134,17 @@ private fun TabItem(
         Row(
             verticalAlignment = Alignment.CenterVertically
         ) {
+            if (needsFix) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_warning),
+                    contentDescription = stringResource(R.string.tab_needs_fix_indicator),
+                    tint = colorResource(R.color.action_button_needs_fix_background),
+                    modifier = Modifier.size(MenuIconSize)
+                )
+                androidx.compose.foundation.layout.Spacer(
+                    modifier = Modifier.width(TabWarningIconSpacing)
+                )
+            }
             Text(
                 text = tab.displayText.ifEmpty { stringResource(R.string.new_note) },
                 color = textColor,
@@ -178,3 +195,4 @@ private val TabTextSize = 12.sp
 private val TabContentPaddingStart = 4.dp
 private val TabContentPaddingEnd = 2.dp
 private val MenuIconSize = 14.dp
+private val TabWarningIconSpacing = 3.dp

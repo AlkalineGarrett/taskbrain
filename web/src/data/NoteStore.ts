@@ -35,8 +35,16 @@ export class NoteStore {
   private listeners = new Set<() => void>()
   private changeListeners = new Set<(changedIds: Set<string>) => void>()
   private errorListeners = new Set<() => void>()
+  private needsFixListeners = new Set<() => void>()
   private pendingSaves = new Map<string, Promise<unknown>>()
   private _error: string | null = null
+  /**
+   * Top-level note IDs whose reconstruction had to auto-heal a discrepancy
+   * (orphan ref dropped or stray child appended). The editor shows the healed
+   * content; saving the note writes the fix back to Firestore and removes it
+   * from this set on the next snapshot (or via `markNoteFixed`).
+   */
+  private _notesNeedingFix = new Set<string>()
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
@@ -67,6 +75,24 @@ export class NoteStore {
       this._error = null
       this.emitErrorChange()
     }
+  }
+
+  subscribeNotesNeedingFix = (listener: () => void): (() => void) => {
+    this.needsFixListeners.add(listener)
+    return () => this.needsFixListeners.delete(listener)
+  }
+
+  getNotesNeedingFixSnapshot = (): Set<string> => {
+    return this._notesNeedingFix
+  }
+
+  /** Clear a note from needsFix (e.g., after a successful save). */
+  markNoteFixed = (noteId: string): void => {
+    if (!this._notesNeedingFix.has(noteId)) return
+    const next = new Set(this._notesNeedingFix)
+    next.delete(noteId)
+    this._notesNeedingFix = next
+    this.emitNeedsFixChange()
   }
 
   /**
@@ -160,8 +186,10 @@ export class NoteStore {
     this.loadPromise = null
     this.loadResolve = null
     this._error = null
+    this._notesNeedingFix = new Set()
     this.emitChange()
     this.emitErrorChange()
+    this.emitNeedsFixChange()
   }
 
   /** Optimistic update — replace a single reconstructed note by ID. */
@@ -251,17 +279,54 @@ export class NoteStore {
 
   /** Rebuild all reconstructed notes from rawNotes. Used on initial load. */
   private rebuildAll(): void {
-    this.reconstructedNotes = rebuildAllNotes(this.rawNotes)
+    const result = rebuildAllNotes(this.rawNotes)
+    this.reconstructedNotes = result.notes
     this.emitChange()
+    this.setNotesNeedingFix(result.notesNeedingFix)
   }
 
   /** Rebuild only the top-level notes whose trees were affected by a change. */
   private rebuildAffected(rootIds: Set<string>): void {
     const result = rebuildAffectedNotes(this.reconstructedNotes, rootIds, this.rawNotes)
-    if (result !== this.reconstructedNotes) {
-      this.reconstructedNotes = result
+    if (result.notes !== this.reconstructedNotes) {
+      this.reconstructedNotes = result.notes
       this.emitChange()
     }
+    this.mergeNotesNeedingFix(rootIds, result.notesNeedingFix)
+  }
+
+  private setNotesNeedingFix(next: Set<string>): void {
+    if (sameSet(this._notesNeedingFix, next)) return
+    this._notesNeedingFix = next
+    this.emitNeedsFixChange()
+  }
+
+  /**
+   * Incremental updates see only the affected roots: clear needsFix for any
+   * affected root that now reconstructs cleanly, add any that newly need fixing.
+   */
+  private mergeNotesNeedingFix(affectedRootIds: Set<string>, stillNeedFix: Set<string>): void {
+    const next = new Set(this._notesNeedingFix)
+    let changed = false
+    for (const id of affectedRootIds) {
+      if (next.has(id) && !stillNeedFix.has(id)) {
+        next.delete(id)
+        changed = true
+      }
+    }
+    for (const id of stillNeedFix) {
+      if (!next.has(id)) {
+        next.add(id)
+        changed = true
+      }
+    }
+    if (!changed) return
+    this._notesNeedingFix = next
+    this.emitNeedsFixChange()
+  }
+
+  private emitNeedsFixChange(): void {
+    for (const listener of this.needsFixListeners) listener()
   }
 
   private emitChange(): void {
@@ -281,6 +346,13 @@ export class NoteStore {
       listener()
     }
   }
+}
+
+function sameSet(a: Set<string>, b: Set<string>): boolean {
+  if (a === b) return true
+  if (a.size !== b.size) return false
+  for (const x of a) if (!b.has(x)) return false
+  return true
 }
 
 export const noteStore = new NoteStore()

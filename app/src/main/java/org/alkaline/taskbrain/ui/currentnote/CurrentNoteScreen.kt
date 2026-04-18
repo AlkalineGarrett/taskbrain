@@ -97,6 +97,7 @@ fun CurrentNoteScreen(
     val saveWarning by currentNoteViewModel.directiveManager.saveWarning.observeAsState()
     val isNoteDeletedFromVm by currentNoteViewModel.isNoteDeleted.observeAsState(false)
     val showCompletedFromVm by currentNoteViewModel.showCompleted.observeAsState(true)
+    val noteNeedsFix by currentNoteViewModel.noteNeedsFix.observeAsState(false)
     // Generation counter bumps after async cache fills, triggering recomposition
     val directiveCacheGeneration by currentNoteViewModel.directiveManager.directiveCacheGeneration.observeAsState(0)
     val buttonExecutionStates by currentNoteViewModel.directiveManager.buttonExecutionStates.observeAsState(emptyMap())
@@ -545,9 +546,11 @@ fun CurrentNoteScreen(
             .fillMaxSize()
             .background(if (isNoteDeleted) deletedNoteBackground else Color.White)
     ) {
+        val notesNeedingFix by NoteStore.notesNeedingFix.collectAsState()
         RecentTabsBar(
             tabs = recentTabs,
             currentNoteId = displayedNoteId ?: "",
+            notesNeedingFix = notesNeedingFix,
             onTabClick = { targetNoteId ->
                 if (!isSaved && userContent.isNotEmpty()) {
                     val dirtySessions = inlineEditState.getAllDirtySessions()
@@ -571,6 +574,7 @@ fun CurrentNoteScreen(
 
         NoteStatusBar(
             saveStatus = saveStatus,
+            noteNeedsFix = noteNeedsFix,
             canUndo = canUndo && !isAlarmOperationPending,
             canRedo = canRedo && !isAlarmOperationPending,
             isNoteDeleted = isNoteDeleted,
@@ -1123,6 +1127,7 @@ private fun DirectiveMutationEffect(
 @Composable
 private fun NoteStatusBar(
     saveStatus: UnifiedSaveStatus?,
+    noteNeedsFix: Boolean,
     canUndo: Boolean,
     canRedo: Boolean,
     isNoteDeleted: Boolean,
@@ -1152,6 +1157,7 @@ private fun NoteStatusBar(
 
     StatusBar(
         saveStatus = saveStatus ?: UnifiedSaveStatus.Idle,
+        noteNeedsFix = noteNeedsFix,
         onSaveClick = {
             controller.sortCompletedToBottom()
             controller.commitUndoState(continueEditing = true)

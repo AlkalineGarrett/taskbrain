@@ -4,7 +4,7 @@ import { RecentTabsRepository, type RecentTab } from '@/data/RecentTabsRepositor
 import { addOrUpdateTabState, updateDisplayTextState, removeTabState, extractDisplayText } from '@/data/TabState'
 import { noteStore } from '@/data/NoteStore'
 import { db, auth } from '@/firebase/config'
-import { EMPTY_TAB } from '@/strings'
+import { EMPTY_TAB, TAB_NEEDS_FIX_INDICATOR } from '@/strings'
 import styles from './RecentTabsBar.module.css'
 
 const repo = new RecentTabsRepository(db, auth)
@@ -35,7 +35,11 @@ function refreshDisplayTexts(tabs: RecentTab[]): RecentTab[] {
 let snapshotAndSetTabs: ((updater: (prev: RecentTab[]) => RecentTab[]) => void) | null = null
 let setTabsNoAnimation: React.Dispatch<React.SetStateAction<RecentTab[]>> | null = null
 
-export function RecentTabsBar() {
+interface RecentTabsBarProps {
+  notesNeedingFix?: Set<string>
+}
+
+export function RecentTabsBar({ notesNeedingFix }: RecentTabsBarProps = {}) {
   const [tabs, setTabs] = useState<RecentTab[]>([])
   const navigate = useNavigate()
   const { noteId: currentNoteId } = useParams<{ noteId: string }>()
@@ -147,24 +151,32 @@ export function RecentTabsBar() {
 
   return (
     <div className={styles.bar}>
-      {tabs.map((tab) => (
-        <button
-          key={tab.noteId}
-          ref={(el) => setTabRef(tab.noteId, el)}
-          className={`${styles.tab} ${tab.noteId === currentNoteId ? styles.active : ''}`}
-          onClick={() => handleTabClick(tab.noteId)}
-        >
-          <span className={styles.tabText}>
-            {tab.displayText || EMPTY_TAB}
-          </span>
-          <span
-            className={styles.closeButton}
-            onClick={(e) => handleClose(e, tab.noteId)}
+      {tabs.map((tab) => {
+        const needsFix = notesNeedingFix?.has(tab.noteId) ?? false
+        return (
+          <button
+            key={tab.noteId}
+            ref={(el) => setTabRef(tab.noteId, el)}
+            className={`${styles.tab} ${tab.noteId === currentNoteId ? styles.active : ''}`}
+            onClick={() => handleTabClick(tab.noteId)}
           >
-            ×
-          </span>
-        </button>
-      ))}
+            {needsFix && (
+              <span className={styles.needsFixIndicator} title={TAB_NEEDS_FIX_INDICATOR}>
+                ⚠
+              </span>
+            )}
+            <span className={styles.tabText}>
+              {tab.displayText || EMPTY_TAB}
+            </span>
+            <span
+              className={styles.closeButton}
+              onClick={(e) => handleClose(e, tab.noteId)}
+            >
+              ×
+            </span>
+          </button>
+        )
+      })}
     </div>
   )
 }

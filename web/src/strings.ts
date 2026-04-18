@@ -47,12 +47,14 @@ export const NO_NOTES_FOUND = 'No notes found'
 export const NO_DELETED_NOTES = 'No deleted notes'
 export const EMPTY_NOTE = 'Empty Note'
 
-// Status (Android: action_save, status_saved, status_unsaved, status_saving)
+// Status (Android: action_save, status_saved, status_unsaved, status_saving, status_needs_fix)
 export const SAVE = 'Save'
 export const CREATE = 'Create'
 export const SAVING = 'Saving\u2026'
 export const SAVED = 'Saved'
 export const UNSAVED = 'Unsaved'
+export const NEEDS_FIX = 'Fix'
+export const TAB_NEEDS_FIX_INDICATOR = 'Note was auto-healed — save to persist the fix'
 export const LOADING = 'Loading\u2026'
 export const LOADING_NOTE = 'Loading note\u2026'
 

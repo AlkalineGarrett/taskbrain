@@ -144,18 +144,21 @@ export class NoteRepository {
         .filter((n) => n.state !== 'deleted')
 
       const topLevelNotes = allNotes.filter((n) => n.parentNoteId == null)
-      const descendantsByRoot = new Map<string, Note[]>()
+      const rawById = new Map<string, Note>()
+      const childrenByParent = new Map<string, Note[]>()
       for (const n of allNotes) {
-        if (n.rootNoteId != null) {
-          const list = descendantsByRoot.get(n.rootNoteId)
+        rawById.set(n.id, n)
+        if (n.parentNoteId != null) {
+          const list = childrenByParent.get(n.parentNoteId)
           if (list) list.push(n)
-          else descendantsByRoot.set(n.rootNoteId, [n])
+          else childrenByParent.set(n.parentNoteId, [n])
         }
       }
 
-      return topLevelNotes.map((note) =>
-        reconstructNoteContent(note, descendantsByRoot.get(note.id)),
-      )
+      return topLevelNotes.map((note) => {
+        const [reconstructed] = reconstructNoteContent(note, rawById, childrenByParent)
+        return reconstructed
+      })
     })
   }
 

@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./gradlew testDebugUnitTest:*)",
+      "Bash(./gradlew test:*)",
+      "Bash(./gradlew app:testDebugUnitTest:*)",
+      "Bash(./gradlew :app:testDebugUnitTest:*)",
+      "Bash(adb logcat:*)",
+      "Bash(adb bugreport:*)",
+      "mcp__claude-in-chrome__tabs_context_mcp",
+      "mcp__claude-in-chrome__read_console_messages",
+      "mcp__claude-in-chrome__read_page",
+      "mcp__claude-in-chrome__find"
+    ]
+  }
+}

@@ -31,7 +31,7 @@ const noteRepo = new NoteRepository(db, auth)
 export function NoteEditorScreen() {
   const { noteId: urlNoteId } = useParams<{ noteId: string }>()
   const navigate = useNavigate()
-  const { controller, editorState, loading, loadedNoteId, showLoading, error, saveError, clearSaveError, dirty, save, showCompleted, toggleShowCompleted } = useEditor(urlNoteId)
+  const { controller, editorState, loading, loadedNoteId, showLoading, error, saveError, clearSaveError, dirty, save, showCompleted, toggleShowCompleted, needsFix, notesNeedingFix } = useEditor(urlNoteId)
   // Use loadedNoteId for all rendering — keeps showing the old note until
   // the new one is fully loaded, preventing transition flashes.
   const noteId = loadedNoteId ?? urlNoteId
@@ -587,7 +587,7 @@ export function NoteEditorScreen() {
 
   return (
     <div className={styles.container}>
-      <RecentTabsBar />
+      <RecentTabsBar notesNeedingFix={notesNeedingFix} />
 
       <CommandBar
         controller={activeController}
@@ -601,6 +601,7 @@ export function NoteEditorScreen() {
         isDeleted={currentNote?.state === 'deleted'}
         anyDirty={anyDirty}
         saveStatus={saveStatus}
+        needsFix={needsFix}
         showCompleted={showCompleted}
         onToggleShowCompleted={toggleShowCompleted}
       />

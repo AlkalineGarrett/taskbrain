@@ -11,6 +11,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.read
+import kotlin.concurrent.write
 
 /**
  * Singleton reactive store for all notes with reconstructed content.
@@ -43,8 +46,24 @@ object NoteStore {
         _error.value = null
     }
 
+    /**
+     * IDs of top-level notes whose reconstruction had to auto-heal a
+     * discrepancy (orphan ref dropped or stray child appended). The editor
+     * shows the healed content; saving a note in this set writes the fix
+     * back to Firestore and removes it from the set on the next snapshot.
+     */
+    private val _notesNeedingFix = MutableStateFlow<Set<String>>(emptySet())
+    val notesNeedingFix: StateFlow<Set<String>> = _notesNeedingFix.asStateFlow()
+
     /** All notes from Firestore, indexed by ID (including descendants). */
     private val rawNotes = mutableMapOf<String, Note>()
+
+    /**
+     * Guards [rawNotes] against data races between the Firestore listener
+     * (main thread) and save operations (IO dispatcher). Reads use the read
+     * lock for concurrent throughput; snapshot handlers use the write lock.
+     */
+    private val rawNotesLock = ReentrantReadWriteLock()
 
     private var listenerRegistration: ListenerRegistration? = null
     private var loaded = false
@@ -139,15 +158,23 @@ object NoteStore {
     fun clear() {
         listenerRegistration?.remove()
         listenerRegistration = null
-        rawNotes.clear()
+        rawNotesLock.write { rawNotes.clear() }
         pendingPersistContent.clear()
         pendingPersistRunnables.clear()
         persistHandler.removeCallbacksAndMessages(null)
         persistCallback = null
         _notes.value = emptyList()
         _error.value = null
+        _notesNeedingFix.value = emptySet()
         loaded = false
         loadDeferred = null
+    }
+
+    /** Clear a note from [notesNeedingFix] (e.g., after a successful save). */
+    fun markNoteFixed(noteId: String) {
+        val current = _notesNeedingFix.value
+        if (noteId !in current) return
+        _notesNeedingFix.value = current - noteId
     }
 
     /**
@@ -185,19 +212,22 @@ object NoteStore {
         _notes.value.find { it.id == noteId }
 
     /** Get a raw (unreconstructed) note by ID — includes notes filtered from the top-level list. */
-    fun getRawNoteById(noteId: String): Note? = rawNotes[noteId]
+    fun getRawNoteById(noteId: String): Note? = rawNotesLock.read { rawNotes[noteId] }
 
     /** Find a note by its path from in-memory data. */
-    fun getNoteByPath(path: String): Note? =
+    fun getNoteByPath(path: String): Note? = rawNotesLock.read {
         rawNotes.values.find { it.path == path && it.state != "deleted" }
+    }
 
     /** IDs of all non-deleted descendants of [noteId] from in-memory state. */
-    fun getDescendantIds(noteId: String): Set<String> =
+    fun getDescendantIds(noteId: String): Set<String> = rawNotesLock.read {
         descendantIdsOf(noteId, rawNotes)
+    }
 
     /** IDs of all descendants of [noteId] including deleted ones. */
-    fun getAllDescendantIds(noteId: String): Set<String> =
+    fun getAllDescendantIds(noteId: String): Set<String> = rawNotesLock.read {
         descendantIdsOf(noteId, rawNotes, includeDeleted = true)
+    }
 
     /** In-memory note by ID, falling back to Firestore if not cached. */
     suspend fun getNoteOrLoad(noteId: String, repository: NoteRepository): Note? =
@@ -213,19 +243,19 @@ object NoteStore {
      * NoteRepository.loadNoteWithChildren, but without a Firestore round-trip.
      * Returns null if the note or its descendants aren't loaded yet.
      */
-    fun getNoteLinesById(noteId: String): List<NoteLine>? {
-        val rootNote = rawNotes[noteId] ?: return null
+    fun getNoteLinesById(noteId: String): List<NoteLine>? = rawNotesLock.read {
+        val rootNote = rawNotes[noteId] ?: return@read null
         if (rootNote.containedNotes.isEmpty()) {
             // No tree children — split content into per-line NoteLines.
             val lines = rootNote.content.split("\n")
-            return lines.mapIndexed { index, line ->
+            return@read lines.mapIndexed { index, line ->
                 NoteLine(line, if (index == 0) noteId else null)
             }
         }
         val descendants = rawNotes.values.filter {
             it.rootNoteId == noteId && it.state != "deleted"
         }
-        return flattenTreeToLines(rootNote, descendants)
+        flattenTreeToLines(rootNote, descendants)
     }
 
     /**
@@ -265,11 +295,13 @@ object NoteStore {
     // --- Snapshot handlers ---
 
     private fun handleFirstSnapshot(notes: List<Note>) {
-        rawNotes.clear()
-        for (note in notes) {
-            rawNotes[note.id] = note
+        rawNotesLock.write {
+            rawNotes.clear()
+            for (note in notes) {
+                rawNotes[note.id] = note
+            }
+            rebuildAll()
         }
-        rebuildAll()
         loaded = true
         loadDeferred?.complete(Unit)
         loadDeferred = null
@@ -278,37 +310,59 @@ object NoteStore {
     private fun handleIncrementalSnapshot(changes: List<DocumentChange>) {
         val affectedRoots = mutableSetOf<String>()
 
-        for (change in changes) {
-            if (change.document.metadata.hasPendingWrites()) continue
+        rawNotesLock.write {
+            for (change in changes) {
+                if (change.document.metadata.hasPendingWrites()) continue
 
-            val note = parseNote(change.document.id, change.document.data) ?: continue
-            val rootId = note.rootNoteId ?: note.id
+                val note = parseNote(change.document.id, change.document.data) ?: continue
+                val rootId = note.rootNoteId ?: note.id
 
-            // Always update rawNotes (Firestore data is never re-delivered if skipped).
-            if (change.type == DocumentChange.Type.REMOVED) {
-                rawNotes.remove(change.document.id)
-            } else {
-                rawNotes[change.document.id] = note
+                // Always update rawNotes (Firestore data is never re-delivered if skipped).
+                if (change.type == DocumentChange.Type.REMOVED) {
+                    rawNotes.remove(change.document.id)
+                } else {
+                    rawNotes[change.document.id] = note
+                }
+                affectedRoots.add(rootId)
             }
-            affectedRoots.add(rootId)
+
+            if (affectedRoots.isNotEmpty()) {
+                rebuildAffected(affectedRoots)
+            }
         }
 
         if (affectedRoots.isNotEmpty()) {
-            rebuildAffected(affectedRoots)
             _changedNoteIds.tryEmit(affectedRoots)
         }
     }
 
     // --- Internal reconstruction ---
+    // Callers must hold rawNotesLock (write).
 
     private fun rebuildAll() {
-        _notes.value = rebuildAllNotes(rawNotes)
+        val result = rebuildAllNotes(rawNotes)
+        _notes.value = result.notes
+        _notesNeedingFix.value = result.notesNeedingFix
     }
 
     private fun rebuildAffected(rootIds: Set<String>) {
         val result = rebuildAffectedNotes(_notes.value, rootIds, rawNotes)
-        if (result !== _notes.value) {
-            _notes.value = result
+        if (result.notes !== _notes.value) {
+            _notes.value = result.notes
+        }
+        mergeNotesNeedingFix(rootIds, result.notesNeedingFix)
+    }
+
+    /**
+     * For the incremental path only: each rebuild sees only the affected roots,
+     * so we merge — clear needsFix for any affected root that now reconstructs
+     * cleanly, and add any that newly need fixing.
+     */
+    private fun mergeNotesNeedingFix(affectedRootIds: Set<String>, stillNeedFix: Set<String>) {
+        val current = _notesNeedingFix.value
+        val updated = (current - affectedRootIds) + stillNeedFix
+        if (updated != current) {
+            _notesNeedingFix.value = updated
         }
     }
 

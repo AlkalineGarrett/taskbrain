@@ -96,6 +96,15 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     private val _isNoteDeleted = MutableLiveData<Boolean>(false)
     val isNoteDeleted: LiveData<Boolean> = _isNoteDeleted
 
+    /**
+     * True when the current note's reconstruction had to auto-heal
+     * a discrepancy (stray appended or orphan ref dropped). The save
+     * button switches to the "needs fix" color and becomes enabled
+     * so the user can persist the healed content.
+     */
+    private val _noteNeedsFix = MutableLiveData<Boolean>(false)
+    val noteNeedsFix: LiveData<Boolean> = _noteNeedsFix
+
     // Per-note toggle: whether completed (checked) lines are visible
     private val _showCompleted = MutableLiveData<Boolean>(true)
     val showCompleted: LiveData<Boolean> = _showCompleted
@@ -108,6 +117,32 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     @Volatile
     var dirty: Boolean = false
 
+    /**
+     * Whether a save is currently in flight. The changedNoteIds handler skips
+     * while this is true — mirrors the web's `savingRef` pattern — so the
+     * echo of our own save can't trigger a reload that races the save's
+     * post-completion bookkeeping (noteId reassignment, `_loadStatus` update).
+     */
+    @Volatile
+    private var saving: Boolean = false
+
+    // Current Note ID being edited — initialized from SharedPreferences so that LiveData
+    // exposes the correct value immediately, preventing a race where the sync LaunchedEffect
+    // in CurrentNoteScreen sets displayedNoteId to a stale default before loadContent runs.
+    // For new users (no stored pref), starts as null/empty — loadContent will create a note.
+    //
+    // Must be initialized BEFORE `init {}` because the init block launches coroutines
+    // that subscribe to StateFlows whose first emission is synchronous; those lambdas
+    // dereference currentNoteId and would NPE on the uninitialized JVM backing field.
+    private val LAST_VIEWED_NOTE_KEY = "last_viewed_note_id"
+    private var currentNoteId = sharedPreferences.getString(LAST_VIEWED_NOTE_KEY, null) ?: ""
+
+    // Expose current note ID for UI (e.g., undo state persistence).
+    // Nullable: null means no note loaded yet (new user before first note is created).
+    private val _currentNoteIdLiveData = MutableLiveData<String?>(
+        sharedPreferences.getString(LAST_VIEWED_NOTE_KEY, null)
+    )
+    val currentNoteIdLiveData: LiveData<String?> = _currentNoteIdLiveData
 
     init {
         directiveManager.start()
@@ -136,6 +171,12 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 }
             }
         }
+        // Update noteNeedsFix when the current note moves in/out of the needs-fix set.
+        viewModelScope.launch {
+            NoteStore.notesNeedingFix.collect { set ->
+                _noteNeedsFix.value = currentNoteId.isNotEmpty() && currentNoteId in set
+            }
+        }
         // When an edit session ends, refresh the current view
         directiveManager.addSessionEndListener {
             directiveManager.bumpDirectiveCacheGeneration()
@@ -153,6 +194,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 // Reload editor if the current note itself changed
                 if (noteId !in changedIds) return@collect
                 if (dirty) return@collect
+                if (saving) return@collect
 
                 val storeNote = NoteStore.getNoteById(noteId) ?: return@collect
                 val currentContent = (_loadStatus.value as? LoadStatus.Success)?.content ?: return@collect
@@ -200,20 +242,6 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         )
         return result
     }
-
-    // Current Note ID being edited — initialized from SharedPreferences so that LiveData
-    // exposes the correct value immediately, preventing a race where the sync LaunchedEffect
-    // in CurrentNoteScreen sets displayedNoteId to a stale default before loadContent runs.
-    // For new users (no stored pref), starts as null/empty — loadContent will create a note.
-    private val LAST_VIEWED_NOTE_KEY = "last_viewed_note_id"
-    private var currentNoteId = sharedPreferences.getString(LAST_VIEWED_NOTE_KEY, null) ?: ""
-
-    // Expose current note ID for UI (e.g., undo state persistence).
-    // Nullable: null means no note loaded yet (new user before first note is created).
-    private val _currentNoteIdLiveData = MutableLiveData<String?>(
-        sharedPreferences.getString(LAST_VIEWED_NOTE_KEY, null)
-    )
-    val currentNoteIdLiveData: LiveData<String?> = _currentNoteIdLiveData
 
     /**
      * Gets the current note ID synchronously.
@@ -301,6 +329,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
 
         currentNoteId = resolvedId
         _currentNoteIdLiveData.value = currentNoteId
+        _noteNeedsFix.value = resolvedId in NoteStore.notesNeedingFix.value
 
         // A leftover Saved status from the old note blocks the external
         // change detector (NoteStore collector) for the new note.
@@ -698,49 +727,63 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         }
         MetadataHasher.invalidateCache()
 
+        saving = true
         viewModelScope.launch {
-            val failedNoteIds = mutableListOf<String>()
-            var lastError: Throwable? = null
+            try {
+                val failedNoteIds = mutableListOf<String>()
+                var lastError: Throwable? = null
 
-            // Save main note (without persistCurrentNote's status side effects)
-            val mainResult = repository.saveNoteWithChildren(savedNoteId, trackedLines)
-            mainResult.onSuccess { newIdsMap ->
-                if (newIdsMap.isNotEmpty()) {
-                    val updated = currentNoteLines.toMutableList()
-                    for ((index, newId) in newIdsMap) {
-                        if (index < updated.size) {
-                            updated[index] = updated[index].copy(noteId = newId)
+                // Save main note (without persistCurrentNote's status side effects)
+                val mainResult = repository.saveNoteWithChildren(savedNoteId, trackedLines)
+                mainResult.onSuccess { newIdsMap ->
+                    if (newIdsMap.isNotEmpty()) {
+                        val updated = currentNoteLines.toMutableList()
+                        for ((index, newId) in newIdsMap) {
+                            if (index < updated.size) {
+                                updated[index] = updated[index].copy(noteId = newId)
+                            }
                         }
+                        currentNoteLines = updated
+                        _newlyAssignedNoteIds.tryEmit(newIdsMap)
                     }
-                    currentNoteLines = updated
-                    _newlyAssignedNoteIds.tryEmit(newIdsMap)
-                }
-                alarmManager.syncAlarmLineContent(trackedLines)
-                alarmManager.syncAlarmNoteIds(trackedLines)
-                directiveManager.onSaveCompleted(content)
-            }.onFailure { e ->
-                failedNoteIds.add(savedNoteId)
-                lastError = e
-            }
-
-            // Save all dirty inline sessions
-            for (session in dirtySessions) {
-                try {
-                    directiveManager.saveInlineEditSessionSync(session)
-                    session.markSaved()
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to save inline session ${session.noteId}", e)
-                    failedNoteIds.add(session.noteId)
+                    alarmManager.syncAlarmLineContent(trackedLines)
+                    alarmManager.syncAlarmNoteIds(trackedLines)
+                    directiveManager.onSaveCompleted(content)
+                }.onFailure { e ->
+                    failedNoteIds.add(savedNoteId)
                     lastError = e
                 }
-            }
 
-            if (failedNoteIds.isEmpty()) {
-                _saveStatus.value = UnifiedSaveStatus.Saved(savedNoteId)
-                _saveCompleted.tryEmit(Unit)
-                markAsSaved()
-            } else {
-                _saveStatus.value = UnifiedSaveStatus.PartialError(failedNoteIds, lastError!!)
+                // Save all dirty inline sessions
+                for (session in dirtySessions) {
+                    try {
+                        directiveManager.saveInlineEditSessionSync(session)
+                        session.markSaved()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to save inline session ${session.noteId}", e)
+                        failedNoteIds.add(session.noteId)
+                        lastError = e
+                    }
+                }
+
+                if (failedNoteIds.isEmpty()) {
+                    _saveStatus.value = UnifiedSaveStatus.Saved(savedNoteId)
+                    _saveCompleted.tryEmit(Unit)
+                    markAsSaved()
+                    // Bring _loadStatus up to date with the just-saved content so
+                    // the external change handler's content-equality check
+                    // suppresses our own save echo. currentNoteLines has the
+                    // freshly assigned noteIds at this point.
+                    _loadStatus.value = LoadStatus.Success(savedNoteId, currentNoteLines)
+                    // The save wrote the healed containedNotes — clear the
+                    // needs-fix flag optimistically so the UI flips back now
+                    // instead of waiting for the Firestore echo.
+                    NoteStore.markNoteFixed(savedNoteId)
+                } else {
+                    _saveStatus.value = UnifiedSaveStatus.PartialError(failedNoteIds, lastError!!)
+                }
+            } finally {
+                saving = false
             }
         }
     }

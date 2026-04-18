@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import type { EditorController } from '@/editor/EditorController'
 import {
-  SAVE, SAVING, SAVED,
+  SAVE, SAVING, SAVED, NEEDS_FIX,
   COMMAND_TOGGLE_BULLET, COMMAND_TOGGLE_CHECKBOX,
   COMMAND_INDENT, COMMAND_UNINDENT,
   COMMAND_MOVE_UP, COMMAND_MOVE_DOWN,
@@ -44,13 +44,14 @@ interface CommandBarProps {
   isDeleted?: boolean
   anyDirty: boolean
   saveStatus: SaveStatus
+  needsFix?: boolean
   showCompleted: boolean
   onToggleShowCompleted: () => void
 }
 
 export function CommandBar({
   controller, onSave, onUndo, onRedo, canUndo, canRedo, onDelete, onRestore, isDeleted, anyDirty, saveStatus,
-  showCompleted, onToggleShowCompleted,
+  needsFix, showCompleted, onToggleShowCompleted,
 }: CommandBarProps) {
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -143,12 +144,18 @@ export function CommandBar({
       <div className={styles.spacer} />
 
       <button
-        className={`${styles.button} ${styles.saveButton}`}
+        className={`${styles.button} ${styles.saveButton} ${needsFix ? styles.saveButtonNeedsFix : ''}`}
         onClick={onSave}
-        disabled={saveStatus === 'saving' || (!anyDirty && saveStatus !== 'partial-error')}
+        disabled={saveStatus === 'saving' || (!anyDirty && !needsFix && saveStatus !== 'partial-error')}
         title={`${SAVE} (Ctrl+S)`}
       >
-        {saveStatus === 'saving' ? SAVING : (anyDirty || saveStatus === 'partial-error') ? SAVE : SAVED}
+        {saveStatus === 'saving'
+          ? SAVING
+          : anyDirty || saveStatus === 'partial-error'
+          ? SAVE
+          : needsFix
+          ? NEEDS_FIX
+          : SAVED}
       </button>
 
         <div className={styles.menuContainer} ref={menuRef}>

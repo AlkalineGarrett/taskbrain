@@ -42,6 +42,7 @@ import org.alkaline.taskbrain.ui.currentnote.UnifiedSaveStatus
 fun StatusBar(
     saveStatus: UnifiedSaveStatus,
     onSaveClick: () -> Unit,
+    noteNeedsFix: Boolean = false,
     canUndo: Boolean = false,
     canRedo: Boolean = false,
     onUndoClick: () -> Unit = {},
@@ -53,13 +54,21 @@ fun StatusBar(
     onShowCompletedToggle: () -> Unit = {},
     showOfflineIcon: Boolean
 ) {
-    val isSaveEnabled = saveStatus is UnifiedSaveStatus.Dirty
-    val saveButtonText = when (saveStatus) {
-        is UnifiedSaveStatus.Saving -> stringResource(R.string.status_saving)
-        is UnifiedSaveStatus.Saved -> stringResource(R.string.status_saved)
+    val isSaveEnabled = saveStatus is UnifiedSaveStatus.Dirty ||
+        (noteNeedsFix && saveStatus !is UnifiedSaveStatus.Saving)
+    val saveButtonText = when {
+        saveStatus is UnifiedSaveStatus.Saving -> stringResource(R.string.status_saving)
+        saveStatus is UnifiedSaveStatus.Saved -> stringResource(R.string.status_saved)
+        noteNeedsFix && saveStatus !is UnifiedSaveStatus.Dirty -> stringResource(R.string.status_needs_fix)
         else -> stringResource(R.string.action_save)
     }
-    val isSaved = saveStatus is UnifiedSaveStatus.Idle || saveStatus is UnifiedSaveStatus.Saved
+    val isSaved = !noteNeedsFix &&
+        (saveStatus is UnifiedSaveStatus.Idle || saveStatus is UnifiedSaveStatus.Saved)
+    val enabledButtonColor = if (noteNeedsFix) {
+        colorResource(R.color.action_button_needs_fix_background)
+    } else {
+        colorResource(R.color.action_button_background)
+    }
     var showMenu by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
@@ -110,7 +119,7 @@ fun StatusBar(
             onClick = onSaveClick,
             enabled = isSaveEnabled,
             colors = ButtonDefaults.buttonColors(
-                containerColor = colorResource(R.color.action_button_background),
+                containerColor = enabledButtonColor,
                 contentColor = colorResource(R.color.action_button_text),
                 disabledContainerColor = colorResource(R.color.action_button_disabled_background),
                 disabledContentColor = colorResource(R.color.action_button_disabled_text)

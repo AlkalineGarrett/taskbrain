@@ -16,3 +16,4 @@
 .kotlin
 local.properties
 node_modules
+logs/

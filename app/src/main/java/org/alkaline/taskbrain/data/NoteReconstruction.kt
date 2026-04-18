@@ -1,62 +1,70 @@
 package org.alkaline.taskbrain.data
 
+import android.util.Log
+
 /**
  * Pure functions for reconstructing note content from raw Firestore documents.
  * Extracted from NoteStore for testability.
+ *
+ * Reconstruction walks the parentNoteId tree (not rootNoteId) so it auto-heals
+ * data inconsistencies: stray children reachable via parentNoteId that the
+ * parent's [Note.containedNotes] forgot about get appended at the end, and
+ * orphan references in [Note.containedNotes] (IDs not in rawNotes, deleted, or
+ * parented elsewhere) are dropped. Roots whose content required a fix are
+ * reported via [RebuildResult.notesNeedingFix]; saving the note writes the
+ * healed state back to Firestore.
  */
+
+private const val TAG = "NoteReconstruction"
 
 /**
- * Rebuild all top-level notes with content reconstructed from their tree descendants.
- * @param rawNotes all Firestore docs indexed by ID (including descendants)
- * @return top-level notes with multi-line content
+ * Result of a rebuild pass.
+ *
+ * [notesNeedingFix] holds top-level note IDs whose reconstruction had to
+ * auto-heal a discrepancy (orphan ref dropped or stray child appended).
+ * These notes display with healed content; the UI should prompt a save.
  */
-fun rebuildAllNotes(rawNotes: Map<String, Note>): List<Note> {
-    val topLevel = mutableListOf<Note>()
-    val descendantsByRoot = mutableMapOf<String, MutableList<Note>>()
+data class RebuildResult(
+    val notes: List<Note>,
+    val notesNeedingFix: Set<String>,
+)
 
+/**
+ * Rebuild all top-level notes with content reconstructed from their
+ * parentNoteId-linked descendants.
+ */
+fun rebuildAllNotes(rawNotes: Map<String, Note>): RebuildResult {
+    val childrenByParent = indexChildrenByParent(rawNotes)
+    val needsFix = mutableSetOf<String>()
+    val notes = mutableListOf<Note>()
     for (note in rawNotes.values) {
-        if (note.parentNoteId == null) {
-            topLevel.add(note)
-        }
-        val rootId = note.rootNoteId
-        if (rootId != null) {
-            descendantsByRoot.getOrPut(rootId) { mutableListOf() }.add(note)
-        }
+        if (note.parentNoteId != null) continue
+        val (reconstructed, fixed) = reconstructNoteContent(note, rawNotes, childrenByParent)
+        notes.add(reconstructed)
+        if (fixed) needsFix.add(note.id)
     }
-
-    return topLevel.map { note ->
-        reconstructNoteContent(note, descendantsByRoot[note.id])
-    }
+    return RebuildResult(notes, needsFix)
 }
 
 /**
  * Rebuild only the top-level notes whose trees were affected by changes.
- * Returns a new list with affected notes updated; unaffected notes preserved by reference.
- * @param currentReconstructed the current reconstructed notes list
- * @param affectedRootIds IDs of root notes whose trees changed
- * @param rawNotes all Firestore docs indexed by ID
- * @return updated list, or [currentReconstructed] if nothing changed
+ * Returns a new list with affected notes updated; unaffected notes preserved
+ * by reference. [RebuildResult.notesNeedingFix] reflects only the affected
+ * roots — callers merge with previously-known needsFix state themselves.
  */
 fun rebuildAffectedNotes(
     currentReconstructed: List<Note>,
     affectedRootIds: Set<String>,
     rawNotes: Map<String, Note>
-): List<Note> {
-    val descendantsByRoot = mutableMapOf<String, MutableList<Note>>()
-    for (note in rawNotes.values) {
-        val rootId = note.rootNoteId
-        if (rootId != null && rootId in affectedRootIds) {
-            descendantsByRoot.getOrPut(rootId) { mutableListOf() }.add(note)
-        }
-    }
-
+): RebuildResult {
+    val childrenByParent = indexChildrenByParent(rawNotes)
     var changed = false
     val newNotes = currentReconstructed.toMutableList()
+    val needsFix = mutableSetOf<String>()
 
     for (rootId in affectedRootIds) {
         val rootNote = rawNotes[rootId]
         if (rootNote == null || rootNote.parentNoteId != null) {
-            // Root was deleted or is not actually top-level — remove it
             val idx = newNotes.indexOfFirst { it.id == rootId }
             if (idx >= 0) {
                 newNotes.removeAt(idx)
@@ -65,7 +73,8 @@ fun rebuildAffectedNotes(
             continue
         }
 
-        val reconstructed = reconstructNoteContent(rootNote, descendantsByRoot[rootId])
+        val (reconstructed, fixed) = reconstructNoteContent(rootNote, rawNotes, childrenByParent)
+        if (fixed) needsFix.add(rootId)
         val idx = newNotes.indexOfFirst { it.id == rootId }
         if (idx >= 0) {
             newNotes[idx] = reconstructed
@@ -76,20 +85,125 @@ fun rebuildAffectedNotes(
         }
     }
 
-    return if (changed) newNotes else currentReconstructed
+    return RebuildResult(
+        notes = if (changed) newNotes else currentReconstructed,
+        notesNeedingFix = needsFix,
+    )
 }
 
 /**
- * Reconstruct a single note's content from its descendants.
+ * Reconstruct a single note's content by walking the parentNoteId tree.
+ *
+ * Ordering: each parent renders its [Note.containedNotes] entries in declared
+ * order. Stray children (same parentNoteId but absent from containedNotes)
+ * are appended at the parent's child level after declared entries — the
+ * parent has no ordering information for them. Orphan containedNotes entries
+ * (IDs not in rawNotes, deleted, or parented elsewhere) are dropped.
+ *
+ * Returns the reconstructed note plus a flag indicating whether any fix was
+ * applied (stray appended or orphan dropped).
  */
 fun reconstructNoteContent(
     note: Note,
-    descendants: List<Note>?,
-): Note {
-    if (note.containedNotes.isEmpty() || descendants.isNullOrEmpty()) return note
+    rawNotes: Map<String, Note>,
+    childrenByParent: Map<String, List<Note>>,
+): Pair<Note, Boolean> {
+    val hasDeclaredRefs = note.containedNotes.any { it.isNotEmpty() }
+    val hasRealChildren = childrenByParent[note.id]?.isNotEmpty() == true
+    if (!hasDeclaredRefs && !hasRealChildren && note.containedNotes.isEmpty()) {
+        return note to false
+    }
 
-    val lines = flattenTreeToLines(note, descendants)
-    return note.copy(content = lines.joinToString("\n") { it.content })
+    val lines = mutableListOf(NoteLine(note.content, note.id))
+    val visited = hashSetOf(note.id)
+    val fixed = renderChildrenOf(
+        parent = note,
+        rawNotes = rawNotes,
+        childrenByParent = childrenByParent,
+        lines = lines,
+        childDepth = 0,
+        visited = visited,
+    )
+
+    if (!fixed && lines.size == 1 && note.containedNotes.isEmpty()) {
+        return note to false
+    }
+    return note.copy(content = lines.joinToString("\n") { it.content }) to fixed
+}
+
+/**
+ * Renders all children of [parent] into [lines] at [childDepth] tabs of indent.
+ * Returns true if any fix was applied at this level or deeper.
+ */
+private fun renderChildrenOf(
+    parent: Note,
+    rawNotes: Map<String, Note>,
+    childrenByParent: Map<String, List<Note>>,
+    lines: MutableList<NoteLine>,
+    childDepth: Int,
+    visited: MutableSet<String>,
+): Boolean {
+    var fixed = false
+    val childPrefix = "\t".repeat(childDepth)
+    val placed = mutableSetOf<String>()
+
+    // Declared order from containedNotes.
+    for (childId in parent.containedNotes) {
+        if (childId.isEmpty()) {
+            lines.add(NoteLine(childPrefix, null))
+            continue
+        }
+        val child = rawNotes[childId]
+        if (child == null || child.state == "deleted" || child.parentNoteId != parent.id) {
+            fixed = true
+            Log.w(
+                TAG,
+                "reconstructNoteContent: dropping orphan ref $childId from parent ${parent.id} " +
+                    "(missing/deleted/mis-parented). parentContent='${parent.content.take(40)}'"
+            )
+            continue
+        }
+        if (!visited.add(child.id)) {
+            fixed = true
+            continue
+        }
+        lines.add(NoteLine(childPrefix + child.content, child.id))
+        placed.add(child.id)
+        if (renderChildrenOf(child, rawNotes, childrenByParent, lines, childDepth + 1, visited)) {
+            fixed = true
+        }
+    }
+
+    // Strays: children linked via parentNoteId but absent from containedNotes.
+    // Append after declared entries — parent has no order information for them.
+    val direct = childrenByParent[parent.id].orEmpty()
+    for (stray in direct) {
+        if (stray.id in placed) continue
+        if (!visited.add(stray.id)) continue
+        fixed = true
+        Log.w(
+            TAG,
+            "reconstructNoteContent: appending stray child ${stray.id} to parent ${parent.id} " +
+                "(parentNoteId points here but id not in containedNotes). " +
+                "strayContent='${stray.content.take(40)}'"
+        )
+        lines.add(NoteLine(childPrefix + stray.content, stray.id))
+        placed.add(stray.id)
+        renderChildrenOf(stray, rawNotes, childrenByParent, lines, childDepth + 1, visited)
+    }
+
+    return fixed
+}
+
+/** Group non-deleted notes by their parentNoteId. */
+private fun indexChildrenByParent(rawNotes: Map<String, Note>): Map<String, List<Note>> {
+    val result = mutableMapOf<String, MutableList<Note>>()
+    for (note in rawNotes.values) {
+        val parentId = note.parentNoteId ?: continue
+        if (note.state == "deleted") continue
+        result.getOrPut(parentId) { mutableListOf() }.add(note)
+    }
+    return result
 }
 
 /**
