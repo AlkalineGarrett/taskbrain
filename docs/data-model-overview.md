@@ -46,10 +46,18 @@ The hierarchy uses three pointers per document:
 Conversion between tree and editor representation:
 ```kotlin
 // Tree -> flat indented lines (for editor)
-fun flattenTreeToLines(rootNote: Note, descendants: List<Note>): List<NoteLine>
+// Walks the parentNoteId tree. Drops containedNotes refs that don't resolve
+// to a live child, appends children reachable via parentNoteId that are
+// absent from containedNotes, and flags the root as needing a fix.
+fun reconstructNoteLines(
+    note: Note,
+    rawNotes: Map<String, Note>,
+    childrenByParent: Map<String, List<Note>>,
+): Pair<List<NoteLine>, Boolean>
 
-// Flat indented lines -> tree mutations (for save)
-fun buildTreeFromLines(rootNoteId: String, trackedLines: List<NoteLine>): TreeSaveData
+// Flat indented lines -> tree mutations for save:
+// inlined in NoteRepository.saveNoteWithChildren (tab depth → parent chain,
+// new nodes get fresh document refs, orphaned descendants get soft-deleted).
 ```
 
 Indentation is encoded as **leading tab characters** in the editor. Each tab = one nesting level. The tree walk strips/adds tabs during conversion.

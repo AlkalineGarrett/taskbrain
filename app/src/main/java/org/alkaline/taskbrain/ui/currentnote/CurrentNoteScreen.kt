@@ -134,6 +134,16 @@ fun CurrentNoteScreen(
     var isNoteDeleted by remember(displayedNoteId) { mutableStateOf(initialIsDeleted) }
     LaunchedEffect(isNoteDeletedFromVm) { isNoteDeleted = isNoteDeletedFromVm }
 
+    // When a save completes, clear the dirty cache for the just-saved note so
+    // future tab returns read from NoteStore (which has the fresh content after
+    // Firestore echoes). The cache is only meant to bridge the save-echo gap.
+    LaunchedEffect(saveStatus) {
+        val status = saveStatus
+        if (status is UnifiedSaveStatus.Saved) {
+            recentTabsViewModel.invalidateCache(status.noteId)
+        }
+    }
+
     var showCompleted by remember(displayedNoteId) { mutableStateOf(initialShowCompleted) }
     LaunchedEffect(showCompletedFromVm) { showCompleted = showCompletedFromVm }
 
@@ -554,7 +564,21 @@ fun CurrentNoteScreen(
             onTabClick = { targetNoteId ->
                 if (!isSaved && userContent.isNotEmpty()) {
                     val dirtySessions = inlineEditState.getAllDirtySessions()
-                    currentNoteViewModel.saveAll(editorState.toNoteLines(), dirtySessions)
+                    val noteLines = editorState.toNoteLines()
+                    val currentTabId = displayedNoteId
+                    // Cache dirty tracked lines before firing the async save:
+                    // if the user returns to this tab before the Firestore echo
+                    // arrives, loadContent's Path 1 restores the edit instead of
+                    // reading stale rawNotes. Cleared on save success below.
+                    if (currentTabId != null) {
+                        recentTabsViewModel.cacheNoteContent(
+                            currentTabId,
+                            noteLines,
+                            isDeleted = isNoteDeleted,
+                            isDirty = true,
+                        )
+                    }
+                    currentNoteViewModel.saveAll(noteLines, dirtySessions)
                 }
                 displayedNoteId = targetNoteId
             },

@@ -8,8 +8,13 @@ import {
 } from 'firebase/firestore'
 import type { Auth } from 'firebase/auth'
 import { noteFromFirestore, type Note, type NoteLine } from './Note'
-import { flattenTreeToLines } from './NoteTree'
-import { rebuildAllNotes, rebuildAffectedNotes } from './NoteReconstruction'
+import {
+  rebuildAllNotes,
+  rebuildAffectedNotes,
+  reconstructNoteLines,
+  indexChildrenByParent,
+  type RebuildResult,
+} from './NoteReconstruction'
 
 /**
  * Singleton reactive store for all notes with reconstructed content.
@@ -242,21 +247,30 @@ export class NoteStore {
     return this.rawNotes.get(noteId)
   }
 
-  /** Returns per-line NoteLines for a note, using the tree structure for correct noteId mapping. */
+  /** Returns per-line NoteLines for a note, using the same parentNoteId walk as the reconstructed snapshot. */
   getNoteLinesById(noteId: string): NoteLine[] | undefined {
     const note = this.rawNotes.get(noteId)
     if (!note) return undefined
-    if (note.containedNotes.length === 0) {
+    const childrenByParent = indexChildrenByParent(this.rawNotes)
+    const hasStrays = (childrenByParent.get(noteId)?.length ?? 0) > 0
+    if (note.containedNotes.length === 0 && !hasStrays) {
       return note.content.split('\n').map((line, i) => ({
         content: line,
         noteId: i === 0 ? noteId : null,
       }))
     }
-    const descendants: Note[] = []
-    for (const raw of this.rawNotes.values()) {
-      if (raw.rootNoteId === noteId && raw.state !== 'deleted') descendants.push(raw)
+    const [lines, fixed] = reconstructNoteLines(note, this.rawNotes, childrenByParent)
+    // Keep the editor view in sync with rebuildAffected: if the shared walk
+    // dropped a declared child (missing from rawNotes — typically a fresh
+    // save whose descendant echo hasn't arrived) mark the note as needing a
+    // fix so the save button flips to the warning state.
+    if (fixed && !this._notesNeedingFix.has(noteId)) {
+      const next = new Set(this._notesNeedingFix)
+      next.add(noteId)
+      this._notesNeedingFix = next
+      this.emitNeedsFixChange()
     }
-    return flattenTreeToLines(note, descendants)
+    return lines
   }
 
   /** Track an in-flight save so loaders can await it before reading from Firestore. */
@@ -287,12 +301,63 @@ export class NoteStore {
 
   /** Rebuild only the top-level notes whose trees were affected by a change. */
   private rebuildAffected(rootIds: Set<string>): void {
-    const result = rebuildAffectedNotes(this.reconstructedNotes, rootIds, this.rawNotes)
-    if (result.notes !== this.reconstructedNotes) {
-      this.reconstructedNotes = result.notes
+    const previous = this.reconstructedNotes
+    const result = rebuildAffectedNotes(previous, rootIds, this.rawNotes)
+    const defended = this.preservePartialReconstructions(previous, result, rootIds)
+    if (defended.notes !== this.reconstructedNotes) {
+      this.reconstructedNotes = defended.notes
       this.emitChange()
     }
-    this.mergeNotesNeedingFix(rootIds, result.notesNeedingFix)
+    this.mergeNotesNeedingFix(rootIds, defended.notesNeedingFix)
+  }
+
+  /**
+   * Guard against partial-snapshot windows where descendants haven't arrived
+   * in rawNotes yet: if reconstruction would shrink a tree from many lines
+   * to a near-empty single line, keep the previous reconstructed entry and
+   * flag needsFix instead of surfacing empty content to the editor. Mirrors
+   * NoteStore.preservePartialReconstructions on Android.
+   */
+  private preservePartialReconstructions(
+    previous: Note[],
+    result: RebuildResult,
+    affectedRootIds: Set<string>,
+  ): RebuildResult {
+    if (result.notes === previous) return result
+
+    let defendedNotes: Note[] | null = null
+    const needsFix = new Set(result.notesNeedingFix)
+
+    for (const rootId of affectedRootIds) {
+      const prev = previous.find(n => n.id === rootId)
+      const next = result.notes.find(n => n.id === rootId)
+      if (!prev || !next || prev === next) continue
+
+      const prevLineCount = prev.content.split('\n').length
+      const nextLineCount = next.content.split('\n').length
+      const rootNoteIdDescendantsPresent = Array.from(this.rawNotes.values()).some(
+        n => n.rootNoteId === rootId && n.state !== 'deleted',
+      )
+      const suspicious = prevLineCount >= 3 && nextLineCount <= 1 && rootNoteIdDescendantsPresent
+      if (!suspicious) continue
+
+      console.warn(
+        `preservePartialReconstructions: keeping previous content for ${rootId} ` +
+        `(prev=${prevLineCount} lines, new=${nextLineCount}). ` +
+        `rootNoteId descendants present but parentNoteId walk found none — ` +
+        `likely partial Firestore sync.`,
+      )
+
+      if (!defendedNotes) defendedNotes = [...result.notes]
+      const idx = defendedNotes.findIndex(n => n.id === rootId)
+      if (idx >= 0) defendedNotes[idx] = prev
+      needsFix.add(rootId)
+    }
+
+    return {
+      notes: defendedNotes ?? result.notes,
+      notesNeedingFix: needsFix,
+    }
   }
 
   private setNotesNeedingFix(next: Set<string>): void {

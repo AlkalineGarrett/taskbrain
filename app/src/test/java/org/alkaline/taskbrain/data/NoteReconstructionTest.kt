@@ -239,15 +239,8 @@ class NoteReconstructionTest {
 
     // --- reconstructNoteContent ---
 
-    private fun childrenByParent(rawNotes: Map<String, Note>): Map<String, List<Note>> {
-        val result = mutableMapOf<String, MutableList<Note>>()
-        for (n in rawNotes.values) {
-            val p = n.parentNoteId ?: continue
-            if (n.state == "deleted") continue
-            result.getOrPut(p) { mutableListOf() }.add(n)
-        }
-        return result
-    }
+    private fun childrenByParent(rawNotes: Map<String, Note>): Map<String, List<Note>> =
+        indexChildrenByParent(rawNotes)
 
     @Test
     fun `reconstructContent - no children or refs returns same instance`() {
@@ -307,6 +300,133 @@ class NoteReconstructionTest {
         val (result, _) = reconstructNoteContent(root, raw, childrenByParent(raw))
         assertEquals("my/path", result.path)
         assertEquals("active", result.state)
+    }
+
+    // --- reconstructNoteLines (used by NoteStore.getNoteLinesById + NoteRepository.loadNoteLines) ---
+
+    @Test
+    fun `reconstructNoteLines - returns per-line NoteLines with noteIds`() {
+        val root = note("r", "Root", containedNotes = listOf("c1", "c2"))
+        val c1 = note("c1", "First", parentNoteId = "r")
+        val c2 = note("c2", "Second", parentNoteId = "r")
+        val raw = mapOf("r" to root, "c1" to c1, "c2" to c2)
+        val (lines, fixed) = reconstructNoteLines(root, raw, childrenByParent(raw))
+        assertEquals(3, lines.size)
+        assertEquals(NoteLine("Root", "r"), lines[0])
+        assertEquals(NoteLine("First", "c1"), lines[1])
+        assertEquals(NoteLine("Second", "c2"), lines[2])
+        assertFalse(fixed)
+    }
+
+    @Test
+    fun `reconstructNoteLines - drops declared child whose doc is missing from rawNotes`() {
+        // Simulates the partial-sync window: parent echoed with containedNotes
+        // referencing a new child, but the child's doc hasn't arrived yet.
+        val root = note("r", "Root", containedNotes = listOf("c1", "new_child", "c2"))
+        val c1 = note("c1", "First", parentNoteId = "r")
+        val c2 = note("c2", "Second", parentNoteId = "r")
+        // new_child is absent from rawNotes
+        val raw = mapOf("r" to root, "c1" to c1, "c2" to c2)
+        val (lines, fixed) = reconstructNoteLines(root, raw, childrenByParent(raw))
+        assertEquals(listOf("Root", "First", "Second"), lines.map { it.content })
+        assertTrue("fixed must be true when an orphan ref is dropped", fixed)
+    }
+
+    @Test
+    fun `reconstructNoteLines - appends stray child (parentNoteId but not in containedNotes) at end`() {
+        val root = note("r", "Root", containedNotes = listOf("c1"))
+        val c1 = note("c1", "Known", parentNoteId = "r")
+        val stray = note("s", "Stray", parentNoteId = "r")
+        val raw = mapOf("r" to root, "c1" to c1, "s" to stray)
+        val (lines, fixed) = reconstructNoteLines(root, raw, childrenByParent(raw))
+        assertEquals(listOf("Root", "Known", "Stray"), lines.map { it.content })
+        assertEquals(listOf("r", "c1", "s"), lines.map { it.noteId })
+        assertTrue(fixed)
+    }
+
+    @Test
+    fun `reconstructNoteLines - nested children render at correct depth`() {
+        val root = note("r", "Root", containedNotes = listOf("c1"))
+        val c1 = note("c1", "Known", containedNotes = listOf("gc1"), parentNoteId = "r")
+        val gc1 = note("gc1", "GrandChild", parentNoteId = "c1")
+        val raw = mapOf("r" to root, "c1" to c1, "gc1" to gc1)
+        val (lines, fixed) = reconstructNoteLines(root, raw, childrenByParent(raw))
+        assertEquals(listOf("Root", "Known", "\tGrandChild"), lines.map { it.content })
+        assertFalse(fixed)
+    }
+
+    @Test
+    fun `reconstructNoteLines - matches reconstructNoteContent output line-by-line`() {
+        // Guard against drift between the two entrypoints: any note's lines from
+        // reconstructNoteLines must produce the same content when joined as
+        // reconstructNoteContent.
+        val root = note("r", "Root", containedNotes = listOf("c1", "missing_c", "c2"))
+        val c1 = note("c1", "First", containedNotes = listOf("gc1"), parentNoteId = "r")
+        val c2 = note("c2", "Second", parentNoteId = "r")
+        val gc1 = note("gc1", "GC", parentNoteId = "c1")
+        val stray = note("s", "Stray", parentNoteId = "r")
+        val raw = mapOf("r" to root, "c1" to c1, "c2" to c2, "gc1" to gc1, "s" to stray)
+        val cbp = childrenByParent(raw)
+
+        val (lines, linesFixed) = reconstructNoteLines(root, raw, cbp)
+        val (reconstructed, contentFixed) = reconstructNoteContent(root, raw, cbp)
+
+        assertEquals(reconstructed.content, lines.joinToString("\n") { it.content })
+        assertEquals(linesFixed, contentFixed)
+    }
+
+    @Test
+    fun `reconstructNoteLines - duplicate containedNotes ref placed once and flagged`() {
+        // Two refs to the same child (data bug that would double-render under
+        // naive walks) should render once and mark fixed.
+        val root = note("r", "Root", containedNotes = listOf("c1", "c1"))
+        val c1 = note("c1", "Once", parentNoteId = "r")
+        val raw = mapOf("r" to root, "c1" to c1)
+        val (lines, fixed) = reconstructNoteLines(root, raw, childrenByParent(raw))
+        assertEquals(listOf("Root", "Once"), lines.map { it.content })
+        assertTrue(fixed)
+    }
+
+    @Test
+    fun `reconstructNoteLines - cycle via containedNotes does not loop`() {
+        // A refers to B; B refers back to A (cycle). The visited-set + parentNoteId
+        // check should prevent re-entry.
+        val root = note("r", "Root", containedNotes = listOf("c1"))
+        val c1 = note("c1", "First", containedNotes = listOf("r"), parentNoteId = "r")
+        val raw = mapOf("r" to root, "c1" to c1)
+        val (lines, fixed) = reconstructNoteLines(root, raw, childrenByParent(raw))
+        // c1 renders; c1's attempt to re-include r is rejected (mismatched
+        // parentNoteId on r) — flagged fixed.
+        assertEquals(listOf("Root", "First"), lines.map { it.content })
+        assertTrue(fixed)
+    }
+
+    @Test
+    fun `reconstructNoteLines - orphan ref and stray child in same walk both applied`() {
+        val root = note("r", "Root", containedNotes = listOf("c1", "missing"))
+        val c1 = note("c1", "Declared", parentNoteId = "r")
+        val stray = note("s", "Stray", parentNoteId = "r")
+        val raw = mapOf("r" to root, "c1" to c1, "s" to stray)
+        val (lines, fixed) = reconstructNoteLines(root, raw, childrenByParent(raw))
+        assertEquals(listOf("Root", "Declared", "Stray"), lines.map { it.content })
+        assertTrue(fixed)
+    }
+
+    @Test
+    fun `reconstructNoteLines - deeply nested stray renders at correct depth`() {
+        // Stray attached to a grand-grandchild (depth 3 under root).
+        val root = note("r", "Root", containedNotes = listOf("a"))
+        val a = note("a", "A", containedNotes = listOf("b"), parentNoteId = "r")
+        val b = note("b", "B", containedNotes = listOf("c"), parentNoteId = "a")
+        val c = note("c", "C", parentNoteId = "b")
+        val stray = note("s", "Stray", parentNoteId = "c")
+        val raw = mapOf("r" to root, "a" to a, "b" to b, "c" to c, "s" to stray)
+        val (lines, fixed) = reconstructNoteLines(root, raw, childrenByParent(raw))
+        assertEquals(
+            listOf("Root", "A", "\tB", "\t\tC", "\t\t\tStray"),
+            lines.map { it.content }
+        )
+        assertTrue(fixed)
     }
 
     // --- descendantIdsOf ---

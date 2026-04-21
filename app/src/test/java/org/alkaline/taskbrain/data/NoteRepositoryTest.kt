@@ -458,8 +458,8 @@ class NoteRepositoryTest {
             containedNotes = listOf("c1", "c2")
         ))
         mockTreeQuery("root", listOf(
-            "c1" to Note(id = "c1", content = "Child 1", containedNotes = emptyList(), rootNoteId = "root"),
-            "c2" to Note(id = "c2", content = "Child 2", containedNotes = emptyList(), rootNoteId = "root"),
+            "c1" to Note(id = "c1", content = "Child 1", containedNotes = emptyList(), parentNoteId = "root", rootNoteId = "root"),
+            "c2" to Note(id = "c2", content = "Child 2", containedNotes = emptyList(), parentNoteId = "root", rootNoteId = "root"),
         ))
 
         val lines = repository.loadNoteWithChildren("root").getOrThrow().lines
@@ -479,8 +479,8 @@ class NoteRepositoryTest {
             containedNotes = listOf("a")
         ))
         mockTreeQuery("root", listOf(
-            "a" to Note(id = "a", content = "A", containedNotes = listOf("b"), rootNoteId = "root"),
-            "b" to Note(id = "b", content = "B", containedNotes = emptyList(), rootNoteId = "root"),
+            "a" to Note(id = "a", content = "A", containedNotes = listOf("b"), parentNoteId = "root", rootNoteId = "root"),
+            "b" to Note(id = "b", content = "B", containedNotes = emptyList(), parentNoteId = "a", rootNoteId = "root"),
         ))
 
         val lines = repository.loadNoteWithChildren("root").getOrThrow().lines
@@ -500,17 +500,36 @@ class NoteRepositoryTest {
             containedNotes = listOf("c1", "c2")
         ))
         mockTreeQuery("root", listOf(
-            "c1" to Note(id = "c1", content = "Alive", containedNotes = emptyList(), rootNoteId = "root"),
-            "c2" to Note(id = "c2", content = "Dead", containedNotes = emptyList(), rootNoteId = "root", state = "deleted"),
+            "c1" to Note(id = "c1", content = "Alive", containedNotes = emptyList(), parentNoteId = "root", rootNoteId = "root"),
+            "c2" to Note(id = "c2", content = "Dead", containedNotes = emptyList(), parentNoteId = "root", rootNoteId = "root", state = "deleted"),
         ))
 
         val lines = repository.loadNoteWithChildren("root").getOrThrow().lines
 
-        // Only c1 should appear (c2 is deleted)
         assertEquals(3, lines.size)
         assertEquals(NoteLine("Root", "root"), lines[0])
         assertEquals(NoteLine("Alive", "c1"), lines[1])
         assertEquals(NoteLine("", null), lines[2])
+    }
+
+    @Test
+    fun `loadNoteWithChildren drops orphan refs and appends strays`() = runTest {
+        // Partial-sync / corrupted-data scenario: root's containedNotes names a
+        // child that the descendants query didn't return, and a different child
+        // is linked by parentNoteId but missing from containedNotes.
+        mockDocument("root", Note(
+            id = "root",
+            content = "Root",
+            containedNotes = listOf("c1", "missing")
+        ))
+        mockTreeQuery("root", listOf(
+            "c1" to Note(id = "c1", content = "Declared", parentNoteId = "root", rootNoteId = "root"),
+            "s" to Note(id = "s", content = "Stray", parentNoteId = "root", rootNoteId = "root"),
+        ))
+
+        val lines = repository.loadNoteWithChildren("root").getOrThrow().lines
+
+        assertEquals(listOf("Root", "Declared", "Stray", ""), lines.map { it.content })
     }
 
     @Test

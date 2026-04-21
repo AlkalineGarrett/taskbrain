@@ -87,7 +87,7 @@ export function rebuildAffectedNotes(
 }
 
 /**
- * Reconstruct a single note's content by walking the parentNoteId tree.
+ * Reconstruct a note by walking the parentNoteId tree.
  *
  * Ordering: each parent renders its containedNotes entries in declared
  * order. Stray children (same parentNoteId but absent from containedNotes)
@@ -95,18 +95,20 @@ export function rebuildAffectedNotes(
  * information for them. Orphan containedNotes entries (IDs not in rawNotes,
  * deleted, or parented elsewhere) are dropped.
  *
- * Returns `[reconstructed, fixed]`: `fixed` is `true` iff a fix was applied
- * (stray appended or orphan dropped).
+ * Returns `[lines, fixed]`: `fixed` is `true` iff a fix was applied (stray
+ * appended or orphan dropped). This is the primitive the live editor uses
+ * via `NoteStore.getNoteLinesById`; `reconstructNoteContent` composes it
+ * into a joined-content Note.
  */
-export function reconstructNoteContent(
+export function reconstructNoteLines(
   note: Note,
   rawNotes: Map<string, Note>,
   childrenByParent: Map<string, Note[]>,
-): [Note, boolean] {
+): [{ content: string; noteId: string | null }[], boolean] {
   const hasDeclaredRefs = note.containedNotes.some(id => id.length > 0)
   const hasRealChildren = (childrenByParent.get(note.id)?.length ?? 0) > 0
   if (!hasDeclaredRefs && !hasRealChildren && note.containedNotes.length === 0) {
-    return [note, false]
+    return [[{ content: note.content, noteId: note.id }], false]
   }
 
   const lines: { content: string; noteId: string | null }[] = [
@@ -114,14 +116,24 @@ export function reconstructNoteContent(
   ]
   const visited = new Set<string>([note.id])
   const fixed = renderChildrenOf(note, rawNotes, childrenByParent, lines, 0, visited)
+  return [lines, fixed]
+}
 
-  if (!fixed && lines.length === 1 && note.containedNotes.length === 0) {
-    return [note, false]
-  }
-  return [
-    { ...note, content: lines.map(l => l.content).join('\n') },
-    fixed,
-  ]
+/**
+ * Thin wrapper around `reconstructNoteLines` that joins the lines into a
+ * single `note.content` string. Preserves reference identity when the join
+ * produces the original content, so callers' change-detection (e.g.,
+ * `rebuildAffectedNotes`' unaffected-by-reference check) continues to work.
+ */
+export function reconstructNoteContent(
+  note: Note,
+  rawNotes: Map<string, Note>,
+  childrenByParent: Map<string, Note[]>,
+): [Note, boolean] {
+  const [lines, fixed] = reconstructNoteLines(note, rawNotes, childrenByParent)
+  const joined = lines.map(l => l.content).join('\n')
+  const result = joined === note.content ? note : { ...note, content: joined }
+  return [result, fixed]
 }
 
 function renderChildrenOf(
@@ -145,7 +157,7 @@ function renderChildrenOf(
     if (!child || child.state === 'deleted' || child.parentNoteId !== parent.id) {
       fixed = true
       console.warn(
-        `reconstructNoteContent: dropping orphan ref ${childId} from parent ${parent.id} ` +
+        `reconstructNoteLines: dropping orphan ref ${childId} from parent ${parent.id} ` +
         `(missing/deleted/mis-parented). parentContent='${parent.content.slice(0, 40)}'`
       )
       continue
@@ -169,7 +181,7 @@ function renderChildrenOf(
     visited.add(stray.id)
     fixed = true
     console.warn(
-      `reconstructNoteContent: appending stray child ${stray.id} to parent ${parent.id} ` +
+      `reconstructNoteLines: appending stray child ${stray.id} to parent ${parent.id} ` +
       `(parentNoteId points here but id not in containedNotes). ` +
       `strayContent='${stray.content.slice(0, 40)}'`
     )
@@ -181,7 +193,7 @@ function renderChildrenOf(
   return fixed
 }
 
-function indexChildrenByParent(rawNotes: Map<string, Note>): Map<string, Note[]> {
+export function indexChildrenByParent(rawNotes: Map<string, Note>): Map<string, Note[]> {
   const result = new Map<string, Note[]>()
   for (const note of rawNotes.values()) {
     if (note.parentNoteId == null) continue

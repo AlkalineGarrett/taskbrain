@@ -92,7 +92,7 @@ fun rebuildAffectedNotes(
 }
 
 /**
- * Reconstruct a single note's content by walking the parentNoteId tree.
+ * Reconstruct a note by walking the parentNoteId tree.
  *
  * Ordering: each parent renders its [Note.containedNotes] entries in declared
  * order. Stray children (same parentNoteId but absent from containedNotes)
@@ -100,18 +100,20 @@ fun rebuildAffectedNotes(
  * parent has no ordering information for them. Orphan containedNotes entries
  * (IDs not in rawNotes, deleted, or parented elsewhere) are dropped.
  *
- * Returns the reconstructed note plus a flag indicating whether any fix was
- * applied (stray appended or orphan dropped).
+ * Returns the per-line structure (content + noteId) and a flag indicating
+ * whether any fix was applied (stray appended or orphan dropped). This is
+ * the primitive the live editor uses via [NoteStore.getNoteLinesById];
+ * [reconstructNoteContent] composes it into a joined-content Note.
  */
-fun reconstructNoteContent(
+fun reconstructNoteLines(
     note: Note,
     rawNotes: Map<String, Note>,
     childrenByParent: Map<String, List<Note>>,
-): Pair<Note, Boolean> {
+): Pair<List<NoteLine>, Boolean> {
     val hasDeclaredRefs = note.containedNotes.any { it.isNotEmpty() }
     val hasRealChildren = childrenByParent[note.id]?.isNotEmpty() == true
     if (!hasDeclaredRefs && !hasRealChildren && note.containedNotes.isEmpty()) {
-        return note to false
+        return listOf(NoteLine(note.content, note.id)) to false
     }
 
     val lines = mutableListOf(NoteLine(note.content, note.id))
@@ -125,10 +127,44 @@ fun reconstructNoteContent(
         visited = visited,
     )
 
-    if (!fixed && lines.size == 1 && note.containedNotes.isEmpty()) {
-        return note to false
+    if (lines.size == 1 && hasDeclaredRefs) {
+        val declaredNonEmpty = note.containedNotes.filter { it.isNotEmpty() }
+        val diagnosis = declaredNonEmpty.joinToString(", ") { id ->
+            val child = rawNotes[id]
+            when {
+                child == null -> "$id=absent"
+                child.state == "deleted" -> "$id=deleted"
+                child.parentNoteId != note.id ->
+                    "$id=mis-parented(parentNoteId=${child.parentNoteId})"
+                else -> "$id=ok?"
+            }
+        }
+        Log.w(
+            TAG,
+            "reconstructNoteLines: note ${note.id} has ${declaredNonEmpty.size} " +
+                "declared children but rendered zero — ${diagnosis}. " +
+                "strays=${childrenByParent[note.id]?.size ?: 0}, " +
+                "rootContent='${note.content.take(40)}'"
+        )
     }
-    return note.copy(content = lines.joinToString("\n") { it.content }) to fixed
+    return lines to fixed
+}
+
+/**
+ * Thin wrapper around [reconstructNoteLines] that joins the lines into a
+ * single [Note.content] string. Preserves reference identity when the join
+ * produces the original content, so callers' change-detection (e.g.,
+ * [rebuildAffectedNotes]' unaffected-by-reference check) continues to work.
+ */
+fun reconstructNoteContent(
+    note: Note,
+    rawNotes: Map<String, Note>,
+    childrenByParent: Map<String, List<Note>>,
+): Pair<Note, Boolean> {
+    val (lines, fixed) = reconstructNoteLines(note, rawNotes, childrenByParent)
+    val joined = lines.joinToString("\n") { it.content }
+    val result = if (joined == note.content) note else note.copy(content = joined)
+    return result to fixed
 }
 
 /**
@@ -158,7 +194,7 @@ private fun renderChildrenOf(
             fixed = true
             Log.w(
                 TAG,
-                "reconstructNoteContent: dropping orphan ref $childId from parent ${parent.id} " +
+                "reconstructNoteLines: dropping orphan ref $childId from parent ${parent.id} " +
                     "(missing/deleted/mis-parented). parentContent='${parent.content.take(40)}'"
             )
             continue
@@ -183,7 +219,7 @@ private fun renderChildrenOf(
         fixed = true
         Log.w(
             TAG,
-            "reconstructNoteContent: appending stray child ${stray.id} to parent ${parent.id} " +
+            "reconstructNoteLines: appending stray child ${stray.id} to parent ${parent.id} " +
                 "(parentNoteId points here but id not in containedNotes). " +
                 "strayContent='${stray.content.take(40)}'"
         )
@@ -196,7 +232,7 @@ private fun renderChildrenOf(
 }
 
 /** Group non-deleted notes by their parentNoteId. */
-private fun indexChildrenByParent(rawNotes: Map<String, Note>): Map<String, List<Note>> {
+fun indexChildrenByParent(rawNotes: Map<String, Note>): Map<String, List<Note>> {
     val result = mutableMapOf<String, MutableList<Note>>()
     for (note in rawNotes.values) {
         val parentId = note.parentNoteId ?: continue

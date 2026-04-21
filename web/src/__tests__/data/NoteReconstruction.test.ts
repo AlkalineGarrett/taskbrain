@@ -4,6 +4,8 @@ import {
   rebuildAllNotes,
   rebuildAffectedNotes,
   reconstructNoteContent,
+  reconstructNoteLines,
+  indexChildrenByParent,
 } from '../../data/NoteReconstruction'
 
 function note(overrides: Partial<Note> & { id: string }): Note {
@@ -31,17 +33,8 @@ function toMap(notes: Note[]): Map<string, Note> {
   return map
 }
 
-function childrenByParent(rawNotes: Map<string, Note>): Map<string, Note[]> {
-  const result = new Map<string, Note[]>()
-  for (const n of rawNotes.values()) {
-    if (n.parentNoteId == null) continue
-    if (n.state === 'deleted') continue
-    const list = result.get(n.parentNoteId)
-    if (list) list.push(n)
-    else result.set(n.parentNoteId, [n])
-  }
-  return result
-}
+// Re-export the production helper with a shorter name for test readability.
+const childrenByParent = indexChildrenByParent
 
 describe('rebuildAllNotes', () => {
   it('single root with no children returns as-is', () => {
@@ -243,5 +236,99 @@ describe('reconstructNoteContent', () => {
     expect(result.tags).toEqual(['important'])
     expect(result.state).toBe('active')
     expect(result.path).toBe('my-note')
+  })
+})
+
+describe('reconstructNoteLines', () => {
+  it('returns per-line NoteLines with noteIds', () => {
+    const root = note({ id: 'r', content: 'Root', containedNotes: ['c1', 'c2'] })
+    const c1 = note({ id: 'c1', content: 'First', parentNoteId: 'r' })
+    const c2 = note({ id: 'c2', content: 'Second', parentNoteId: 'r' })
+    const raw = toMap([root, c1, c2])
+    const [lines, fixed] = reconstructNoteLines(root, raw, childrenByParent(raw))
+    expect(lines).toEqual([
+      { content: 'Root', noteId: 'r' },
+      { content: 'First', noteId: 'c1' },
+      { content: 'Second', noteId: 'c2' },
+    ])
+    expect(fixed).toBe(false)
+  })
+
+  it('drops declared child whose doc is missing from rawNotes (partial-sync window)', () => {
+    const root = note({ id: 'r', content: 'Root', containedNotes: ['c1', 'new_child', 'c2'] })
+    const c1 = note({ id: 'c1', content: 'First', parentNoteId: 'r' })
+    const c2 = note({ id: 'c2', content: 'Second', parentNoteId: 'r' })
+    // new_child absent from raw map
+    const raw = toMap([root, c1, c2])
+    const [lines, fixed] = reconstructNoteLines(root, raw, childrenByParent(raw))
+    expect(lines.map(l => l.content)).toEqual(['Root', 'First', 'Second'])
+    expect(fixed).toBe(true)
+  })
+
+  it('appends stray (parentNoteId but not in containedNotes) at end', () => {
+    const root = note({ id: 'r', content: 'Root', containedNotes: ['c1'] })
+    const c1 = note({ id: 'c1', content: 'Known', parentNoteId: 'r' })
+    const stray = note({ id: 's', content: 'Stray', parentNoteId: 'r' })
+    const raw = toMap([root, c1, stray])
+    const [lines, fixed] = reconstructNoteLines(root, raw, childrenByParent(raw))
+    expect(lines.map(l => l.content)).toEqual(['Root', 'Known', 'Stray'])
+    expect(lines.map(l => l.noteId)).toEqual(['r', 'c1', 's'])
+    expect(fixed).toBe(true)
+  })
+
+  it('matches reconstructNoteContent output line-by-line (drift guard)', () => {
+    const root = note({ id: 'r', content: 'Root', containedNotes: ['c1', 'missing_c', 'c2'] })
+    const c1 = note({ id: 'c1', content: 'First', containedNotes: ['gc1'], parentNoteId: 'r' })
+    const c2 = note({ id: 'c2', content: 'Second', parentNoteId: 'r' })
+    const gc1 = note({ id: 'gc1', content: 'GC', parentNoteId: 'c1' })
+    const stray = note({ id: 's', content: 'Stray', parentNoteId: 'r' })
+    const raw = toMap([root, c1, c2, gc1, stray])
+    const cbp = childrenByParent(raw)
+
+    const [lines, linesFixed] = reconstructNoteLines(root, raw, cbp)
+    const [reconstructed, contentFixed] = reconstructNoteContent(root, raw, cbp)
+
+    expect(lines.map(l => l.content).join('\n')).toBe(reconstructed.content)
+    expect(linesFixed).toBe(contentFixed)
+  })
+
+  it('duplicate containedNotes ref placed once and flagged', () => {
+    const root = note({ id: 'r', content: 'Root', containedNotes: ['c1', 'c1'] })
+    const c1 = note({ id: 'c1', content: 'Once', parentNoteId: 'r' })
+    const raw = toMap([root, c1])
+    const [lines, fixed] = reconstructNoteLines(root, raw, childrenByParent(raw))
+    expect(lines.map(l => l.content)).toEqual(['Root', 'Once'])
+    expect(fixed).toBe(true)
+  })
+
+  it('cycle via containedNotes does not loop', () => {
+    const root = note({ id: 'r', content: 'Root', containedNotes: ['c1'] })
+    const c1 = note({ id: 'c1', content: 'First', containedNotes: ['r'], parentNoteId: 'r' })
+    const raw = toMap([root, c1])
+    const [lines, fixed] = reconstructNoteLines(root, raw, childrenByParent(raw))
+    expect(lines.map(l => l.content)).toEqual(['Root', 'First'])
+    expect(fixed).toBe(true)
+  })
+
+  it('orphan ref and stray child in same walk both applied', () => {
+    const root = note({ id: 'r', content: 'Root', containedNotes: ['c1', 'missing'] })
+    const c1 = note({ id: 'c1', content: 'Declared', parentNoteId: 'r' })
+    const stray = note({ id: 's', content: 'Stray', parentNoteId: 'r' })
+    const raw = toMap([root, c1, stray])
+    const [lines, fixed] = reconstructNoteLines(root, raw, childrenByParent(raw))
+    expect(lines.map(l => l.content)).toEqual(['Root', 'Declared', 'Stray'])
+    expect(fixed).toBe(true)
+  })
+
+  it('deeply nested stray renders at correct depth', () => {
+    const root = note({ id: 'r', content: 'Root', containedNotes: ['a'] })
+    const a = note({ id: 'a', content: 'A', containedNotes: ['b'], parentNoteId: 'r' })
+    const b = note({ id: 'b', content: 'B', containedNotes: ['c'], parentNoteId: 'a' })
+    const c = note({ id: 'c', content: 'C', parentNoteId: 'b' })
+    const stray = note({ id: 's', content: 'Stray', parentNoteId: 'c' })
+    const raw = toMap([root, a, b, c, stray])
+    const [lines, fixed] = reconstructNoteLines(root, raw, childrenByParent(raw))
+    expect(lines.map(l => l.content)).toEqual(['Root', 'A', '\tB', '\t\tC', '\t\t\tStray'])
+    expect(fixed).toBe(true)
   })
 })

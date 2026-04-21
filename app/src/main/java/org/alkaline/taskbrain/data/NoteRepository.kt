@@ -89,7 +89,10 @@ class NoteRepository(
     }.onFailure { Log.e(TAG, "Error loading note", it) }
 
     /**
-     * Loads note lines by querying descendants via rootNoteId and flattening the tree.
+     * Loads note lines via the same parentNoteId walk used by [reconstructNoteLines].
+     * Shares heal semantics with [NoteStore.getNoteLinesById]: orphans are dropped,
+     * strays linked by parentNoteId are appended, so the Firestore-fallback load
+     * stays consistent with the reconstructed snapshot.
      */
     private suspend fun loadNoteLines(note: Note): List<NoteLine> {
         val userId = requireUserId()
@@ -107,11 +110,19 @@ class NoteRepository(
             }
         }.filter { it.state != "deleted" }
 
-        if (descendants.isNotEmpty()) {
-            return flattenTreeToLines(note, descendants)
+        if (descendants.isEmpty()) {
+            return listOf(NoteLine(note.content, note.id))
         }
 
-        return listOf(NoteLine(note.content, note.id))
+        val rawById = HashMap<String, Note>(descendants.size + 1).apply {
+            put(note.id, note)
+            for (d in descendants) put(d.id, d)
+        }
+        val childrenByParent = descendants
+            .filter { it.parentNoteId != null }
+            .groupBy { it.parentNoteId!! }
+        val (lines, _) = reconstructNoteLines(note, rawById, childrenByParent)
+        return lines
     }
 
     /**

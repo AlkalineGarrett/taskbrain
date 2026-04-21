@@ -14,8 +14,7 @@ import {
 } from 'firebase/firestore'
 import type { Auth } from 'firebase/auth'
 import { noteFromFirestore, type Note, type NoteLine } from './Note'
-import { reconstructNoteContent } from './NoteReconstruction'
-import { flattenTreeToLines } from './NoteTree'
+import { reconstructNoteContent, reconstructNoteLines } from './NoteReconstruction'
 import { noteStore } from './NoteStore'
 import { performSimilarityMatching } from '@/editor/ContentSimilarity'
 
@@ -112,7 +111,10 @@ export class NoteRepository {
   }
 
   /**
-   * Loads note lines using tree query for descendants.
+   * Loads note lines via the same parentNoteId walk used by `reconstructNoteLines`.
+   * Shares heal semantics with `NoteStore.getNoteLinesById`: orphans are dropped,
+   * strays linked by parentNoteId are appended, so the Firestore-fallback load
+   * stays consistent with the reconstructed snapshot.
    */
   private async loadNoteLines(note: Note): Promise<NoteLine[]> {
     const userId = this.requireUserId()
@@ -123,11 +125,22 @@ export class NoteRepository {
       .map((d) => noteFromFirestore(d.id, d.data()))
       .filter((n) => n.state !== 'deleted')
 
-    if (descendants.length > 0) {
-      return flattenTreeToLines(note, descendants)
+    if (descendants.length === 0) {
+      return [{ content: note.content, noteId: note.id }]
     }
 
-    return [{ content: note.content, noteId: note.id }]
+    const rawById = new Map<string, Note>([[note.id, note]])
+    const childrenByParent = new Map<string, Note[]>()
+    for (const d of descendants) {
+      rawById.set(d.id, d)
+      if (d.parentNoteId != null) {
+        const list = childrenByParent.get(d.parentNoteId)
+        if (list) list.push(d)
+        else childrenByParent.set(d.parentNoteId, [d])
+      }
+    }
+    const [lines] = reconstructNoteLines(note, rawById, childrenByParent)
+    return lines
   }
 
   /**

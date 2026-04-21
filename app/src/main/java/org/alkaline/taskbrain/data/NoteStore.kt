@@ -243,19 +243,28 @@ object NoteStore {
      * NoteRepository.loadNoteWithChildren, but without a Firestore round-trip.
      * Returns null if the note or its descendants aren't loaded yet.
      */
-    fun getNoteLinesById(noteId: String): List<NoteLine>? = rawNotesLock.read {
-        val rootNote = rawNotes[noteId] ?: return@read null
-        if (rootNote.containedNotes.isEmpty()) {
-            // No tree children — split content into per-line NoteLines.
-            val lines = rootNote.content.split("\n")
-            return@read lines.mapIndexed { index, line ->
-                NoteLine(line, if (index == 0) noteId else null)
+    fun getNoteLinesById(noteId: String): List<NoteLine>? {
+        val (lines, fixed) = rawNotesLock.read {
+            val rootNote = rawNotes[noteId] ?: return null
+            val childrenByParent = indexChildrenByParent(rawNotes)
+            val hasStrays = childrenByParent[noteId]?.isNotEmpty() == true
+            if (rootNote.containedNotes.isEmpty() && !hasStrays) {
+                // Pure leaf: preserve embedded newlines as separate editor lines
+                // so multi-line content shows correctly in the editor.
+                return rootNote.content.split("\n").mapIndexed { index, line ->
+                    NoteLine(line, if (index == 0) noteId else null)
+                }
             }
+            reconstructNoteLines(rootNote, rawNotes, childrenByParent)
         }
-        val descendants = rawNotes.values.filter {
-            it.rootNoteId == noteId && it.state != "deleted"
+        // Keep the editor view in sync with rebuildAffected: if the shared walk
+        // dropped a declared child (missing from rawNotes — typically a fresh
+        // save whose descendant echo hasn't arrived) mark the note as needing a
+        // fix so the save button flips to the warning state.
+        if (fixed && noteId !in _notesNeedingFix.value) {
+            _notesNeedingFix.value = _notesNeedingFix.value + noteId
         }
-        flattenTreeToLines(rootNote, descendants)
+        return lines
     }
 
     /**
@@ -346,11 +355,68 @@ object NoteStore {
     }
 
     private fun rebuildAffected(rootIds: Set<String>) {
-        val result = rebuildAffectedNotes(_notes.value, rootIds, rawNotes)
-        if (result.notes !== _notes.value) {
-            _notes.value = result.notes
+        val previous = _notes.value
+        val result = rebuildAffectedNotes(previous, rootIds, rawNotes)
+        val defended = preservePartialReconstructions(previous, result, rootIds)
+        if (defended.notes !== _notes.value) {
+            _notes.value = defended.notes
         }
-        mergeNotesNeedingFix(rootIds, result.notesNeedingFix)
+        mergeNotesNeedingFix(rootIds, defended.notesNeedingFix)
+    }
+
+    /**
+     * Guard against partial-snapshot windows where descendants haven't arrived
+     * in [rawNotes] yet. If reconstruction would shrink a note from many lines
+     * to a near-empty single line, the descendants are likely in flight: keep
+     * the previous reconstructed entry unchanged and mark it [notesNeedingFix]
+     * so the UI surfaces the inconsistency without wiping the editor.
+     *
+     * Symptoms we protect against: editor loads the emptied content, user
+     * autosaves on tab switch, and the content-drop guard blocks the save.
+     */
+    private fun preservePartialReconstructions(
+        previous: List<Note>,
+        result: RebuildResult,
+        affectedRootIds: Set<String>,
+    ): RebuildResult {
+        if (result.notes === previous) return result
+
+        var defendedNotes: MutableList<Note>? = null
+        val needsFix = result.notesNeedingFix.toMutableSet()
+
+        for (rootId in affectedRootIds) {
+            val prev = previous.find { it.id == rootId } ?: continue
+            val next = result.notes.find { it.id == rootId } ?: continue
+            if (prev === next) continue
+
+            val prevLineCount = prev.content.lines().size
+            val nextLineCount = next.content.lines().size
+            // Only defend when we'd drop from a meaningful tree to ≤1 line,
+            // AND rootNoteId-indexed descendants still exist in rawNotes (the
+            // children are loaded but parentNoteId walking didn't find them,
+            // which points to a partial-sync window).
+            val suspicious = prevLineCount >= 3 && nextLineCount <= 1 &&
+                rawNotes.values.any { it.rootNoteId == rootId && it.state != "deleted" }
+            if (!suspicious) continue
+
+            Log.w(
+                TAG,
+                "preservePartialReconstructions: keeping previous content for $rootId " +
+                    "(prev=$prevLineCount lines, new=$nextLineCount). " +
+                    "rootNoteId descendants present but parentNoteId walk found none — " +
+                    "likely partial Firestore sync."
+            )
+
+            val list = defendedNotes ?: result.notes.toMutableList().also { defendedNotes = it }
+            val idx = list.indexOfFirst { it.id == rootId }
+            if (idx >= 0) list[idx] = prev
+            needsFix.add(rootId)
+        }
+
+        return RebuildResult(
+            notes = defendedNotes ?: result.notes,
+            notesNeedingFix = needsFix,
+        )
     }
 
     /**

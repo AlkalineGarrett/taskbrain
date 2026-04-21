@@ -453,8 +453,8 @@ describe('NoteRepository', () => {
       } as any)
       vi.mocked(mockGetDocs).mockResolvedValue({
         docs: [
-          { id: 'c1', data: () => ({ content: 'Child 1', containedNotes: [], rootNoteId: 'root' }) },
-          { id: 'c2', data: () => ({ content: 'Child 2', containedNotes: [], rootNoteId: 'root' }) },
+          { id: 'c1', data: () => ({ content: 'Child 1', containedNotes: [], parentNoteId: 'root', rootNoteId: 'root' }) },
+          { id: 'c2', data: () => ({ content: 'Child 2', containedNotes: [], parentNoteId: 'root', rootNoteId: 'root' }) },
         ],
         empty: false,
       } as any)
@@ -481,8 +481,8 @@ describe('NoteRepository', () => {
       } as any)
       vi.mocked(mockGetDocs).mockResolvedValue({
         docs: [
-          { id: 'a', data: () => ({ content: 'A', containedNotes: ['b'], rootNoteId: 'root' }) },
-          { id: 'b', data: () => ({ content: 'B', containedNotes: [], rootNoteId: 'root' }) },
+          { id: 'a', data: () => ({ content: 'A', containedNotes: ['b'], parentNoteId: 'root', rootNoteId: 'root' }) },
+          { id: 'b', data: () => ({ content: 'B', containedNotes: [], parentNoteId: 'a', rootNoteId: 'root' }) },
         ],
         empty: false,
       } as any)
@@ -509,8 +509,8 @@ describe('NoteRepository', () => {
       } as any)
       vi.mocked(mockGetDocs).mockResolvedValue({
         docs: [
-          { id: 'c1', data: () => ({ content: 'Alive', containedNotes: [], rootNoteId: 'root' }) },
-          { id: 'c2', data: () => ({ content: 'Dead', containedNotes: [], rootNoteId: 'root', state: 'deleted' }) },
+          { id: 'c1', data: () => ({ content: 'Alive', containedNotes: [], parentNoteId: 'root', rootNoteId: 'root' }) },
+          { id: 'c2', data: () => ({ content: 'Dead', containedNotes: [], parentNoteId: 'root', rootNoteId: 'root', state: 'deleted' }) },
         ],
         empty: false,
       } as any)
@@ -521,6 +521,33 @@ describe('NoteRepository', () => {
       expect(lines[0]).toEqual({ content: 'Root', noteId: 'root' })
       expect(lines[1]).toEqual({ content: 'Alive', noteId: 'c1' })
       expect(lines[2]).toEqual({ content: '', noteId: null })
+    })
+
+    it('drops orphan ref in containedNotes and appends stray child linked by parentNoteId', () => {
+      // Partial-sync / corrupted-data scenario: root's containedNotes names a
+      // child that the descendants query didn't return, and a different child
+      // is linked by parentNoteId but missing from containedNotes. The walk
+      // drops the orphan and appends the stray at the end.
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
+        const id = args.length > 1 ? args[args.length - 1] : 'auto'
+        return { id } as DocumentReference
+      })
+      vi.mocked(mockGetDoc).mockResolvedValue({
+        exists: () => true,
+        data: () => ({ content: 'Root', containedNotes: ['c1', 'missing'] }),
+        id: 'root',
+      } as any)
+      vi.mocked(mockGetDocs).mockResolvedValue({
+        docs: [
+          { id: 'c1', data: () => ({ content: 'Declared', containedNotes: [], parentNoteId: 'root', rootNoteId: 'root' }) },
+          { id: 's', data: () => ({ content: 'Stray', containedNotes: [], parentNoteId: 'root', rootNoteId: 'root' }) },
+        ],
+        empty: false,
+      } as any)
+
+      return repository.loadNoteWithChildren('root').then(({ lines }) => {
+        expect(lines.map(l => l.content)).toEqual(['Root', 'Declared', 'Stray', ''])
+      })
     })
   })
 
