@@ -82,6 +82,16 @@ export class NoteStore {
     }
   }
 
+  /**
+   * Raise a user-visible warning from anywhere in the data layer. Routed to
+   * the same save-warning dialog the reconstruction errors flowed through,
+   * so the UI surface is consistent.
+   */
+  raiseWarning = (message: string): void => {
+    this._error = message
+    this.emitErrorChange()
+  }
+
   subscribeNotesNeedingFix = (listener: () => void): (() => void) => {
     this.needsFixListeners.add(listener)
     return () => this.needsFixListeners.delete(listener)
@@ -243,6 +253,21 @@ export class NoteStore {
   }
 
   /** Get a raw (unreconstructed) note by ID — includes notes filtered from the top-level list. */
+  /** All live (non-deleted) descendants of [rootId] keyed by their parentNoteId. */
+  getLiveDescendantsByParent(rootId: string): Map<string, Note[]> {
+    const result = new Map<string, Note[]>()
+    for (const note of this.rawNotes.values()) {
+      if (note.rootNoteId !== rootId) continue
+      if (note.state === 'deleted') continue
+      const p = note.parentNoteId
+      if (p == null) continue
+      const list = result.get(p)
+      if (list) list.push(note)
+      else result.set(p, [note])
+    }
+    return result
+  }
+
   getRawNoteById(noteId: string): Note | undefined {
     return this.rawNotes.get(noteId)
   }

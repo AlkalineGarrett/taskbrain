@@ -1,5 +1,6 @@
 package org.alkaline.taskbrain.ui.currentnote.util
 
+import org.alkaline.taskbrain.data.NoteIdSentinel
 import org.alkaline.taskbrain.ui.currentnote.LineState
 import org.alkaline.taskbrain.ui.currentnote.selection.EditorSelection
 import org.junit.Assert.assertEquals
@@ -26,6 +27,9 @@ class PasteHandlerTest {
         ls[lineIndex].updateFull(ls[lineIndex].text, cursor)
         return ls
     }
+
+    private fun linesWithIds(vararg pairs: Pair<String, List<String>>): List<LineState> =
+        pairs.map { (text, ids) -> LineState(text, text.length, ids) }
 
     // ==================== isFullLineSelection ====================
 
@@ -275,5 +279,64 @@ class PasteHandlerTest {
         ))
         // Empty line is replaced, not scooted down
         assertEquals(listOf("☐ one", "☐ two"), lineTexts(result.lines))
+    }
+
+    // ==================== noteId preservation across paste ====================
+
+    @Test
+    fun `mid-line paste preserves destLine noteId on leading half`() {
+        val ls = withCursor(
+            linesWithIds("• hello" to listOf("note_1")),
+            0, 4 // cursor after "he"
+        )
+        val result = PasteHandler.execute(ls, 0, EditorSelection.None, listOf(
+            parsed(0, "☐ ", "one"),
+            parsed(0, "☐ ", "two"),
+        ))
+
+        assertEquals(listOf("• he", "☐ one", "☐ two", "• llo"), lineTexts(result.lines))
+        assertEquals(listOf("note_1"), result.lines[0].noteIds)
+        assertEquals("paste", NoteIdSentinel.originOf(result.lines[1].noteIds.firstOrNull()))
+        assertEquals("paste", NoteIdSentinel.originOf(result.lines[2].noteIds.firstOrNull()))
+        assertEquals("split", NoteIdSentinel.originOf(result.lines[3].noteIds.firstOrNull()))
+    }
+
+    @Test
+    fun `paste at start of line keeps destLine noteId on trailing half`() {
+        val ls = withCursor(
+            linesWithIds("• hello" to listOf("note_1")),
+            0, 2 // cursor just after "• " prefix
+        )
+        val result = PasteHandler.execute(ls, 0, EditorSelection.None, listOf(
+            parsed(0, "☐ ", "one"),
+            parsed(0, "☐ ", "two"),
+        ))
+
+        assertEquals(listOf("☐ one", "☐ two", "• hello"), lineTexts(result.lines))
+        assertEquals(listOf("note_1"), result.lines[2].noteIds)
+    }
+
+    @Test
+    fun `line-terminated paste before an existing bullet line keeps its noteId`() {
+        val ls = withCursor(
+            linesWithIds(
+                "Packing " to listOf("root"),
+                "• Tagines" to listOf("child_1"),
+                "• " to listOf("child_2"),  // pre-existing empty bullet
+            ),
+            2, 2
+        )
+        val result = PasteHandler.execute(ls, 2, EditorSelection.None, listOf(
+            parsed(0, "• ", "4 drawers"),
+            parsed(0, "• ", "Swig drinkers"),
+            parsed(0, "", ""), // trailing newline → isLineTerminated
+        ))
+
+        assertEquals(
+            listOf("Packing ", "• Tagines", "• 4 drawers", "• Swig drinkers", "• "),
+            lineTexts(result.lines)
+        )
+        // The surviving "• " line keeps its real noteId — no null-id at save time.
+        assertEquals(listOf("child_2"), result.lines[4].noteIds)
     }
 }

@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
+import org.alkaline.taskbrain.data.NoteIdSentinel
 import org.alkaline.taskbrain.ui.currentnote.move.MoveExecutor
 import org.alkaline.taskbrain.ui.currentnote.move.MoveTargetFinder
 import org.alkaline.taskbrain.ui.currentnote.selection.EditorSelection
@@ -282,22 +283,26 @@ class EditorState {
         line.updateFull(firstNewText, firstNewText.length)
         // line.noteIds intentionally unchanged.
 
-        // Middle replacement lines are inserted as new LineStates with empty noteIds.
+        // Middle replacement lines are new content — stamp SURGICAL sentinels so
+        // the save layer can attribute fresh-doc allocations to this path.
         var insertAt = lineIdx + 1
         for (i in 1 until replacementLines.size - 1) {
-            lines.add(insertAt, LineState(replacementLines[i], replacementLines[i].length, emptyList()))
+            lines.add(insertAt, LineState(
+                replacementLines[i], replacementLines[i].length,
+                listOf(NoteIdSentinel.new(NoteIdSentinel.Origin.SURGICAL)),
+            ))
             insertAt++
         }
 
         // The last replacement line + the original suffix becomes the cursor line.
         val lastReplacement = replacementLines.last()
         val lastLineText = lastReplacement + suffix
-        // The suffix half should keep its identity if it has noteIds — but since we
-        // mutated the original line in place, those noteIds went with it. The new last
-        // line carries empty noteIds. This is the conservative choice: a multi-line
-        // insert/paste creates new content, and we'd rather allocate fresh ids than
-        // risk attaching the original line's id to a fragment that doesn't represent it.
-        lines.add(insertAt, LineState(lastLineText, lastReplacement.length, emptyList()))
+        // Fresh doc for the tail: the original line's id went with its prefix half
+        // (we mutated it in place above), so the tail here is new content.
+        lines.add(insertAt, LineState(
+            lastLineText, lastReplacement.length,
+            listOf(NoteIdSentinel.new(NoteIdSentinel.Origin.SURGICAL)),
+        ))
 
         return insertAt to lastReplacement.length
     }
@@ -553,7 +558,11 @@ class EditorState {
         // Apply the result to state
         lines.clear()
         result.newLines.forEachIndexed { index, lineText ->
-            val noteIds = reorderedNoteIds.getOrElse(index) { emptyList() }
+            val noteIds = reorderedNoteIds.getOrElse(index) {
+                // Reorder produced more result-lines than input; fill with a
+                // SURGICAL sentinel so the save layer allocates a fresh doc.
+                listOf(NoteIdSentinel.new(NoteIdSentinel.Origin.SURGICAL))
+            }
             lines.add(LineState(lineText, lineText.length, noteIds))
         }
         focusedLineIndex = result.newFocusedLineIndex
@@ -607,11 +616,13 @@ class EditorState {
             // Defensive: shouldn't happen because EditorState always starts with a single
             // empty LineState, but seed the editor with the new content if it does.
             // The first new line gets parentNoteId (if known) so save still attaches the
-            // parent doc; subsequent lines get empty noteIds (allocated fresh on save).
+            // parent doc; subsequent lines get DIRECTIVE sentinels (allocated fresh on save).
             val firstIds = if (parentNoteId.isNotEmpty()) listOf(parentNoteId) else emptyList()
             lines.add(LineState(newLines[0], newLines[0].length, firstIds))
             for (i in 1 until newLines.size) {
-                lines.add(LineState(newLines[i], newLines[i].length, emptyList()))
+                lines.add(LineState(newLines[i], newLines[i].length, listOf(
+                    NoteIdSentinel.new(NoteIdSentinel.Origin.DIRECTIVE)
+                )))
             }
             notifyChange()
             return
@@ -620,7 +631,9 @@ class EditorState {
         lines[0].updateFull(newLines[0], newLines[0].length)
         // Insert any additional lines from the new content right after line 0.
         for (i in 1 until newLines.size) {
-            lines.add(i, LineState(newLines[i], newLines[i].length, emptyList()))
+            lines.add(i, LineState(newLines[i], newLines[i].length, listOf(
+                NoteIdSentinel.new(NoteIdSentinel.Origin.DIRECTIVE)
+            )))
         }
         notifyChange()
     }
@@ -638,7 +651,9 @@ class EditorState {
     internal fun appendContent(content: String) {
         val newLines = content.split("\n")
         for (line in newLines) {
-            lines.add(LineState(line, line.length, emptyList()))
+            lines.add(LineState(line, line.length, listOf(
+                NoteIdSentinel.new(NoteIdSentinel.Origin.DIRECTIVE)
+            )))
         }
         notifyChange()
     }
@@ -663,6 +678,13 @@ class EditorState {
         if (changed) notifyChange()
     }
 
+    @Deprecated(
+        "Lossy: reconciles noteIds by content match and silently drops any line whose " +
+            "content doesn't match an old line. Use initFromNoteLines(…, preserveCursor = true) " +
+            "to re-seed from a structured NoteLine list, or use one of the surgical mutation " +
+            "helpers (replaceFirstLineContent, replaceDirectiveText, …) to modify specific lines.",
+        level = DeprecationLevel.WARNING,
+    )
     internal fun updateFromText(newText: String) {
         val oldNoteIds = lines.map { it.noteIds }
         val oldContents = lines.map { it.text }

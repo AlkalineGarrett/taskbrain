@@ -117,19 +117,25 @@ fun splitNoteIds(
     afterHasContent: Boolean,
     noteIdContentLengths: List<Int> = emptyList()
 ): Pair<List<String>, List<String>> {
-    // One or no content side — all noteIds go to the side with content
-    if (!beforeHasContent && afterHasContent) return emptyList<String>() to noteIds
-    if (beforeHasContent && !afterHasContent) return noteIds to emptyList()
-
-    // Multiple noteIds with content-length metadata — distribute by overlap
-    if (noteIds.size > 1 && noteIdContentLengths.size == noteIds.size) {
-        return distributeNoteIdsByOverlap(noteIds, beforeContentLen, noteIdContentLengths)
+    val (before, after) = when {
+        // One or no content side — all noteIds go to the side with content
+        !beforeHasContent && afterHasContent -> emptyList<String>() to noteIds
+        beforeHasContent && !afterHasContent -> noteIds to emptyList()
+        // Multiple noteIds with content-length metadata — distribute by overlap
+        noteIds.size > 1 && noteIdContentLengths.size == noteIds.size ->
+            distributeNoteIdsByOverlap(noteIds, beforeContentLen, noteIdContentLengths)
+        // Fallback: all noteIds go to the longer half
+        beforeContentLen >= afterContentLen -> noteIds to emptyList()
+        else -> emptyList<String>() to noteIds
     }
-
-    // Fallback: all noteIds go to the longer half
-    return if (beforeContentLen >= afterContentLen) noteIds to emptyList()
-    else emptyList<String>() to noteIds
+    // Any side that ended up with content but no id gets a SPLIT sentinel, so
+    // save-time attribution ("where did this fresh doc come from?") is consistent.
+    return stampSplitSentinelIfNeeded(before, beforeHasContent) to
+        stampSplitSentinelIfNeeded(after, afterHasContent)
 }
+
+private fun stampSplitSentinelIfNeeded(ids: List<String>, hasContent: Boolean): List<String> =
+    if (ids.isEmpty() && hasContent) listOf(NoteIdSentinel.new(NoteIdSentinel.Origin.SPLIT)) else ids
 
 /**
  * Distributes noteIds to before/after halves based on how much of each noteId's

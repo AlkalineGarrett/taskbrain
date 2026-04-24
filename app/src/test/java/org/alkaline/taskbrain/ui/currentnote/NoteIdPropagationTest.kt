@@ -1,11 +1,16 @@
 package org.alkaline.taskbrain.ui.currentnote
 
+import org.alkaline.taskbrain.data.NoteIdSentinel
 import org.alkaline.taskbrain.ui.currentnote.selection.EditorSelection
 import org.alkaline.taskbrain.ui.currentnote.util.ClipboardParser
 import org.alkaline.taskbrain.ui.currentnote.util.PasteHandler
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+
+/** True iff the line has no real Firestore id — either empty or only sentinels. */
+private fun LineState.hasNoRealNoteId(): Boolean =
+    noteIds.isEmpty() || noteIds.all { NoteIdSentinel.isSentinel(it) }
 
 /**
  * Tests for noteId propagation through editor operations.
@@ -145,8 +150,10 @@ class NoteIdPropagationTest {
 
         assertEquals("Hello", state.lines[0].text)
         assertEquals(" World", state.lines[1].text)
-        // " World" (6 chars) > "Hello" (5 chars), so after half gets the noteId
-        assertTrue(state.lines[0].noteIds.isEmpty())
+        // " World" (6 chars) > "Hello" (5 chars), so after half gets the real id;
+        // the shorter "Hello" side gets a SPLIT sentinel (save allocates a fresh doc).
+        assertTrue(state.lines[0].hasNoRealNoteId())
+        assertEquals("split", NoteIdSentinel.originOf(state.lines[0].noteIds.firstOrNull()))
         assertEquals(listOf("note1"), state.lines[1].noteIds)
     }
 
@@ -276,9 +283,10 @@ class NoteIdPropagationTest {
 
         controller.updateLineContent(0, "Hello\nWorld", 5)
 
-        // "Hello" (5 chars) = "World" (5 chars), so before half gets noteIds (>=)
+        // "Hello" (5 chars) = "World" (5 chars), so before half gets the real
+        // id; the other side gets a SPLIT sentinel.
         assertEquals(listOf("note1"), state.lines[0].noteIds)
-        assertTrue(state.lines[1].noteIds.isEmpty())
+        assertTrue(state.lines[1].hasNoRealNoteId())
     }
 
     // ==================== Merge line propagation ====================
@@ -530,7 +538,8 @@ class NoteIdPropagationTest {
         val result = PasteHandler.execute(lines, 0, selection, parsed)
 
         assertEquals(listOf("noteA"), result.lines[0].noteIds)
-        assertTrue(result.lines[1].noteIds.isEmpty())
+        assertTrue(result.lines[1].hasNoRealNoteId())
+        assertEquals("paste", NoteIdSentinel.originOf(result.lines[1].noteIds.firstOrNull()))
         assertEquals(listOf("noteB"), result.lines[2].noteIds)
     }
 
@@ -662,9 +671,9 @@ class NoteIdPropagationTest {
         // Line B gets noteD via positional fallback
         assertEquals("Line B", result.lines[1].text)
         assertEquals(listOf("noteD"), result.lines[1].noteIds)
-        // Line C is extra — no deleted line to match
+        // Line C is extra — no deleted line to match; paste stamps a sentinel.
         assertEquals("Line C", result.lines[2].text)
-        assertTrue(result.lines[2].noteIds.isEmpty())
+        assertTrue(result.lines[2].hasNoRealNoteId())
     }
 
     // ==================== Full lifecycle ====================
@@ -684,8 +693,8 @@ class NoteIdPropagationTest {
         state.lines[0].updateFull("Hello World", 5)
         controller.splitLine(0)
 
-        // Longer fragment (" World") keeps the noteId
-        assertTrue(state.lines[0].noteIds.isEmpty())
+        // Longer fragment (" World") keeps the noteId; shorter side gets a sentinel.
+        assertTrue(state.lines[0].hasNoRealNoteId())
         assertEquals(listOf("note1"), state.lines[1].noteIds)
 
         // Merge them back

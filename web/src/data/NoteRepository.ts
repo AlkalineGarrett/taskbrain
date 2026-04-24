@@ -16,6 +16,7 @@ import type { Auth } from 'firebase/auth'
 import { noteFromFirestore, type Note, type NoteLine } from './Note'
 import { reconstructNoteContent, reconstructNoteLines } from './NoteReconstruction'
 import { noteStore } from './NoteStore'
+import { isSentinelNoteId, isRealNoteId } from './NoteIdSentinel'
 import { performSimilarityMatching } from '@/editor/ContentSimilarity'
 
 export interface NoteLoadResult {
@@ -239,20 +240,28 @@ export class NoteRepository {
 
       // Drop trailing empty lines (editor's typing line)
       const childPortion = dropLastWhile(trackedLines.slice(1), (l) => l.content === '')
-      const linesToSave = [trackedLines[0]!, ...childPortion]
+      const linesToSaveUnreconciled = [trackedLines[0]!, ...childPortion]
 
-      // Pre-allocate refs for new notes
+      // Recover noteIds that the editor lost along the way: if a null-id
+      // line sits at the same tree position and has identical content to
+      // an existing descendant, reuse that descendant's id. Without this
+      // the save would allocate a fresh doc and orphan the real one.
+      const linesToSave = reconcileNullNoteIdsByContent(noteId, linesToSaveUnreconciled)
+
+      // Pre-allocate refs for new notes. Both null (upstream-bug signal) and
+      // sentinel (expected placeholder from paste/split/etc.) ids need a fresh
+      // Firestore doc — only real ids refer to existing docs we can update.
       const newRefs = new Map<number, DocumentReference>()
       for (let i = 1; i < linesToSave.length; i++) {
         const content = linesToSave[i]!.content.replace(/^\t+/, '')
-        if (linesToSave[i]!.noteId == null && content !== '') {
+        if (!isRealNoteId(linesToSave[i]!.noteId) && content !== '') {
           newRefs.set(i, doc(this.notesRef))
         }
       }
 
       function effectiveId(lineIndex: number): string {
         if (lineIndex === 0) return noteId
-        if (linesToSave[lineIndex]!.noteId != null) return linesToSave[lineIndex]!.noteId!
+        if (isRealNoteId(linesToSave[lineIndex]!.noteId)) return linesToSave[lineIndex]!.noteId!
         return newRefs.get(lineIndex)?.id ?? ''
       }
 
@@ -310,7 +319,7 @@ export class NoteRepository {
           const parentId = effectiveId(parentOfLine[i]!)
           survivingIds.add(id)
 
-          if (linesToSave[i]!.noteId != null) {
+          if (isRealNoteId(linesToSave[i]!.noteId)) {
             transaction.set(
               this.noteRef(id),
               {
@@ -577,6 +586,192 @@ function dropLastWhile<T>(arr: T[], predicate: (item: T) => boolean): T[] {
 }
 
 /**
+ * For each non-empty line whose `noteId` is null, try to recover a real id
+ * from rawNotes by matching (parent id, trimmed content) against existing
+ * live descendants. Preserves the original order of candidates so duplicate-
+ * content siblings bind left-to-right.
+ *
+ * This is defensive: the editor is supposed to carry noteIds through edits,
+ * but pastes, lossy re-inits, or stale snapshots have been observed to wipe
+ * them. Without recovery the save would allocate fresh docs for these lines
+ * and the existing descendants would be orphaned by the soft-delete path.
+ */
+function reconcileNullNoteIdsByContent(
+  rootNoteId: string,
+  linesToSave: NoteLine[],
+): NoteLine[] {
+  if (linesToSave.length <= 1) return linesToSave
+
+  // Parent line-index per line, via indentation (independent of noteIds).
+  const parentLineOf = new Array<number>(linesToSave.length).fill(0)
+  const stack: Array<[number, number]> = [[0, 0]] // [depth, lineIndex]
+  for (let i = 1; i < linesToSave.length; i++) {
+    const raw = linesToSave[i]!.content
+    const depth = raw.match(/^\t*/)?.[0].length ?? 0
+    const content = raw.replace(/^\t+/, '')
+    while (stack.length > 1 && stack[stack.length - 1]![0] >= depth) stack.pop()
+    parentLineOf[i] = stack[stack.length - 1]![1]
+    if (content.length > 0) stack.push([depth, i])
+  }
+
+  // Candidates grouped by parentNoteId for O(1) lookup during reconciliation.
+  const byParent = noteStore.getLiveDescendantsByParent(rootNoteId)
+  if (byParent.size === 0) return linesToSave
+
+  const usedIds = new Set<string>()
+  for (const l of linesToSave) if (l.noteId) usedIds.add(l.noteId)
+
+  const result = linesToSave.slice()
+  const lineIds: (string | null)[] = new Array(linesToSave.length).fill(null)
+  lineIds[0] = rootNoteId
+
+  let reconciledFromNull = 0 // upstream bug signal
+  let reconciledFromSentinel = 0 // expected placeholder
+  type NullIdRecovery = {
+    lineIndex: number
+    parentLineIndex: number
+    parentId: string | null
+    contentPreview: string
+    recoveredId: string | null
+  }
+  const nullTrace: NullIdRecovery[] = []
+  for (let i = 1; i < result.length; i++) {
+    const content = result[i]!.content.replace(/^\t+/, '')
+    if (content.length === 0) continue
+    const existing = result[i]!.noteId
+    if (isRealNoteId(existing)) {
+      lineIds[i] = existing
+      continue
+    }
+    const existingIsSentinel = isSentinelNoteId(existing)
+    const parentId = lineIds[parentLineOf[i]!] ?? null
+    const candidates = parentId ? byParent.get(parentId) : undefined
+    let matchId: string | null = null
+    if (candidates) {
+      const matchIdx = candidates.findIndex(c => c.content === content && !usedIds.has(c.id))
+      if (matchIdx >= 0) {
+        const match = candidates[matchIdx]!
+        candidates.splice(matchIdx, 1)
+        usedIds.add(match.id)
+        lineIds[i] = match.id
+        result[i] = { ...result[i]!, noteId: match.id }
+        matchId = match.id
+        if (existingIsSentinel) reconciledFromSentinel++
+        else reconciledFromNull++
+      }
+    }
+    if (!existingIsSentinel) {
+      nullTrace.push({
+        lineIndex: i,
+        parentLineIndex: parentLineOf[i]!,
+        parentId,
+        contentPreview: content.slice(0, 60),
+        recoveredId: matchId,
+      })
+    }
+  }
+
+  if (reconciledFromSentinel > 0) {
+    console.debug(
+      `reconcileNullNoteIdsByContent(${rootNoteId}): matched ` +
+      `${reconciledFromSentinel} sentinel line(s) to existing docs.`,
+    )
+  }
+  if (reconciledFromNull > 0 || nullTrace.some(e => e.recoveredId === null)) {
+    // Upstream lossy path produced bare null ids on non-empty lines. Log a
+    // detailed diagnostic block (mirrors the Android content-drop guard style)
+    // so the failing site can be investigated without repro.
+    console.warn(buildNullIdRecoveryDiagnostics(
+      rootNoteId, linesToSave, byParent, nullTrace,
+      reconciledFromNull, reconciledFromSentinel,
+    ))
+  }
+  if (reconciledFromNull > 0) {
+    noteStore.raiseWarning(
+      `Recovered ${reconciledFromNull} line ID(s) during save. Your content is ` +
+      `safe, but an editor path may have dropped line identities — please ` +
+      `double-check the note after saving.`,
+    )
+  }
+  return result
+}
+
+function buildNullIdRecoveryDiagnostics(
+  rootNoteId: string,
+  linesToSave: NoteLine[],
+  byParent: Map<string, Note[]>,
+  nullTrace: Array<{
+    lineIndex: number
+    parentLineIndex: number
+    parentId: string | null
+    contentPreview: string
+    recoveredId: string | null
+  }>,
+  reconciledFromNull: number,
+  reconciledFromSentinel: number,
+): string {
+  const lines: string[] = []
+  const unrecovered = nullTrace.filter(e => e.recoveredId === null).length
+  lines.push('=== NULL NOTE-ID RECOVERY ===')
+  lines.push(`rootNoteId: ${rootNoteId}`)
+  lines.push(`linesToSave: ${linesToSave.length}`)
+  lines.push(`null-id lines: ${nullTrace.length} (recovered=${reconciledFromNull}, unrecovered=${unrecovered})`)
+  lines.push(`sentinel lines matched to existing docs: ${reconciledFromSentinel}`)
+
+  lines.push('--- null-id line detail ---')
+  for (const e of nullTrace) {
+    const status = e.recoveredId ? `RECOVERED → ${e.recoveredId}` : 'UNMATCHED (will allocate fresh doc)'
+    const parent = e.parentId ?? '<no parent id resolved>'
+    lines.push(
+      `  [${e.lineIndex}] parentLine=${e.parentLineIndex} parentId=${parent} ` +
+      `content='${e.contentPreview}' → ${status}`,
+    )
+  }
+
+  lines.push('--- linesToSave (full list) ---')
+  for (let i = 0; i < linesToSave.length; i++) {
+    const line = linesToSave[i]!
+    const preview = line.content.slice(0, 60).replace(/\n/g, '\\n')
+    let idLabel: string
+    if (line.noteId == null) idLabel = 'null'
+    else if (isSentinelNoteId(line.noteId)) idLabel = `sentinel=${line.noteId}`
+    else idLabel = line.noteId
+    lines.push(`  [${i}] noteId=${idLabel} content='${preview}'`)
+  }
+
+  lines.push('--- live descendants grouped by parent ---')
+  if (byParent.size === 0) {
+    lines.push(`  (no live descendants in NoteStore for root ${rootNoteId})`)
+  } else {
+    for (const [parentId, children] of byParent) {
+      lines.push(`  parent=${parentId} (${children.length} unmatched candidate(s))`)
+      for (const child of children) {
+        const preview = child.content.slice(0, 60)
+        lines.push(`    child=${child.id} content='${preview}'`)
+      }
+    }
+  }
+
+  lines.push('--- NoteStore state ---')
+  const storeNote = noteStore.getNoteById(rootNoteId)
+  if (storeNote) {
+    lines.push(`  parentNoteId: ${storeNote.parentNoteId ?? 'null'}`)
+    lines.push(`  rootNoteId: ${storeNote.rootNoteId ?? 'null'}`)
+    lines.push(`  state: ${storeNote.state ?? 'active'}`)
+    const containedNotes = storeNote.containedNotes ?? []
+    lines.push(`  containedNotes: ${containedNotes.length} [${containedNotes.join(', ')}]`)
+  } else {
+    lines.push(`  NoteStore has NO entry for ${rootNoteId}`)
+  }
+
+  lines.push('--- Stack trace ---')
+  const stack = new Error().stack?.split('\n').slice(2, 17).join('\n') ?? '(unavailable)'
+  lines.push(stack)
+  lines.push('=== END NULL NOTE-ID RECOVERY ===')
+  return lines.join('\n')
+}
+
+/**
  * Two-phase line matching: exact content match first, then positional fallback.
  */
 export function matchLinesToIds(
@@ -644,11 +839,33 @@ export function matchLinesToIds(
   )
 
   // Phase 3: Positional fallback for lines that changed too much for similarity matching.
+  // Reaching this phase means similarity matching failed, which is a signal that
+  // the caller passed a content string that diverges heavily from existingLines.
+  const positionalIdx: number[] = []
   for (let i = 0; i < newLinesContent.length; i++) {
     if (newIds[i] == null && i < existingLines.length && !oldConsumed[i]) {
       newIds[i] = existingLines[i]!.noteId
       oldConsumed[i] = true
+      positionalIdx.push(i)
     }
+  }
+
+  const stillNullIdx: number[] = []
+  for (let i = 0; i < newLinesContent.length; i++) {
+    if (newIds[i] == null && newLinesContent[i]!.length > 0) stillNullIdx.push(i)
+  }
+
+  if (positionalIdx.length > 0 || stillNullIdx.length > 0) {
+    console.warn(buildMatchLinesToIdsDiagnostics(
+      parentNoteId, existingLines, newLinesContent, editorNoteIds,
+      positionalIdx.map(i => ({
+        newIdx: i,
+        oldIdx: i,
+        content: newLinesContent[i]!,
+        boundId: existingLines[i]!.noteId,
+      })),
+      stillNullIdx.map(i => ({ i, content: newLinesContent[i]! })),
+    ))
   }
 
   const trackedLines = newLinesContent.map((content, index) => ({
@@ -661,4 +878,47 @@ export function matchLinesToIds(
   }
 
   return trackedLines
+}
+
+function buildMatchLinesToIdsDiagnostics(
+  parentNoteId: string,
+  existingLines: NoteLine[],
+  newLinesContent: string[],
+  editorNoteIds: (string | null)[] | undefined,
+  positionalBindings: Array<{ newIdx: number; oldIdx: number; content: string; boundId: string | null }>,
+  stillNull: Array<{ i: number; content: string }>,
+): string {
+  const lines: string[] = []
+  lines.push('=== MATCH LINES TO IDS (LOSSY FALLBACK) ===')
+  lines.push(`parentNoteId: ${parentNoteId}`)
+  lines.push(`existingLines: ${existingLines.length}`)
+  lines.push(`newLines: ${newLinesContent.length}`)
+  lines.push(`editorNoteIds provided: ${editorNoteIds != null} (${editorNoteIds?.length ?? 0})`)
+  lines.push(`positional-fallback bindings: ${positionalBindings.length}`)
+  lines.push(`unmatched non-empty lines: ${stillNull.length}`)
+
+  lines.push('--- positional fallback detail ---')
+  for (const b of positionalBindings.slice(0, 20)) {
+    lines.push(`  new[${b.newIdx}] ↔ old[${b.oldIdx}] boundId=${b.boundId ?? 'null'} content='${b.content.slice(0, 60)}'`)
+  }
+  if (positionalBindings.length > 20) lines.push(`  ... (${positionalBindings.length - 20} more)`)
+
+  lines.push('--- unmatched non-empty lines ---')
+  for (const e of stillNull.slice(0, 20)) {
+    lines.push(`  new[${e.i}] content='${e.content.slice(0, 60)}'`)
+  }
+  if (stillNull.length > 20) lines.push(`  ... (${stillNull.length - 20} more)`)
+
+  lines.push('--- existingLines ---')
+  for (let i = 0; i < Math.min(existingLines.length, 40); i++) {
+    const line = existingLines[i]!
+    const preview = line.content.slice(0, 60).replace(/\n/g, '\\n')
+    lines.push(`  [${i}] noteId=${line.noteId ?? 'null'} content='${preview}'`)
+  }
+  if (existingLines.length > 40) lines.push(`  ... (${existingLines.length - 40} more)`)
+
+  lines.push('--- Stack trace ---')
+  lines.push(new Error().stack?.split('\n').slice(2, 17).join('\n') ?? '(unavailable)')
+  lines.push('=== END MATCH LINES TO IDS ===')
+  return lines.join('\n')
 }

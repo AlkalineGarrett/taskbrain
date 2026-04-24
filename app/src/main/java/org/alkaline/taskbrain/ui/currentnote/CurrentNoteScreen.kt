@@ -473,7 +473,7 @@ fun CurrentNoteScreen(
                 // Non-recurring save: switch [recurringAlarm(...)] → [alarm(...)]
                 switchDirectiveIfNeeded(AlarmSymbolUtils.alarmDirective(existing.id))
             } else {
-                currentNoteViewModel.saveAndCreateAlarm(userContent, alarmDialogLineContent, alarmDialogLineIndex, dueTime, stages, inlineSession = alarmDialogInlineSession)
+                currentNoteViewModel.saveAndCreateAlarm(editorState.toNoteLines(), alarmDialogLineContent, alarmDialogLineIndex, dueTime, stages, inlineSession = alarmDialogInlineSession)
             }
         },
         onAlarmSaveRecurring = { dueTime, stages, recurrenceConfig ->
@@ -486,7 +486,7 @@ fun CurrentNoteScreen(
                     switchDirectiveIfNeeded(AlarmSymbolUtils.recurringAlarmDirective(recurringId))
                 }
             } else {
-                currentNoteViewModel.saveAndCreateRecurringAlarm(userContent, alarmDialogLineContent, alarmDialogLineIndex, dueTime, stages, recurrenceConfig, inlineSession = alarmDialogInlineSession)
+                currentNoteViewModel.saveAndCreateRecurringAlarm(editorState.toNoteLines(), alarmDialogLineContent, alarmDialogLineIndex, dueTime, stages, recurrenceConfig, inlineSession = alarmDialogInlineSession)
             }
         },
         onAlarmSaveInstance = alarmDialogRecurringAlarm?.let { recurring ->

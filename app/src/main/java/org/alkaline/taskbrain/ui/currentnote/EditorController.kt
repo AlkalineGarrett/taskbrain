@@ -1,6 +1,7 @@
 package org.alkaline.taskbrain.ui.currentnote
 
 import androidx.compose.runtime.Composable
+import org.alkaline.taskbrain.data.NoteIdSentinel
 import org.alkaline.taskbrain.ui.currentnote.undo.CommandType
 import org.alkaline.taskbrain.ui.currentnote.undo.UndoManager
 import org.alkaline.taskbrain.ui.currentnote.undo.AlarmSnapshot
@@ -164,6 +165,14 @@ class EditorController(
      * Restores editor state from a snapshot.
      */
     private fun restoreFromSnapshot(snapshot: UndoSnapshot) {
+        if (snapshot.lineContents.size != snapshot.lineNoteIds.size) {
+            android.util.Log.e(
+                "EditorController",
+                "restoreFromSnapshot: lineContents.size=${snapshot.lineContents.size} " +
+                    "!= lineNoteIds.size=${snapshot.lineNoteIds.size} — " +
+                    "undo snapshot is corrupt; some lines will lose their noteIds",
+            )
+        }
         state.lines.clear()
         snapshot.lineContents.forEachIndexed { index, lineText ->
             val noteIds = snapshot.lineNoteIds.getOrElse(index) { emptyList() }
@@ -707,9 +716,21 @@ class EditorController(
      * @param lineB the line whose content appears second in the merged text
      */
     private fun mergeNoteIds(lineA: LineState, lineB: LineState): MergedNoteIds {
-        val allIds = (lineA.noteIds + lineB.noteIds).distinct()
+        val combined = (lineA.noteIds + lineB.noteIds).distinct()
+        // A sentinel is a "needs a fresh doc" marker. If the merge brings in a
+        // real id alongside a sentinel, the real id wins and the sentinel is
+        // dropped — we don't need a fresh allocation for this merged line.
+        val hasReal = combined.any { !NoteIdSentinel.isSentinel(it) }
+        val allIds = if (hasReal) combined.filter { !NoteIdSentinel.isSentinel(it) } else combined
         val contentLengths = buildMergedContentLengths(lineA) + buildMergedContentLengths(lineB)
-        return MergedNoteIds(allIds, contentLengths)
+        // Drop contentLengths entries that corresponded to dropped sentinel ids —
+        // keep the list aligned with the filtered id list.
+        val alignedLengths = if (hasReal && contentLengths.size == combined.size) {
+            combined.mapIndexedNotNull { idx, id ->
+                if (NoteIdSentinel.isSentinel(id)) null else contentLengths[idx]
+            }
+        } else contentLengths
+        return MergedNoteIds(allIds, alignedLengths)
     }
 
     /**

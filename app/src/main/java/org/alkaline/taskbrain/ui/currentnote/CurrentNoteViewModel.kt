@@ -443,16 +443,35 @@ class CurrentNoteViewModel @JvmOverloads constructor(
 
     /**
      * Updates currentNoteLines from raw content using content-based matching.
-     * Used as a fallback when editor noteIds are not available.
+     * Used as a fallback when editor noteIds are not available — currently the
+     * agent-rewrite path, which hands back a plain-text rewrite with no line
+     * identity information. Any unmatched-non-empty line loses its noteId; the
+     * save layer then allocates fresh docs (losing alarm bindings, etc.). A
+     * structured agent output API would remove this lossy reconciliation.
      *
      * Delegates to the shared [reconcileLineNoteIds] / [enforceParentNoteId] helpers.
-     * Logs a warning if any non-empty line loses its noteId during matching.
      */
     fun updateTrackedLines(newContent: String) {
         val newLinesContent = newContent.lines()
         val oldLines = currentNoteLines
 
         if (oldLines.isEmpty()) {
+            // This path allocates null noteIds for every line except the root —
+            // if any save fires off this state, the save layer has to recover ids
+            // via content match (reconcileNullNoteIdsByContent). Log loudly so
+            // the caller that hit the empty-oldLines race shows up in logs.
+            Log.w(
+                TAG,
+                buildUpdateTrackedLinesDiagnostics(
+                    reason = "oldLines is empty at updateTrackedLines entry",
+                    oldLines = emptyList(),
+                    newLinesContent = newLinesContent,
+                    unmatched = newLinesContent.mapIndexedNotNull { i, c ->
+                        if (c.isNotEmpty() && i != 0) i to c else null
+                    },
+                ),
+                Throwable("updateTrackedLines stack")
+            )
             currentNoteLines = newLinesContent.mapIndexed { index, content ->
                 NoteLine(content, if (index == 0) currentNoteId else null)
             }
@@ -474,16 +493,55 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         if (unmatched.isNotEmpty()) {
             Log.w(
                 TAG,
-                "updateTrackedLines: ${unmatched.size} non-empty new line(s) lost noteIds " +
-                    "(no exact or similarity match). " +
-                    "oldLines.size=${oldLines.size}, newLines.size=${newLinesContent.size}. " +
-                    "First: ${unmatched.take(3).joinToString { "[${it.first}] '${it.second.take(40)}'" }}"
+                buildUpdateTrackedLinesDiagnostics(
+                    reason = "content-based reconciliation left non-empty lines unmatched",
+                    oldLines = oldLines,
+                    newLinesContent = newLinesContent,
+                    unmatched = unmatched,
+                ),
+                Throwable("updateTrackedLines stack")
             )
         }
 
         currentNoteLines = newLinesContent.mapIndexed { index, content ->
             NoteLine(content, withParent[index].firstOrNull())
         }
+    }
+
+    private fun buildUpdateTrackedLinesDiagnostics(
+        reason: String,
+        oldLines: List<NoteLine>,
+        newLinesContent: List<String>,
+        unmatched: List<Pair<Int, String>>,
+    ): String = buildString {
+        appendLine("=== UPDATE TRACKED LINES (LOSSY) ===")
+        appendLine("reason: $reason")
+        appendLine("currentNoteId: $currentNoteId")
+        appendLine("oldLines: ${oldLines.size}")
+        appendLine("newLines: ${newLinesContent.size}")
+        appendLine("unmatched (non-empty new lines with no old match): ${unmatched.size}")
+
+        appendLine("--- unmatched new-line detail ---")
+        for ((idx, content) in unmatched.take(20)) {
+            appendLine("  [$idx] '${content.take(80)}'")
+        }
+        if (unmatched.size > 20) appendLine("  ... (${unmatched.size - 20} more)")
+
+        appendLine("--- oldLines ---")
+        for ((i, line) in oldLines.withIndex().take(40)) {
+            val preview = line.content.take(60).replace("\n", "\\n")
+            appendLine("  [$i] noteId=${line.noteId ?: "null"} content='$preview'")
+        }
+        if (oldLines.size > 40) appendLine("  ... (${oldLines.size - 40} more)")
+
+        appendLine("--- newLines ---")
+        for ((i, content) in newLinesContent.withIndex().take(40)) {
+            val preview = content.take(60).replace("\n", "\\n")
+            appendLine("  [$i] '$preview'")
+        }
+        if (newLinesContent.size > 40) appendLine("  ... (${newLinesContent.size - 40} more)")
+
+        appendLine("=== END UPDATE TRACKED LINES ===")
     }
 
     fun toggleShowCompleted() {
@@ -576,9 +634,14 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      * Saves the note, then creates a new alarm for the specified line.
      * For the main editor, saves via [persistCurrentNote]; for inline editors,
      * saves via [NoteDirectiveManager.saveInlineEditSession].
+     *
+     * Callers must build [trackedLines] via [EditorState.toNoteLines] so per-line
+     * noteIds flow straight through to save — we no longer reconstruct the id
+     * list from a joined-content string, which was a lossy step that could
+     * silently drop ids and trigger the content-drop guard.
      */
     fun saveAndCreateAlarm(
-        content: String,
+        trackedLines: List<NoteLine>,
         lineContent: String,
         lineIndex: Int? = null,
         dueTime: Timestamp?,
@@ -586,18 +649,17 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         inlineSession: InlineEditSession? = null
     ) {
         viewModelScope.launch {
-            val noteId = saveAndResolveNoteId(content, lineIndex, inlineSession)
+            val noteId = saveAndResolveNoteId(trackedLines, lineIndex, inlineSession)
             alarmManager.createAlarmForNote(noteId, lineContent, lineIndex, dueTime, stages)
         }
     }
 
     /**
      * Saves the note, then creates a recurring alarm for the specified line.
-     * For the main editor, saves via [persistCurrentNote]; for inline editors,
-     * saves via [NoteDirectiveManager.saveInlineEditSession].
+     * See [saveAndCreateAlarm] for notes on [trackedLines].
      */
     fun saveAndCreateRecurringAlarm(
-        content: String,
+        trackedLines: List<NoteLine>,
         lineContent: String,
         lineIndex: Int? = null,
         dueTime: Timestamp?,
@@ -606,7 +668,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         inlineSession: InlineEditSession? = null
     ) {
         viewModelScope.launch {
-            val noteId = saveAndResolveNoteId(content, lineIndex, inlineSession)
+            val noteId = saveAndResolveNoteId(trackedLines, lineIndex, inlineSession)
             alarmManager.createRecurringAlarmForNote(noteId, lineContent, lineIndex, dueTime, stages, recurrenceConfig)
         }
     }
@@ -616,7 +678,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      * Routes to the inline or main editor save path based on [inlineSession].
      */
     private suspend fun saveAndResolveNoteId(
-        content: String,
+        trackedLines: List<NoteLine>,
         lineIndex: Int?,
         inlineSession: InlineEditSession?
     ): String {
@@ -625,7 +687,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             val line = lineIndex?.let { inlineSession.editorState.lines.getOrNull(it) }
             line?.noteIds?.firstOrNull() ?: inlineSession.noteId
         } else {
-            updateTrackedLines(content)
+            currentNoteLines = trackedLines
             persistCurrentNote(currentNoteId, currentNoteLines)
             if (lineIndex != null) getNoteIdForLine(lineIndex) else currentNoteId
         }

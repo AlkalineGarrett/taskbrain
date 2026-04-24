@@ -7,7 +7,13 @@ import { executePaste } from '../../editor/PasteHandler'
 import { parseInternalLines } from '../../editor/ClipboardParser'
 import { SELECTION_NONE } from '../../editor/EditorSelection'
 import { matchLinesToIds } from '../../data/NoteRepository'
+import { isSentinelNoteId } from '../../data/NoteIdSentinel'
 import type { NoteLine } from '../../data/Note'
+
+/** True iff the line has no real Firestore id — either empty or only sentinels. */
+function hasNoRealNoteId(noteIds: string[]): boolean {
+  return noteIds.length === 0 || noteIds.every((id) => isSentinelNoteId(id))
+}
 
 // --- Helpers ---
 
@@ -149,8 +155,9 @@ describe('splitLine preserves noteIds', () => {
 
     expect(controller.state.lines[0]!.text).toBe('Hello')
     expect(controller.state.lines[1]!.text).toBe(' World')
-    // " World" (6 chars) > "Hello" (5 chars), so after half gets the noteId
-    expect(controller.state.lines[0]!.noteIds).toEqual([])
+    // " World" (6 chars) > "Hello" (5 chars), so after half gets the real id;
+    // shorter "Hello" side gets a SPLIT sentinel.
+    expect(hasNoRealNoteId(controller.state.lines[0]!.noteIds)).toBe(true)
     expect(controller.state.lines[1]!.noteIds).toEqual(['note1'])
   })
 
@@ -263,9 +270,10 @@ describe('updateLineContent newline assigns noteIds correctly', () => {
 
     controller.updateLineContent(0, 'Hello\nWorld', 5)
 
-    // "Hello" (5 chars) = "World" (5 chars), so before half gets noteIds (>=)
+    // "Hello" (5 chars) = "World" (5 chars), so before half gets the real id;
+    // the other side gets a SPLIT sentinel.
     expect(controller.state.lines[0]!.noteIds).toEqual(['note1'])
-    expect(controller.state.lines[1]!.noteIds).toEqual([])
+    expect(hasNoRealNoteId(controller.state.lines[1]!.noteIds)).toBe(true)
   })
 })
 
@@ -526,6 +534,57 @@ describe('deleteSelection preserves noteIds', () => {
     expect(controller.state.lines[0]!.noteIds).toEqual(['noteA'])
     expect(controller.state.lines[1]!.noteIds).toEqual(['noteC'])
   })
+
+  it('preserves noteIds on lines untouched by a multi-line replacement', () => {
+    // Historical regression: replaceSelection roundtripped through updateFromText,
+    // which reconciled by content match. Duplicate-content siblings (e.g. "• ")
+    // would silently lose noteIds on lines the user didn't even touch.
+    const controller = controllerWithNoteLines(
+      { text: '• alpha', noteIds: ['a'] },
+      { text: '• beta', noteIds: ['b'] },
+      { text: '• ', noteIds: ['spacer1'] },
+      { text: '• gamma', noteIds: ['g'] },
+      { text: '• ', noteIds: ['spacer2'] },
+    )
+    // Replace "alpha" (chars 2..7 of line 0) with "alphabet"
+    const start = '• '.length
+    const end = '• alpha'.length
+    controller.state.setSelection(start, end)
+    controller.state.replaceSelectionInternal('alphabet')
+
+    expect(controller.state.lines.map((l) => l.text)).toEqual([
+      '• alphabet',
+      '• beta',
+      '• ',
+      '• gamma',
+      '• ',
+    ])
+    // Every non-edited line must keep its noteId exactly — no drift onto
+    // a duplicate-content sibling via content-match reconciliation.
+    expect(controller.state.lines[0]!.noteIds).toEqual(['a'])
+    expect(controller.state.lines[1]!.noteIds).toEqual(['b'])
+    expect(controller.state.lines[2]!.noteIds).toEqual(['spacer1'])
+    expect(controller.state.lines[3]!.noteIds).toEqual(['g'])
+    expect(controller.state.lines[4]!.noteIds).toEqual(['spacer2'])
+  })
+
+  it('preserves noteIds when a multi-line selection collapses into one line', () => {
+    // Cut across lines, preserving lineA's noteIds (it contributed a prefix).
+    const controller = controllerWithNoteLines(
+      { text: 'Line A', noteIds: ['noteA'] },
+      { text: 'Line B', noteIds: ['noteB'] },
+      { text: 'Line C', noteIds: ['noteC'] },
+    )
+    // Select "e A\nLine B" (mid-lineA to end-of-lineB)
+    const startOffset = 'Lin'.length
+    const endOffset = 'Line A\nLine B'.length
+    controller.state.setSelection(startOffset, endOffset)
+    controller.deleteSelectionWithUndo()
+
+    expect(controller.state.lines.map((l) => l.text)).toEqual(['Lin', 'Line C'])
+    expect(controller.state.lines[0]!.noteIds).toEqual(['noteA'])
+    expect(controller.state.lines[1]!.noteIds).toEqual(['noteC'])
+  })
 })
 
 // ==================== matchLinesToIds (NoteRepository) ====================
@@ -638,9 +697,9 @@ describe('full-line paste preserves noteIds', () => {
     const parsed = parseInternalLines('New 1\nNew 2')
     const result = executePaste(lines, 0, selection, parsed)
 
-    // First pasted line gets noteA (positional), second is new
+    // First pasted line gets noteA (positional), second is new (sentinel).
     expect(result.lines[0]!.noteIds).toEqual(['noteA'])
-    expect(result.lines[1]!.noteIds).toEqual([])
+    expect(hasNoRealNoteId(result.lines[1]!.noteIds)).toBe(true)
     expect(result.lines[2]!.noteIds).toEqual(['noteB'])
   })
 
@@ -664,9 +723,9 @@ describe('full-line paste preserves noteIds', () => {
     // Line B gets noteD via positional fallback (it replaced Line D's position)
     expect(result.lines[1]!.text).toBe('Line B')
     expect(result.lines[1]!.noteIds).toEqual(['noteD'])
-    // Line C is extra — no deleted line to match
+    // Line C is extra — no deleted line to match; paste stamps a sentinel.
     expect(result.lines[2]!.text).toBe('Line C')
-    expect(result.lines[2]!.noteIds).toEqual([])
+    expect(hasNoRealNoteId(result.lines[2]!.noteIds)).toBe(true)
   })
 
   it('recovers noteIds from cut lines when pasting to a different location', () => {
@@ -727,8 +786,8 @@ describe('full lifecycle: noteIds through load → edit → save', () => {
     state.lines[0]!.updateFull('Hello World', 5)
     controller.splitLine(0)
 
-    // Longer fragment (" World") keeps the noteId
-    expect(state.lines[0]!.noteIds).toEqual([])
+    // Longer fragment (" World") keeps the noteId; shorter side gets a sentinel.
+    expect(hasNoRealNoteId(state.lines[0]!.noteIds)).toBe(true)
     expect(state.lines[1]!.noteIds).toEqual(['note1'])
 
     // Merge them back

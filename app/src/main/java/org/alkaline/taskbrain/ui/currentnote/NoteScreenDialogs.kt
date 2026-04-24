@@ -96,7 +96,7 @@ fun NoteScreenDialogs(
     saveWarning?.let { warning ->
         WarningDialog(
             title = stringResource(R.string.warning_save_failed_title),
-            message = "$warning\n\n${stringResource(R.string.warning_save_failed)}",
+            message = warning,
             selectable = true,
             onDismiss = onClearSaveWarning
         )

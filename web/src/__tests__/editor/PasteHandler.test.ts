@@ -252,6 +252,77 @@ describe('combined scenarios from spec', () => {
   })
 })
 
+describe('noteId preservation across paste', () => {
+  it('mid-line paste preserves destLine noteId on leading half', () => {
+    const ls = withCursor(
+      [new LineState('• hello', undefined, ['note_1'])],
+      0, 4, // cursor after "he"
+    )
+    const result = executePaste(ls, 0, SELECTION_NONE, [
+      parsed(0, '☐ ', 'one'),
+      parsed(0, '☐ ', 'two'),
+    ])
+
+    expect(lineTexts(result.lines)).toEqual(['• he', '☐ one', '☐ two', '• llo'])
+    expect(result.lines[0]!.noteIds).toEqual(['note_1'])
+    expect(result.lines[1]!.noteIds[0]).toMatch(/^@paste_/)
+    expect(result.lines[2]!.noteIds[0]).toMatch(/^@paste_/)
+    expect(result.lines[3]!.noteIds[0]).toMatch(/^@split_/)
+  })
+
+  it('paste at start of content keeps destLine noteId on trailing half', () => {
+    const ls = withCursor(
+      [new LineState('• hello', undefined, ['note_1'])],
+      0, 2, // cursor just after "• " prefix
+    )
+    const result = executePaste(ls, 0, SELECTION_NONE, [
+      parsed(0, '☐ ', 'one'),
+      parsed(0, '☐ ', 'two'),
+    ])
+
+    expect(lineTexts(result.lines)).toEqual(['☐ one', '☐ two', '• hello'])
+    expect(result.lines[2]!.noteIds).toEqual(['note_1'])
+  })
+
+  it('single-line paste with selection preserves startLine noteIds', () => {
+    const ls = [
+      new LineState('alpha', undefined, ['note_1']),
+      new LineState('beta', undefined, ['note_2']),
+    ]
+    // Select "pha\nbe" (covers end of line 0 + start of line 1).
+    // line 0 = "alpha" (0..5); newline at 5; line 1 = "beta" (6..10)
+    const result = executePaste(ls, 0, sel(2, 8), [parsed(0, '', 'MID')])
+    expect(lineTexts(result.lines)).toEqual(['alMIDta'])
+    expect(result.lines[0]!.noteIds).toEqual(['note_1'])
+  })
+
+  it('line-terminated paste before an existing bullet line keeps its noteId', () => {
+    const ls = withCursor(
+      [
+        new LineState('Packing ', undefined, ['root']),
+        new LineState('• Tagines', undefined, ['child_1']),
+        new LineState('• ', undefined, ['child_2']), // pre-existing empty bullet
+      ],
+      2, 2,
+    )
+    const result = executePaste(ls, 2, SELECTION_NONE, [
+      parsed(0, '• ', '4 drawers'),
+      parsed(0, '• ', 'Swig drinkers'),
+      parsed(0, '', ''), // trailing newline → isLineTerminated
+    ])
+
+    expect(lineTexts(result.lines)).toEqual([
+      'Packing ',
+      '• Tagines',
+      '• 4 drawers',
+      '• Swig drinkers',
+      '• ',
+    ])
+    // The surviving "• " line keeps its real noteId — no null-id at save time.
+    expect(result.lines[4]!.noteIds).toEqual(['child_2'])
+  })
+})
+
 describe('full-line cut-paste at position 0 (end-to-end with parser)', () => {
   it('prefixed line with trailing newline inserts before destination', () => {
     const clipboardText = '☐ cut task\n'

@@ -8,6 +8,7 @@ import {
 import { getLineStartOffset, getLineAndLocalOffset } from './SelectionCoordinates'
 import { type ParsedLine, parsedLineHasPrefix, buildLineText } from './ClipboardParser'
 import { performSimilarityMatching } from './ContentSimilarity'
+import { newSentinelNoteId, isRealNoteId } from '@/data/NoteIdSentinel'
 
 export interface PasteResult {
   lines: LineState[]
@@ -99,19 +100,34 @@ function applySingleLinePaste(
   selection: EditorSelection,
   text: string,
 ): PasteResult {
+  // Work on fresh LineState copies so callers don't observe our in-place mutations.
   const newLines = lines.map(l => new LineState(l.text, l.cursorPosition, l.noteIds))
 
   if (hasSel(selection)) {
-    // Replace selection with text
-    const fullText = lines.map(l => l.text).join('\n')
-    const sMin = Math.max(0, Math.min(selMin(selection), fullText.length))
-    const sMax = Math.max(0, Math.min(selMax(selection), fullText.length))
-    const newText = fullText.substring(0, sMin) + text + fullText.substring(sMax)
-    const cursorPos = sMin + text.length
-    const rebuilt = rebuildWithNoteIds(newText.split('\n'), lines)
-    const [lineIdx, localOff] = getLineAndLocalOffset(rebuilt, cursorPos)
-    rebuilt[lineIdx]?.updateFull(rebuilt[lineIdx]!.text, localOff)
-    return { lines: rebuilt, cursorLineIndex: lineIdx, cursorPosition: localOff }
+    // Surgical replace: delete the selected range across `newLines` and splice
+    // `text` at the start. Merges startLine's prefix + text + endLine's suffix
+    // onto startLine, preserving startLine's noteIds. Replaces a prior round-
+    // trip (lines→text→lines via rebuildWithNoteIds) that matched by content
+    // and silently dropped noteIds on non-exact matches.
+    const [startLine, startLocal] = getLineAndLocalOffset(newLines, selMin(selection))
+    const [endLine, endLocal] = getLineAndLocalOffset(newLines, selMax(selection))
+    const startLineState = newLines[startLine]!
+    const endLineState = newLines[endLine]!
+
+    const prefix = startLineState.text.substring(0, startLocal)
+    const suffix = endLineState.text.substring(endLocal)
+    const newText = prefix + text + suffix
+    const newCursor = startLocal + text.length
+
+    // Mirror EditorState.replaceRangeSurgical's edge-id handling: if startLine's
+    // content was fully consumed by the selection and no text is being inserted,
+    // the surviving line is effectively endLine — adopt its noteIds.
+    const takeEndIds = startLine !== endLine && startLocal === 0 && text === ''
+    startLineState.updateFull(newText, newCursor)
+    if (takeEndIds) startLineState.noteIds = endLineState.noteIds
+
+    if (endLine > startLine) newLines.splice(startLine + 1, endLine - startLine)
+    return { lines: newLines, cursorLineIndex: startLine, cursorPosition: newCursor }
   }
 
   // Insert at cursor
@@ -166,7 +182,11 @@ function buildMergedPastedLines(destLine: LineState, parsed: ParsedLine[]): Line
   return parsed.map(p => {
     const newIndent = Math.max(0, p.indent + indentDelta)
     const bullet = p.bullet || destBullet
-    return new LineState(buildLineText({ indent: newIndent, bullet, content: p.content }))
+    return new LineState(
+      buildLineText({ indent: newIndent, bullet, content: p.content }),
+      undefined,
+      [newSentinelNoteId('paste')],
+    )
   })
 }
 
@@ -197,11 +217,12 @@ function applyStructuredPaste(
 ): PasteResult {
   // Determine the destination line(s) and split points
   let destLineIndex: number
-  let splitOffset: number         // cursor offset within line.text
-  let trailingText: string        // text after split in last affected line
-  let trailingPrefix: string      // prefix for trailing half
-  let beforeLines: LineState[]    // lines before the affected region
-  let afterLines: LineState[]     // lines after the affected region
+  let splitOffset: number              // cursor offset within line.text
+  let trailingText: string             // text after split in last affected line
+  let trailingPrefix: string           // prefix for trailing half
+  let trailingSourceLine: LineState    // line that supplied the trailing text
+  let beforeLines: LineState[]         // lines before the affected region
+  let afterLines: LineState[]          // lines after the affected region
 
   if (hasSel(selection)) {
     const fullText = lines.map(l => l.text).join('\n')
@@ -215,6 +236,7 @@ function applyStructuredPaste(
     splitOffset = startLocal
     trailingText = lines[endLine]!.text.substring(endLocal)
     trailingPrefix = extractPrefix(lines[endLine]!.text)
+    trailingSourceLine = lines[endLine]!
     beforeLines = lines.slice(0, startLine)
     afterLines = lines.slice(endLine + 1)
   } else {
@@ -223,6 +245,7 @@ function applyStructuredPaste(
     splitOffset = line.cursorPosition
     trailingText = line.text.substring(splitOffset)
     trailingPrefix = extractPrefix(line.text)
+    trailingSourceLine = line
     beforeLines = lines.slice(0, destLineIndex)
     afterLines = lines.slice(destLineIndex + 1)
   }
@@ -233,13 +256,15 @@ function applyStructuredPaste(
 
   const pastedLines = buildMergedPastedLines(destLine, parsed)
 
-  // Rule 2: build leading half, pasted lines, trailing half
+  // Identity flow mirrors insertTextAt: leading keeps destLine's noteIds;
+  // trailing gets a SPLIT sentinel when leading also exists, else inherits its
+  // source line's noteIds.
   const result: LineState[] = [...beforeLines]
 
   // Leading half (text before cursor on the destination line)
   const hasLeadingContent = leadingContent.length > 0
   if (hasLeadingContent) {
-    result.push(new LineState(leadingText))
+    result.push(new LineState(leadingText, undefined, destLine.noteIds))
   }
 
   // Pasted lines
@@ -255,10 +280,9 @@ function applyStructuredPaste(
   // content replaces them.
   if (hasTrailingContent) {
     const trailingLine = trailingPrefix + trailingContent
-    // Preserve the destination line's noteIds when the trailing half is the
-    // unsplit remainder (cursor was at position 0 or within the prefix).
-    const trailingNoteIds = !hasLeadingContent && !hasSel(selection)
-      ? destLine.noteIds : []
+    const trailingNoteIds = !hasLeadingContent
+      ? trailingSourceLine.noteIds
+      : [newSentinelNoteId('split')]
     result.push(new LineState(trailingLine, undefined, trailingNoteIds))
   }
 
@@ -289,7 +313,9 @@ function recoverCutNoteIds(resultLines: LineState[], cutLines: LineState[]): voi
   }
 
   for (const line of resultLines) {
-    if (line.noteIds.length > 0) continue
+    // Sentinels are placeholders that should be replaced by cut ids, same as
+    // empty noteIds. Only skip lines with a real doc id already.
+    if (isRealNoteId(line.noteIds[0])) continue
     const content = line.text.substring(extractPrefix(line.text).length)
     const entries = contentToNoteIds.get(content)
     if (entries && entries.length > 0) {
@@ -332,5 +358,10 @@ function rebuildWithNoteIds(newTexts: string[], oldLines: LineState[]): LineStat
     },
   )
 
-  return newTexts.map((t, i) => new LineState(t, undefined, matchedNoteIds[i] ?? []))
+  return newTexts.map((t, i) => {
+    // If content-match didn't find a prior id, stamp a PASTE sentinel so
+    // save-time attribution can trace this back to the paste path.
+    const ids = matchedNoteIds[i] ?? [newSentinelNoteId('paste')]
+    return new LineState(t, undefined, ids)
+  })
 }

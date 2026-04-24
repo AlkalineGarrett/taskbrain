@@ -67,15 +67,27 @@ export class InlineSessionManager {
     if (session.getText() === newContent) return
 
     const storeLines = noteStore.getNoteLinesById(noteId)
-    if (storeLines) {
-      const noteLines = storeLines.map(nl => ({
-        text: nl.content,
-        noteIds: nl.noteId ? [nl.noteId] : [],
-      }))
-      session.editorState.initFromNoteLines(noteLines, true)
-    } else {
-      session.editorState.updateFromText(newContent)
+    if (!storeLines) {
+      // No structured lines available — the note vanished from the store
+      // (mid-save echo gap, delete, etc.). Skip the sync; the prior session
+      // state is closer to truth than what updateFromText would produce,
+      // since that path reconciles by content match and silently drops
+      // noteIds whose lines no longer match. A subsequent snapshot that
+      // restores the note will trigger another syncExternalChanges call.
+      // Benign during mid-save echo / just-deleted-note races. The next
+      // snapshot that restores structured lines will trigger another sync.
+      console.debug(
+        `InlineSessionManager.syncExternalChanges(${noteId}): skipping — ` +
+        `NoteStore has no structured lines.`,
+      )
+      return
     }
+
+    const noteLines = storeLines.map(nl => ({
+      text: nl.content,
+      noteIds: nl.noteId ? [nl.noteId] : [],
+    }))
+    session.editorState.initFromNoteLines(noteLines, true)
     session.syncOriginalContent(newContent)
     session.updateHiddenIndices()
   }

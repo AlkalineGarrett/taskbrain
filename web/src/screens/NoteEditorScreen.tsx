@@ -17,6 +17,7 @@ import { extractDisplayText } from '@/data/TabState'
 import { LOADING_NOTE, DELETE_NOTE, DELETE_NOTE_CONFIRM_TITLE, DELETE_NOTE_CONFIRM_MESSAGE, SAVE_ERROR_BANNER, SAVE_ERROR_DISMISS, SYNC_ERROR_BANNER } from '@/strings'
 import { db, auth } from '@/firebase/config'
 import { LineState } from '@/editor/LineState'
+import { newSentinelNoteId } from '@/data/NoteIdSentinel'
 import { ActiveEditorContext, type ActiveEditorContextValue } from '@/editor/ActiveEditorContext'
 import type { InlineEditSession } from '@/editor/InlineEditSession'
 import { InlineSessionManager } from '@/editor/InlineSessionManager'
@@ -70,10 +71,13 @@ export function NoteEditorScreen() {
       if (mutation.noteId === noteId) {
         switch (mutation.mutationType) {
           case MutationType.CONTENT_CHANGED: {
-            // Update first line (content change = note name change)
-            const currentLines = editorState.lines.map((l) => l.text)
-            currentLines[0] = mutation.updatedNote.content
-            editorState.lines = currentLines.map((t) => new LineState(t))
+            // Surgical: only line 0 changed — modify it in place so the rest
+            // of the editor retains its noteIds. (The prior roundtrip through
+            // `.map(l => l.text)` → `new LineState(t)` wiped every line's id.)
+            const first = editorState.lines[0]
+            if (first) {
+              first.updateFull(mutation.updatedNote.content, mutation.updatedNote.content.length)
+            }
             editorState.requestFocusUpdate()
             editorState.notifyChange()
             controller.resetUndoHistory()
@@ -83,7 +87,7 @@ export function NoteEditorScreen() {
             if (mutation.appendedText) {
               const newLines = mutation.appendedText.split('\n')
               for (const lineText of newLines) {
-                editorState.lines.push(new LineState(lineText))
+                editorState.lines.push(new LineState(lineText, undefined, [newSentinelNoteId('directive')]))
               }
               editorState.requestFocusUpdate()
               editorState.notifyChange()

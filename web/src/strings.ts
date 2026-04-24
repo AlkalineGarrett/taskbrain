@@ -195,7 +195,7 @@ export const SCHEDULE_FAILED = 'Failed'
 export const DIRECTIVE_PLACEHOLDER = 'Directive source...'
 export const EMPTY_VIEW = '[empty view]'
 
-// Save error banner (Android: warning_save_failed, action_dismiss)
+// Save error banner (web-only; Android surfaces save warnings via a dialog)
 export const SAVE_ERROR_BANNER = 'Your changes may not have been saved'
 export const SAVE_ERROR_DISMISS = 'Dismiss'
 

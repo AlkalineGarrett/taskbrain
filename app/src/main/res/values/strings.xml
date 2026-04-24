@@ -232,7 +232,6 @@
 
     <!-- Save warnings -->
     <string name="warning_save_failed_title">Save Warning</string>
-    <string name="warning_save_failed">Your changes may not have been saved</string>
 
     <!-- Sync warnings -->
     <string name="warning_sync_error">Note sync interrupted — changes from other devices may not appear</string>

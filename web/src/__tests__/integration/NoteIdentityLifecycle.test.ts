@@ -230,10 +230,12 @@ describe('edit operations preserve identity through save cycle', () => {
     state.lines[1]!.updateFull('\tHello World', 6)
     controller.splitLine(1)
 
-    // Longer fragment (" World" = 6 chars content > "Hello" = 5 chars) keeps noteId
+    // Longer fragment (" World" = 6 chars content > "Hello" = 5 chars) keeps noteId;
+    // shorter fragment gets a SPLIT sentinel.
     expect(state.lines[1]!.text).toBe('\tHello')
     expect(state.lines[2]!.text).toBe('\t World')
-    expect(state.lines[1]!.noteIds).toEqual([])
+    expect(state.lines[1]!.noteIds.length).toBe(1)
+    expect(state.lines[1]!.noteIds[0]).toMatch(/^@split_/)
     expect(state.lines[2]!.noteIds).toEqual(['task1'])
 
     // Save — matchLinesToIds uses similarity-based matching

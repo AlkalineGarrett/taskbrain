@@ -6,6 +6,7 @@ import { parseClipboardContent } from './ClipboardParser'
 import { sortCompletedToBottomIndexed } from './CompletedLineUtils'
 import { executePaste } from './PasteHandler'
 import { splitNoteIds } from './ContentSimilarity'
+import { isSentinelNoteId } from '@/data/NoteIdSentinel'
 
 export enum OperationType {
   COMMAND_BULLET = 'COMMAND_BULLET',
@@ -584,6 +585,8 @@ export class EditorController {
 
     const beforeHasContent = beforeCursor.length > prefix.length
     const afterHasContent = afterCursor.length > 0
+    // splitNoteIds stamps SPLIT sentinels on any content-bearing side without
+    // an id, so save-time attribution is consistent.
     const [currentNoteIds, newNoteIds] = splitNoteIds(
       noteIds,
       beforeCursor.length - prefix.length,
@@ -869,9 +872,22 @@ interface MergedNoteIds {
  * and records per-noteId content lengths for correct distribution on re-split.
  */
 function mergeNoteIds(lineA: LineState, lineB: LineState): MergedNoteIds {
-  const allIds = [...new Set([...lineA.noteIds, ...lineB.noteIds])]
+  const combined = [...new Set([...lineA.noteIds, ...lineB.noteIds])]
   const contentLengths = [...buildMergedContentLengths(lineA), ...buildMergedContentLengths(lineB)]
-  return { noteIds: allIds, contentLengths }
+  // A sentinel is a "needs a fresh doc" marker. If the merge brings in a real
+  // id alongside a sentinel, the real id wins and the sentinel is dropped.
+  const hasReal = combined.some(id => !isSentinelNoteId(id))
+  if (!hasReal) return { noteIds: combined, contentLengths }
+  const alignedLengths = contentLengths.length === combined.length
+    ? combined
+        .map((id, i): [string, number] => [id, contentLengths[i]!])
+        .filter(([id]) => !isSentinelNoteId(id))
+        .map(([, len]) => len)
+    : contentLengths
+  return {
+    noteIds: combined.filter(id => !isSentinelNoteId(id)),
+    contentLengths: alignedLengths,
+  }
 }
 
 /**

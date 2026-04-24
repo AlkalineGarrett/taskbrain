@@ -964,13 +964,26 @@ private fun EditableViewNoteSection(
     // Update existing session content in place on external changes (same pattern as
     // main editor's initFromNoteLines). Skipped when the session has unsaved edits.
     if (editContent != session.originalContent && !session.isDirty) {
-        val storeLines = NoteStore.getNoteLinesByIdOrSynthesize(note.id, editContent)
-        session.editorState.initFromNoteLines(
-            storeLines.map { nl -> nl.content to (nl.noteId?.let { listOf(it) } ?: emptyList()) },
-            preserveCursor = true,
-        )
-        session.syncOriginalContent(editContent)
-        session.editorState.requestFocusUpdate()
+        val storeLines = NoteStore.getNoteLinesById(note.id)
+        if (storeLines != null) {
+            session.editorState.initFromNoteLines(
+                storeLines.map { nl -> nl.content to (nl.noteId?.let { listOf(it) } ?: emptyList()) },
+                preserveCursor = true,
+            )
+            session.syncOriginalContent(editContent)
+            session.editorState.requestFocusUpdate()
+        } else {
+            // No structured lines available — the note vanished from NoteStore
+            // (mid-save echo gap, delete, etc.). Syncing via the synthesize
+            // fallback would wipe every non-root noteId in the existing session,
+            // producing bare-null ids at save. Skip the sync; a subsequent
+            // snapshot that restores structured lines will trigger again.
+            android.util.Log.w(
+                "DirectiveAwareLineInput",
+                "Skipping external-change sync for ${note.id}: NoteStore has no " +
+                    "structured lines (would wipe session noteIds via synthesize fallback).",
+            )
+        }
     }
 
     // When editing starts, register the SAME session as active (no new session)

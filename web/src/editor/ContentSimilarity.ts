@@ -6,6 +6,8 @@
  * after a line split.
  */
 
+import { newSentinelNoteId } from '@/data/NoteIdSentinel'
+
 /**
  * Returns the proportion of oldContent that appears in newContent,
  * measured by longest common subsequence length / old content length.
@@ -106,15 +108,24 @@ export function splitNoteIds(
   afterHasContent: boolean,
   noteIdContentLengths: number[] = [],
 ): [string[], string[]] {
-  if (!beforeHasContent && afterHasContent) return [[], noteIds]
-  if (beforeHasContent && !afterHasContent) return [noteIds, []]
+  let before: string[]
+  let after: string[]
+  if (!beforeHasContent && afterHasContent) { before = []; after = noteIds }
+  else if (beforeHasContent && !afterHasContent) { before = noteIds; after = [] }
+  else if (noteIds.length > 1 && noteIdContentLengths.length === noteIds.length) {
+    [before, after] = distributeNoteIdsByOverlap(noteIds, beforeContentLen, noteIdContentLengths)
+  } else if (beforeContentLen >= afterContentLen) { before = noteIds; after = [] }
+  else { before = []; after = noteIds }
+  // Stamp SPLIT sentinels on any content-bearing side without an id so
+  // save-time attribution ("where did this fresh doc come from?") is consistent.
+  return [
+    stampSplitSentinelIfNeeded(before, beforeHasContent),
+    stampSplitSentinelIfNeeded(after, afterHasContent),
+  ]
+}
 
-  // Multiple noteIds with content-length metadata — distribute by overlap
-  if (noteIds.length > 1 && noteIdContentLengths.length === noteIds.length) {
-    return distributeNoteIdsByOverlap(noteIds, beforeContentLen, noteIdContentLengths)
-  }
-
-  return beforeContentLen >= afterContentLen ? [noteIds, []] : [[], noteIds]
+function stampSplitSentinelIfNeeded(ids: string[], hasContent: boolean): string[] {
+  return ids.length === 0 && hasContent ? [newSentinelNoteId('split')] : ids
 }
 
 function distributeNoteIdsByOverlap(

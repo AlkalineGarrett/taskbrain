@@ -31,7 +31,9 @@ class NoteRepositoryTest {
         mockkObject(NoteStore)
         every { NoteStore.getDescendantIds(any()) } returns emptySet()
         every { NoteStore.getAllDescendantIds(any()) } returns emptySet()
+        every { NoteStore.getLiveDescendantsByParent(any()) } returns emptyMap()
         every { NoteStore.getNoteById(any()) } returns null
+        every { NoteStore.raiseWarning(any()) } just Runs
 
         repository = NoteRepository(mockFirestore, mockAuth)
     }
@@ -260,6 +262,81 @@ class NoteRepositoryTest {
     }
 
     @Test
+    fun `saveNoteWithChildren raises user warning when null noteIds were recovered`() = runTest {
+        // A bare null noteId reaching save means an upstream editor path wiped
+        // a real id. The reconciliation recovers the data from rawNotes, but
+        // the user should still see a warning so the underlying bug isn't
+        // masked by the silent recovery.
+        mockDocument("note_1", Note(id = "note_1", containedNotes = listOf("c1")))
+        mockDocument("c1", null)
+        val existingChild = Note(id = "c1", content = "• Item A", parentNoteId = "note_1", rootNoteId = "note_1")
+        every { NoteStore.getDescendantIds("note_1") } returns setOf("c1")
+        every { NoteStore.getRawNoteById("c1") } returns existingChild
+        every { NoteStore.getLiveDescendantsByParent("note_1") } returns
+            mapOf("note_1" to ArrayDeque(listOf(existingChild)))
+        mockBatch()
+
+        repository.saveNoteWithChildren(
+            "note_1",
+            listOf(NoteLine("Parent", "note_1"), NoteLine("• Item A", null)),
+        ).getOrThrow()
+
+        // Warning must reach the user via NoteStore.raiseWarning (which the VM
+        // observes and routes to the save-warning dialog).
+        verify(atLeast = 1) { NoteStore.raiseWarning(match { it.contains("line ID") }) }
+    }
+
+    @Test
+    fun `saveNoteWithChildren does NOT raise warning when only sentinel noteIds were recovered`() = runTest {
+        // Sentinels are expected placeholders from paste / split / etc. Matching
+        // a sentinel to an existing doc via content is normal (cut+paste within
+        // the same note) and should be silent — no dialog to the user.
+        mockDocument("note_1", Note(id = "note_1", containedNotes = listOf("c1")))
+        mockDocument("c1", null)
+        val existingChild = Note(id = "c1", content = "• Item A", parentNoteId = "note_1", rootNoteId = "note_1")
+        every { NoteStore.getDescendantIds("note_1") } returns setOf("c1")
+        every { NoteStore.getRawNoteById("c1") } returns existingChild
+        every { NoteStore.getLiveDescendantsByParent("note_1") } returns
+            mapOf("note_1" to ArrayDeque(listOf(existingChild)))
+        mockBatch()
+
+        val sentinel = NoteIdSentinel.new(NoteIdSentinel.Origin.PASTE)
+        repository.saveNoteWithChildren(
+            "note_1",
+            listOf(NoteLine("Parent", "note_1"), NoteLine("• Item A", sentinel)),
+        ).getOrThrow()
+
+        verify(exactly = 0) { NoteStore.raiseWarning(any()) }
+    }
+
+    @Test
+    fun `saveNoteWithChildren strips sentinel noteIds and allocates fresh docs`() = runTest {
+        // Sentinels are placeholders from creation paths (paste, split, etc.).
+        // The save must treat them as "allocate fresh", not try to use them
+        // as real Firestore doc ids.
+        mockDocument("note_1", null)
+        val childRef = mockk<DocumentReference> { every { id } returns "fresh_id" }
+        every { mockCollection.document() } returns childRef
+        val batch = mockBatch()
+
+        val sentinel = NoteIdSentinel.new(NoteIdSentinel.Origin.PASTE)
+        val result = repository.saveNoteWithChildren(
+            "note_1",
+            listOf(NoteLine("Parent", "note_1"), NoteLine("\tPasted line", sentinel))
+        ).getOrThrow()
+
+        assertEquals("fresh Firestore id replaces the sentinel", "fresh_id", result[1])
+
+        // Sentinel lines must be written via the CREATE path (non-merge) with
+        // userId; otherwise Firestore rejects as PERMISSION_DENIED.
+        val createdPayload = slot<Map<String, Any?>>()
+        verify { batch.set(childRef, capture(createdPayload)) }
+        assertEquals(USER_ID, createdPayload.captured["userId"])
+        assertEquals("Pasted line", createdPayload.captured["content"])
+        verify(exactly = 0) { batch.set(childRef, any(), any<SetOptions>()) }
+    }
+
+    @Test
     fun `saveNoteWithChildren updates existing child notes`() = runTest {
         mockDocument("note_1", Note(containedNotes = listOf("child_1")))
         mockDocument("child_1", null)
@@ -305,6 +382,44 @@ class NoteRepositoryTest {
 
         assertEquals(1, result.size)
         assertEquals("child_1", result[1])
+    }
+
+    @Test
+    fun `saveNoteWithChildren recovers null noteIds by parent+content against rawNotes`() = runTest {
+        // Reproduces the observed bug where the editor's tracked lines have lost
+        // noteIds for items that still exist in Firestore with matching content.
+        // Without reconciliation the save would allocate fresh docs and the
+        // content-drop guard would abort.
+        mockDocument("note_1", Note(id = "note_1", containedNotes = listOf("decided", "undecided")))
+        mockDocument("decided", null)
+        mockDocument("undecided", null)
+        mockDocument("dining", null)
+        val decided = Note(id = "decided", content = "• Decided", parentNoteId = "note_1", rootNoteId = "note_1")
+        val undecided = Note(id = "undecided", content = "• Undecided", parentNoteId = "note_1", rootNoteId = "note_1")
+        val dining = Note(id = "dining", content = "• Dining table", parentNoteId = "decided", rootNoteId = "note_1")
+        every { NoteStore.getDescendantIds("note_1") } returns setOf("decided", "undecided", "dining")
+        every { NoteStore.getRawNoteById("decided") } returns decided
+        every { NoteStore.getRawNoteById("undecided") } returns undecided
+        every { NoteStore.getRawNoteById("dining") } returns dining
+        every { NoteStore.getLiveDescendantsByParent("note_1") } returns mapOf(
+            "note_1" to ArrayDeque(listOf(decided, undecided)),
+            "decided" to ArrayDeque(listOf(dining)),
+        )
+        mockBatch()
+
+        val result = repository.saveNoteWithChildren(
+            "note_1",
+            listOf(
+                NoteLine("Parent", "note_1"),
+                NoteLine("• Decided", null),       // was cUa99-style; lost its id
+                NoteLine("\t• Dining table", null), // was aE5e-style; lost its id
+                NoteLine("• Undecided", null),     // was wvKV-style; lost its id
+            )
+        )
+
+        // Reconciliation should have matched the three lines against existing
+        // descendants — no orphan deletes, save succeeds.
+        assertTrue("save should succeed after reconciliation, got $result", result.isSuccess)
     }
 
     @Test

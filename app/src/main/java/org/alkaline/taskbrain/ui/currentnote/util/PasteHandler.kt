@@ -1,5 +1,6 @@
 package org.alkaline.taskbrain.ui.currentnote.util
 
+import org.alkaline.taskbrain.data.NoteIdSentinel
 import org.alkaline.taskbrain.ui.currentnote.LineState
 import org.alkaline.taskbrain.ui.currentnote.selection.EditorSelection
 import org.alkaline.taskbrain.ui.currentnote.selection.SelectionCoordinates
@@ -163,7 +164,10 @@ object PasteHandler {
         return parsed.map { p ->
             val newIndent = maxOf(0, p.indent + indentDelta)
             val bullet = p.bullet.ifEmpty { destBullet }
-            LineState(ParsedLine(newIndent, bullet, p.content).toLineText())
+            LineState(
+                ParsedLine(newIndent, bullet, p.content).toLineText(),
+                noteIds = listOf(NoteIdSentinel.new(NoteIdSentinel.Origin.PASTE)),
+            )
         }
     }
 
@@ -196,6 +200,7 @@ object PasteHandler {
         val splitOffset: Int
         val trailingText: String
         val trailingPrefix: String
+        val trailingSourceLine: LineState
         val beforeLines: List<LineState>
         val afterLines: List<LineState>
 
@@ -211,6 +216,7 @@ object PasteHandler {
             splitOffset = startLocal
             trailingText = lines[endLine].text.substring(endLocal)
             trailingPrefix = LineState.extractPrefix(lines[endLine].text)
+            trailingSourceLine = lines[endLine]
             beforeLines = lines.subList(0, startLine)
             afterLines = lines.subList(endLine + 1, lines.size)
         } else {
@@ -219,6 +225,7 @@ object PasteHandler {
             splitOffset = line.cursorPosition
             trailingText = line.text.substring(splitOffset)
             trailingPrefix = LineState.extractPrefix(line.text)
+            trailingSourceLine = line
             beforeLines = lines.subList(0, destLineIndex)
             afterLines = lines.subList(destLineIndex + 1, lines.size)
         }
@@ -229,13 +236,15 @@ object PasteHandler {
 
         val pastedLines = buildMergedPastedLines(destLine, parsed)
 
-        // Rule 2: build leading half, pasted lines, trailing half
+        // Identity flow mirrors EditorState.insertTextAt: leading keeps
+        // destLine's noteIds; trailing gets a SPLIT sentinel when leading also
+        // exists, else inherits its source line's noteIds.
         val result = mutableListOf<LineState>()
         result.addAll(beforeLines)
 
         val hasLeadingContent = leadingContent.isNotEmpty()
         if (hasLeadingContent) {
-            result.add(LineState(leadingText))
+            result.add(LineState(leadingText, noteIds = destLine.noteIds))
         }
 
         result.addAll(pastedLines)
@@ -246,10 +255,8 @@ object PasteHandler {
         // or prefix-only (e.g. bare "☐ ") have nothing worth preserving — the pasted
         // content replaces them.
         if (hasTrailingContent) {
-            // Preserve the destination line's noteIds when the trailing half is the
-            // unsplit remainder (cursor was at position 0 or within the prefix).
-            val trailingNoteIds = if (!hasLeadingContent && !selection.hasSelection)
-                destLine.noteIds else emptyList()
+            val trailingNoteIds = if (!hasLeadingContent) trailingSourceLine.noteIds
+                else listOf(NoteIdSentinel.new(NoteIdSentinel.Origin.SPLIT))
             result.add(LineState(trailingPrefix + trailingContent, noteIds = trailingNoteIds))
         }
 
@@ -275,7 +282,9 @@ object PasteHandler {
         }
 
         for (line in resultLines) {
-            if (line.noteIds.isNotEmpty()) continue
+            // Sentinels are placeholders that should be replaced by cut ids,
+            // same as empty noteIds. Only skip lines with a real doc id already.
+            if (NoteIdSentinel.isRealNoteId(line.noteIds.firstOrNull())) continue
             val content = line.text.drop(LineState.extractPrefix(line.text).length)
             val entries = contentToNoteIds[content]
             if (entries != null && entries.isNotEmpty()) {
@@ -309,7 +318,10 @@ object PasteHandler {
                 noteIds = oldNoteIds[index]
                 oldConsumed[index] = true
             }
-            LineState(lineText, lineText.length, noteIds)
+            // If content-match didn't find a prior id, stamp a PASTE sentinel
+            // so save-time attribution can trace this back to the paste path.
+            val finalIds = noteIds.ifEmpty { listOf(NoteIdSentinel.new(NoteIdSentinel.Origin.PASTE)) }
+            LineState(lineText, lineText.length, finalIds)
         }
     }
 }

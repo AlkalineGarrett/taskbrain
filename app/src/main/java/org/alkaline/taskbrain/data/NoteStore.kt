@@ -47,6 +47,16 @@ object NoteStore {
     }
 
     /**
+     * Raise a user-visible warning from anywhere in the data layer. The
+     * ViewModel's `NoteStore.error` collector routes it to
+     * `directiveManager.setSaveWarning` which pops the warning dialog —
+     * same channel the reconstruction errors used to flow through.
+     */
+    fun raiseWarning(message: String) {
+        _error.value = message
+    }
+
+    /**
      * IDs of top-level notes whose reconstruction had to auto-heal a
      * discrepancy (orphan ref dropped or stray child appended). The editor
      * shows the healed content; saving a note in this set writes the fix
@@ -229,6 +239,21 @@ object NoteStore {
         descendantIdsOf(noteId, rawNotes, includeDeleted = true)
     }
 
+    /**
+     * Live descendants of [rootNoteId] grouped by parent id. Used by the
+     * save-side null-id recovery to look up candidate matches in O(1).
+     * Mirrors the web [NoteStore.getLiveDescendantsByParent].
+     */
+    fun getLiveDescendantsByParent(rootNoteId: String): Map<String, ArrayDeque<Note>> = rawNotesLock.read {
+        val byParent = HashMap<String, ArrayDeque<Note>>()
+        for (id in descendantIdsOf(rootNoteId, rawNotes)) {
+            val d = rawNotes[id] ?: continue
+            val p = d.parentNoteId ?: continue
+            byParent.getOrPut(p) { ArrayDeque() }.addLast(d)
+        }
+        byParent
+    }
+
     /** In-memory note by ID, falling back to Firestore if not cached. */
     suspend fun getNoteOrLoad(noteId: String, repository: NoteRepository): Note? =
         getRawNoteById(noteId) ?: repository.loadNoteById(noteId).getOrNull()
@@ -279,7 +304,19 @@ object NoteStore {
      */
     fun getNoteLinesByIdOrSynthesize(noteId: String, fallbackContent: String): List<NoteLine> {
         getNoteLinesById(noteId)?.let { return it }
-        return fallbackContent.split("\n").mapIndexed { index, line ->
+        val lines = fallbackContent.split("\n")
+        val nonRootNonEmpty = lines.drop(1).count { it.isNotEmpty() }
+        if (nonRootNonEmpty > 0) {
+            android.util.Log.w(
+                "NoteStore",
+                "getNoteLinesByIdOrSynthesize($noteId): NoteStore miss — synthesizing " +
+                    "$nonRootNonEmpty non-root line(s) with null noteIds. Caller should only " +
+                    "use this for NEW sessions, never for sync-on-external-change paths (those " +
+                    "must skip the update when NoteStore has no structured lines). " +
+                    "firstLine='${lines.firstOrNull()?.take(40)}'",
+            )
+        }
+        return lines.mapIndexed { index, line ->
             NoteLine(line, if (index == 0) noteId else null)
         }
     }

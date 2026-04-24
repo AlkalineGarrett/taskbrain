@@ -336,6 +336,45 @@ describe('NoteRepository', () => {
       expect(result.get(1)).toBe('child_1')
     })
 
+    it('sentinel noteIds are written to a fresh ref via CREATE with userId', async () => {
+      // Sentinels routed through the UPDATE (merge) path land on a nonexistent
+      // doc with no userId — Firestore rejects as PERMISSION_DENIED.
+      const freshRef = { id: 'fresh_id' } as any
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
+        if (args.length === 1) return freshRef
+        return { id: args[args.length - 1] } as any
+      })
+
+      const setSpy = vi.fn()
+      vi.mocked(mockRunTransaction).mockImplementation(async (_db, fn) => {
+        const transaction = {
+          get: vi.fn().mockResolvedValue({ exists: () => false, data: () => ({}) }),
+          set: setSpy,
+          update: vi.fn(),
+        }
+        return fn(transaction as any)
+      })
+
+      const sentinel = '@paste_abc123'
+      const result = await repository.saveNoteWithChildren('note_1', [
+        { content: 'Parent', noteId: 'note_1' },
+        { content: '\tPasted line', noteId: sentinel },
+      ])
+
+      expect(result.get(1)).toBe('fresh_id')
+
+      const writeToFreshRef = setSpy.mock.calls.find((c) => c[0] === freshRef)
+      expect(writeToFreshRef).toBeDefined()
+      expect(writeToFreshRef![1].userId).toBe(USER_ID)
+      expect(writeToFreshRef![1].content).toBe('Pasted line')
+      // No merge option → CREATE path.
+      expect(writeToFreshRef!.length).toBe(2)
+
+      // And no write was addressed to the sentinel id itself.
+      const writeToSentinel = setSpy.mock.calls.find((c) => c[0]?.id === sentinel)
+      expect(writeToSentinel).toBeUndefined()
+    })
+
     it('treats whitespace-only lines as content', async () => {
       vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
         if (args.length === 1) return { id: 'new_child' } as any

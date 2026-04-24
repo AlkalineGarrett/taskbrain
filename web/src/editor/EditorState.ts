@@ -9,6 +9,7 @@ import {
 import * as SC from './SelectionCoordinates'
 import * as IU from './IndentationUtils'
 import { performSimilarityMatching } from './ContentSimilarity'
+import { newSentinelNoteId } from '@/data/NoteIdSentinel'
 import * as MTF from './MoveTargetFinder'
 import * as ME from './MoveExecutor'
 
@@ -90,53 +91,106 @@ export class EditorState {
 
   deleteSelectionInternal(): number {
     if (!this.hasSelection) return -1
-
-    const fullText = this.text
     const [selStart, selEnd] = this.getEffectiveSelectionRange()
-    const newText = fullText.substring(0, selStart) + fullText.substring(selEnd)
-    const newCursorPos = selStart
-
-    this.updateFromText(newText)
+    const [lineA, offsetA] = this.getLineAndLocalOffset(selStart)
+    const [lineB, offsetB] = this.getLineAndLocalOffset(selEnd)
+    this.replaceRangeSurgical(lineA, offsetA, lineB, offsetB, '')
     this.clearSelection()
+    this.requestFocusUpdate()
+    this.notifyChange()
+    return selStart
+  }
 
-    const [lineIndex, localOffset] = this.getLineAndLocalOffset(newCursorPos)
-    this.focusedLineIndex = lineIndex
-    this.lines[lineIndex]?.updateFull(this.lines[lineIndex]!.text, localOffset)
-
+  replaceSelectionInternal(replacement: string): number {
+    let selStart: number
+    let selEnd: number
+    if (this.hasSelection) {
+      [selStart, selEnd] = this.getEffectiveSelectionRange()
+    } else {
+      const currentLine = this.lines[this.focusedLineIndex]
+      if (!currentLine) return 0
+      selStart = this.getLineStartOffset(this.focusedLineIndex) + currentLine.cursorPosition
+      selEnd = selStart
+    }
+    const [lineA, offsetA] = this.getLineAndLocalOffset(selStart)
+    const [lineB, offsetB] = this.getLineAndLocalOffset(selEnd)
+    this.replaceRangeSurgical(lineA, offsetA, lineB, offsetB, replacement)
+    const newCursorPos = selStart + replacement.length
+    this.removeEmptyLineAtCursor(newCursorPos)
+    this.clearSelection()
     this.requestFocusUpdate()
     this.notifyChange()
     return newCursorPos
   }
 
-  replaceSelectionInternal(replacement: string): number {
-    const fullText = this.text
-    let insertPos: number
-    let newText: string
+  /**
+   * Surgically replaces the range `[lineA:offsetA, lineB:offsetB)` with
+   * `replacement` (which may contain newlines), preserving noteIds on the
+   * edge lines (lineA and lineB). Middle lines whose content is entirely
+   * deleted are removed along with their noteIds; newly introduced middle
+   * lines from a multi-line replacement start with empty noteIds.
+   *
+   * Replaces the legacy roundtrip through `updateFromText` which reconciled
+   * noteIds by content match and silently dropped them on non-exact matches
+   * (the root cause of cut/paste-induced noteId wipes).
+   */
+  private replaceRangeSurgical(
+    lineA: number,
+    offsetA: number,
+    lineB: number,
+    offsetB: number,
+    replacement: string,
+  ): void {
+    const a = this.lines[lineA]
+    const b = this.lines[lineB]
+    if (!a || !b) return
 
-    if (this.hasSelection) {
-      const [selStart, selEnd] = this.getEffectiveSelectionRange()
-      insertPos = selStart
-      newText = fullText.substring(0, selStart) + replacement + fullText.substring(selEnd)
-    } else {
-      const currentLine = this.lines[this.focusedLineIndex]
-      if (!currentLine) return 0
-      insertPos = this.getLineStartOffset(this.focusedLineIndex) + currentLine.cursorPosition
-      newText = fullText.substring(0, insertPos) + replacement + fullText.substring(insertPos)
+    const prefix = a.text.substring(0, offsetA)
+    const suffix = b.text.substring(offsetB)
+    const parts = replacement.split('\n')
+
+    if (parts.length === 1) {
+      // No newlines in replacement: collapse to a single line.
+      // If lineA's full content was consumed by the selection (offsetA == 0)
+      // and the replacement's first part is empty, the surviving text comes
+      // entirely from lineB's suffix — so lineB's noteIds should carry, not
+      // lineA's. Otherwise keep lineA's noteIds (the dominant case for
+      // partial edits inside a line or spanning a partial prefix of A).
+      const newText = prefix + parts[0]! + suffix
+      const takeLineBIds = lineA !== lineB && offsetA === 0 && parts[0]! === ''
+      if (takeLineBIds) {
+        a.updateFull(newText, 0)
+        a.noteIds = b.noteIds
+      } else {
+        a.updateFull(newText, offsetA + parts[0]!.length)
+      }
+      if (lineA !== lineB) this.lines.splice(lineA + 1, lineB - lineA)
+      this.focusedLineIndex = lineA
+      return
     }
 
-    const newCursorPos = insertPos + replacement.length
+    // Replacement crosses line boundaries.
+    const first = parts[0]!
+    const last = parts[parts.length - 1]!
+    const middle = parts.slice(1, -1)
+    a.updateFull(prefix + first, offsetA + first.length)
 
-    this.updateFromText(newText)
-    this.removeEmptyLineAtCursor(newCursorPos)
-    this.clearSelection()
-
-    const [lineIndex, localOffset] = this.getLineAndLocalOffset(newCursorPos)
-    this.focusedLineIndex = lineIndex
-    this.lines[lineIndex]?.updateFull(this.lines[lineIndex]!.text, localOffset)
-
-    this.requestFocusUpdate()
-    this.notifyChange()
-    return newCursorPos
+    if (lineA === lineB) {
+      // One line split into multiple: everything after offsetA becomes new lines.
+      // Stamp a sentinel on each newly introduced LineState so the save layer
+      // can attribute fresh-doc allocations to the surgical-replace path.
+      const newLast = new LineState(last + suffix, last.length, [newSentinelNoteId('surgical')])
+      const mid = middle.map(t => new LineState(t, undefined, [newSentinelNoteId('surgical')]))
+      this.lines.splice(lineA + 1, 0, ...mid, newLast)
+      this.focusedLineIndex = lineA + 1 + middle.length
+    } else {
+      // Multi-line selection: reuse lineB as the trailing line so we retain its
+      // noteIds for the suffix that survived the selection.
+      b.updateFull(last + suffix, last.length)
+      const mid = middle.map(t => new LineState(t, undefined, [newSentinelNoteId('surgical')]))
+      this.lines.splice(lineA + 1, lineB - lineA - 1, ...mid)
+      this.focusedLineIndex = lineA + 1 + middle.length
+    }
   }
 
   /** Extends selection from anchor to the given global offset. Sets anchor from cursor if not yet set. */
@@ -331,8 +385,12 @@ export class EditorState {
     )
     if (!result) return null
 
-    // Reorder noteIds in parallel with text
-    const reorderedNoteIds = result.newLineOrder.map((oldIdx) => oldNoteIds[oldIdx] ?? [])
+    // Reorder noteIds in parallel with text. If the reorder introduces a
+    // line without a prior noteId entry (shouldn't happen, but defensive),
+    // stamp a SURGICAL sentinel so save-time attribution catches it.
+    const reorderedNoteIds = result.newLineOrder.map(
+      (oldIdx) => oldNoteIds[oldIdx] ?? [newSentinelNoteId('surgical')],
+    )
     this.lines = result.newLines.map((t, i) => new LineState(t, undefined, reorderedNoteIds[i]))
     this.focusedLineIndex = result.newFocusedLineIndex
     if (result.newSelection) {
@@ -354,6 +412,13 @@ export class EditorState {
     this.notifyChange()
   }
 
+  /**
+   * @deprecated Lossy — reconciles noteIds by content match and silently drops any
+   * line whose text doesn't exactly (or by LCS similarity) match an old line. Only
+   * retained because the agent-result rewrite path has no structured alternative.
+   * Do NOT reintroduce for editing operations (cut/paste/select-replace) — use
+   * `replaceRangeSurgical` via `deleteSelectionInternal`/`replaceSelectionInternal`.
+   */
   updateFromText(newText: string): void {
     const oldLines = this.lines
     const newLineTexts = newText.split('\n')
