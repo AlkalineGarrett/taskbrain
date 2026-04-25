@@ -252,6 +252,17 @@ private data class GutterLineLayout(
 )
 
 /**
+ * Height of the placeholder rendered for a contiguous hidden block.
+ * CompletedPlaceholderRow writes its measured height into lineLayouts[blockStart] so the
+ * gutter stays aligned with the editor — fall back to defaultLineHeight before that fires.
+ */
+private fun placeholderHeightAt(
+    lineLayouts: List<LineLayoutInfo>,
+    blockStart: Int,
+    fallback: Float
+): Float = lineLayouts.getOrNull(blockStart)?.height?.takeIf { it > 0f } ?: fallback
+
+/**
  * Computes gutter line layouts based on line heights and expanded directive gaps.
  * This provides deterministic positions for hit testing.
  */
@@ -271,14 +282,13 @@ private fun computeGutterLineLayouts(
 
     while (index < lineCount) {
         if (index in hiddenIndices) {
-            // Skip contiguous hidden block — add one placeholder-height entry
             val blockStart = index
             while (index < lineCount && index in hiddenIndices) {
                 index++
             }
-            // Map the placeholder to the first hidden line index for gesture purposes
-            result.add(GutterLineLayout(blockStart, currentY, defaultLineHeight))
-            currentY += defaultLineHeight
+            val placeholderHeight = placeholderHeightAt(lineLayouts, blockStart, defaultLineHeight)
+            result.add(GutterLineLayout(blockStart, currentY, placeholderHeight))
+            currentY += placeholderHeight
             continue
         }
 
@@ -388,12 +398,11 @@ private fun GutterContent(
     var index = 0
     while (index < lineCount) {
         if (index in hiddenIndices) {
-            // Skip contiguous hidden block — render one placeholder-height gutter box
-            val placeholderHeight = with(density) { DefaultLineHeight.toPx() }
             val blockStart = index
             while (index < lineCount && index in hiddenIndices) {
                 index++
             }
+            val placeholderHeight = placeholderHeightAt(lineLayouts, blockStart, defaultLineHeight)
             // Block is selected if any hidden line in it overlaps the selection
             val blockSelected = (blockStart until index).any { isLineInSelection(it, state) }
             GutterBox(

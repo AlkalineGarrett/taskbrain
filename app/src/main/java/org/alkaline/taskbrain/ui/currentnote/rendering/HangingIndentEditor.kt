@@ -603,10 +603,18 @@ private fun EditorContent(
         for (item in displayItems) {
             when (item) {
                 is CompletedLineUtils.DisplayItem.CompletedPlaceholder -> {
+                    val blockStart = item.blockStartIndex
                     CompletedPlaceholderRow(
                         count = item.count,
                         indentLevel = item.indentLevel,
-                        textStyle = textStyle
+                        textStyle = textStyle,
+                        onHeightMeasured = { height ->
+                            if (blockStart in lineLayouts.indices &&
+                                lineLayouts[blockStart].height != height
+                            ) {
+                                lineLayouts[blockStart] = lineLayouts[blockStart].copy(height = height)
+                            }
+                        }
                     )
                 }
                 is CompletedLineUtils.DisplayItem.VisibleLine -> {

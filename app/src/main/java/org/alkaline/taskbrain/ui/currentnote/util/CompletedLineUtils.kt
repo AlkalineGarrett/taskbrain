@@ -37,7 +37,11 @@ object CompletedLineUtils {
 
     sealed class DisplayItem {
         data class VisibleLine(val realIndex: Int) : DisplayItem()
-        data class CompletedPlaceholder(val count: Int, val indentLevel: Int) : DisplayItem()
+        data class CompletedPlaceholder(
+            val count: Int,
+            val indentLevel: Int,
+            val blockStartIndex: Int,
+        ) : DisplayItem()
     }
 
     /**
@@ -62,13 +66,14 @@ object CompletedLineUtils {
                 result.add(DisplayItem.VisibleLine(i))
                 i++
             } else {
+                val blockStart = i
                 val placeholderIndent = IndentationUtils.getIndentLevel(lines[i])
                 var count = 0
                 while (i < lines.size && i in hidden) {
                     if (IndentationUtils.getIndentLevel(lines[i]) == placeholderIndent) count++
                     i++
                 }
-                result.add(DisplayItem.CompletedPlaceholder(count, placeholderIndent))
+                result.add(DisplayItem.CompletedPlaceholder(count, placeholderIndent, blockStart))
             }
         }
         return result

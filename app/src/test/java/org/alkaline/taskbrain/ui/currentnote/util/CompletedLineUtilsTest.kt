@@ -97,7 +97,7 @@ class CompletedLineUtilsTest {
         val items = CompletedLineUtils.computeDisplayItems(lines, false)
         assertEquals(3, items.size)
         assertEquals(DisplayItem.VisibleLine(0), items[0])
-        assertEquals(DisplayItem.CompletedPlaceholder(2, 0), items[1])
+        assertEquals(DisplayItem.CompletedPlaceholder(2, 0, 1), items[1])
         assertEquals(DisplayItem.VisibleLine(3), items[2])
     }
 
@@ -108,7 +108,7 @@ class CompletedLineUtilsTest {
         assertEquals(3, items.size)
         assertEquals(DisplayItem.VisibleLine(0), items[0])
         // 1 top-level checked item at indent 0, 2 children at indent 1
-        assertEquals(DisplayItem.CompletedPlaceholder(1, 0), items[1])
+        assertEquals(DisplayItem.CompletedPlaceholder(1, 0, 1), items[1])
         assertEquals(DisplayItem.VisibleLine(4), items[2])
     }
 
@@ -119,7 +119,7 @@ class CompletedLineUtilsTest {
         assertEquals(4, items.size)
         assertEquals(DisplayItem.VisibleLine(0), items[0])
         assertEquals(DisplayItem.VisibleLine(1), items[1])
-        assertEquals(DisplayItem.CompletedPlaceholder(1, 1), items[2])
+        assertEquals(DisplayItem.CompletedPlaceholder(1, 1, 2), items[2])
         assertEquals(DisplayItem.VisibleLine(3), items[3])
     }
 
