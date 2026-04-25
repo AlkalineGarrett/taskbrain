@@ -1,6 +1,8 @@
 package org.alkaline.taskbrain.ui.currentnote.selection
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalClipboardManager
 import org.alkaline.taskbrain.dsl.directives.DirectiveResult
@@ -13,15 +15,18 @@ import org.alkaline.taskbrain.ui.currentnote.rendering.rememberHandlePositions
 
 /**
  * Selection infrastructure shared by both the main editor and inline view editors.
- * Provides context menu state, handle drag state, selection-completed callback,
- * and handle positions to the [content] slot, then renders the [SelectionOverlay]
- * (handles + context menu) afterwards.
+ * Wraps [content] and [SelectionOverlay] in a single Box so the overlay shares the
+ * content's coordinate origin — handle offsets are computed in the editor column's
+ * space and must render there. [modifier] is applied to the wrapping Box so any
+ * padding reaches both children and the in-line selection highlight stays aligned
+ * with the handles.
  */
 @Composable
 internal fun EditorSelectionLayer(
     state: EditorState,
     controller: EditorController,
     lineLayouts: List<LineLayoutInfo>,
+    modifier: Modifier = Modifier,
     gutterOffsetPx: Float = 0f,
     directiveResults: Map<String, DirectiveResult> = emptyMap(),
     content: @Composable (SelectionConfig) -> Unit
@@ -46,19 +51,21 @@ internal fun EditorSelectionLayer(
         onSelectionCompleted = onSelectionCompleted,
     )
 
-    content(config)
+    Box(modifier = modifier) {
+        content(config)
 
-    SelectionOverlay(
-        state = state,
-        controller = controller,
-        lineLayouts = lineLayouts,
-        handleDragState = handleDragState,
-        startHandlePosition = startHandlePosition,
-        endHandlePosition = endHandlePosition,
-        contextMenuState = contextMenuState,
-        clipboardManager = clipboardManager,
-        directiveResults = directiveResults
-    )
+        SelectionOverlay(
+            state = state,
+            controller = controller,
+            lineLayouts = lineLayouts,
+            handleDragState = handleDragState,
+            startHandlePosition = startHandlePosition,
+            endHandlePosition = endHandlePosition,
+            contextMenuState = contextMenuState,
+            clipboardManager = clipboardManager,
+            directiveResults = directiveResults
+        )
+    }
 }
 
 /**

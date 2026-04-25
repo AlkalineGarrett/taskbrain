@@ -12,6 +12,29 @@ import org.alkaline.taskbrain.ui.currentnote.EditorState
 import org.alkaline.taskbrain.ui.currentnote.gestures.LineLayoutInfo
 import org.alkaline.taskbrain.ui.currentnote.gestures.positionToGlobalOffset
 
+internal data class DragAnchor(
+    val anchorOffset: Int,
+    val fixedOffset: Int,
+    /**
+     * End handles whose anchor lands at offset 0 of a line must walk back to the end
+     * of the previous line so the resolved pixel position matches the rendered handle.
+     */
+    val forEndHandle: Boolean,
+)
+
+/**
+ * Picks the anchor end of [selection] for the given handle. Uses min/max (not start/end)
+ * so reverse selections drag the side the user is touching.
+ */
+internal fun pickDragAnchor(
+    selection: EditorSelection,
+    isStartHandle: Boolean,
+): DragAnchor = DragAnchor(
+    anchorOffset = if (isStartHandle) selection.min else selection.max,
+    fixedOffset = if (isStartHandle) selection.max else selection.min,
+    forEndHandle = !isStartHandle,
+)
+
 /**
  * Tracks drag state for a single selection handle.
  */
@@ -82,13 +105,17 @@ class HandleDragState {
 
         val handle = if (isStartHandle) startHandle else endHandle
 
-        // Initialize drag state if needed
         if (!handle.isActive) {
-            val selectionOffset = if (isStartHandle) state.selection.start else state.selection.end
-            val fixedOffset = if (isStartHandle) state.selection.end else state.selection.start
+            val anchor = pickDragAnchor(state.selection, isStartHandle)
             handle.initialize(
-                calculateHandlePosition(selectionOffset, state, lineLayouts, directiveResults = directiveResults),
-                fixedOffset
+                calculateHandlePosition(
+                    anchor.anchorOffset,
+                    state,
+                    lineLayouts,
+                    forEndHandle = anchor.forEndHandle,
+                    directiveResults = directiveResults,
+                ),
+                anchor.fixedOffset
             )
         }
 

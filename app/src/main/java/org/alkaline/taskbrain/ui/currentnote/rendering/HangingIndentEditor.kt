@@ -2,7 +2,6 @@ package org.alkaline.taskbrain.ui.currentnote.rendering
 
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.focusGroup
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -46,6 +45,7 @@ import org.alkaline.taskbrain.ui.currentnote.selection.SelectionHandle
 import org.alkaline.taskbrain.ui.currentnote.selection.rememberGutterSelectionState
 import org.alkaline.taskbrain.ui.currentnote.selection.SelectionBounds
 import org.alkaline.taskbrain.ui.currentnote.selection.calculateHandlePosition
+import org.alkaline.taskbrain.ui.currentnote.selection.pickDragAnchor
 import org.alkaline.taskbrain.ui.currentnote.selection.SelectionHandles
 import org.alkaline.taskbrain.ui.currentnote.selection.createMenuActions
 import org.alkaline.taskbrain.ui.currentnote.EditorConfig
@@ -76,24 +76,23 @@ internal fun rememberHandlePositions(
     gutterOffsetPx: Float,
     directiveResults: Map<String, DirectiveResult>
 ): Pair<HandlePosition?, HandlePosition?> {
-    val startHandlePosition by remember(state.selection, lineLayouts, gutterOffsetPx, directiveResults) {
-        derivedStateOf {
-            if (state.hasSelection) {
-                calculateHandlePosition(state.selection.min, state, lineLayouts, directiveResults = directiveResults)?.let { pos ->
-                    pos.copy(offset = Offset(pos.offset.x + gutterOffsetPx, pos.offset.y))
-                }
-            } else null
+    fun handlePosition(isStartHandle: Boolean): HandlePosition? {
+        if (!state.hasSelection) return null
+        val anchor = pickDragAnchor(state.selection, isStartHandle)
+        return calculateHandlePosition(
+            anchor.anchorOffset, state, lineLayouts,
+            forEndHandle = anchor.forEndHandle,
+            directiveResults = directiveResults,
+        )?.let { pos ->
+            pos.copy(offset = Offset(pos.offset.x + gutterOffsetPx, pos.offset.y))
         }
     }
 
+    val startHandlePosition by remember(state.selection, lineLayouts, gutterOffsetPx, directiveResults) {
+        derivedStateOf { handlePosition(isStartHandle = true) }
+    }
     val endHandlePosition by remember(state.selection, lineLayouts, gutterOffsetPx, directiveResults) {
-        derivedStateOf {
-            if (state.hasSelection) {
-                calculateHandlePosition(state.selection.max, state, lineLayouts, forEndHandle = true, directiveResults = directiveResults)?.let { pos ->
-                    pos.copy(offset = Offset(pos.offset.x + gutterOffsetPx, pos.offset.y))
-                }
-            } else null
-        }
+        derivedStateOf { handlePosition(isStartHandle = false) }
     }
 
     return startHandlePosition to endHandlePosition
@@ -189,30 +188,29 @@ fun HangingIndentEditor(
         controller = controller,
         lineLayouts = lineLayouts,
         gutterOffsetPx = gutterOffsetPx,
-        directiveResults = directiveResults
+        directiveResults = directiveResults,
+        modifier = modifier
     ) { selectionConfig ->
-        Box(modifier = modifier) {
-            EditorRow(
-                state = state,
-                controller = controller,
-                textStyle = textStyle,
-                focusRequesters = focusRequesters,
-                lineLayouts = lineLayouts,
-                viewConfiguration = viewConfiguration,
-                scrollState = scrollState,
-                showGutter = showGutter,
-                showCompleted = showCompleted,
-                gutterSelectionState = gutterSelectionState,
-                contextMenuState = selectionConfig.contextMenuState,
-                onEditorFocusChanged = onEditorFocusChanged,
-                onSelectionCompleted = selectionConfig.onSelectionCompleted,
-                directiveResults = directiveResults,
-                directiveCallbacks = directiveCallbacks,
-                buttonCallbacks = buttonCallbacks,
-                onSymbolTap = onSymbolTap,
-                symbolOverlaysProvider = symbolOverlaysProvider
-            )
-        }
+        EditorRow(
+            state = state,
+            controller = controller,
+            textStyle = textStyle,
+            focusRequesters = focusRequesters,
+            lineLayouts = lineLayouts,
+            viewConfiguration = viewConfiguration,
+            scrollState = scrollState,
+            showGutter = showGutter,
+            showCompleted = showCompleted,
+            gutterSelectionState = gutterSelectionState,
+            contextMenuState = selectionConfig.contextMenuState,
+            onEditorFocusChanged = onEditorFocusChanged,
+            onSelectionCompleted = selectionConfig.onSelectionCompleted,
+            directiveResults = directiveResults,
+            directiveCallbacks = directiveCallbacks,
+            buttonCallbacks = buttonCallbacks,
+            onSymbolTap = onSymbolTap,
+            symbolOverlaysProvider = symbolOverlaysProvider
+        )
     }
 }
 
