@@ -438,7 +438,24 @@ private fun GutterContent(
                     val noteState = inlineEditStateLocal.viewSessions[note.id]?.editorState
 
                     if (layouts != null && layouts.isNotEmpty() && noteState != null) {
-                        for (viewLineIdx in noteState.lines.indices) {
+                        val viewHidden = inlineEditStateLocal.viewSessions[note.id]?.controller?.hiddenIndices ?: emptySet()
+                        var viewLineIdx = 0
+                        while (viewLineIdx < noteState.lines.size) {
+                            if (viewLineIdx in viewHidden) {
+                                val blockStart = viewLineIdx
+                                while (viewLineIdx < noteState.lines.size && viewLineIdx in viewHidden) {
+                                    viewLineIdx++
+                                }
+                                val placeholderHeight = placeholderHeightAt(layouts, blockStart, defaultLineHeight)
+                                val blockSelected = (blockStart until viewLineIdx).any { isLineInSelection(it, noteState) }
+                                GutterBox(
+                                    height = with(density) { placeholderHeight.toDp() },
+                                    width = EditorConfig.GutterWidth,
+                                    isSelected = blockSelected,
+                                    gutterWidthPx = gutterWidthPx
+                                )
+                                continue
+                            }
                             val viewLayout = layouts.getOrNull(viewLineIdx)
                             val viewLineHeight = viewLayout?.height?.takeIf { it > 0f } ?: defaultLineHeight
                             val viewSelected = isLineInSelection(viewLineIdx, noteState)
@@ -448,6 +465,7 @@ private fun GutterContent(
                                 isSelected = viewSelected,
                                 gutterWidthPx = gutterWidthPx
                             )
+                            viewLineIdx++
                         }
                     } else {
                         val lineCountForNote = note.content.count { it == '\n' } + 1
@@ -513,7 +531,20 @@ internal fun computeNoteViewHeight(
     val session = inlineEditState.viewSessions[note.id]
     val noteState = session?.editorState
     return if (layouts != null && layouts.isNotEmpty() && noteState != null) {
-        layouts.sumOf { (it.height.takeIf { h -> h > 0f } ?: defaultLineHeight).toDouble() }.toFloat()
+        val hidden = session.controller.hiddenIndices
+        var sum = 0f
+        var i = 0
+        while (i < layouts.size) {
+            if (i in hidden) {
+                val blockStart = i
+                while (i < layouts.size && i in hidden) i++
+                sum += placeholderHeightAt(layouts, blockStart, defaultLineHeight)
+                continue
+            }
+            sum += layouts[i].height.takeIf { it > 0f } ?: defaultLineHeight
+            i++
+        }
+        sum
     } else {
         val lineCountForNote = note.content.count { it == '\n' } + 1
         lineCountForNote * defaultLineHeight
