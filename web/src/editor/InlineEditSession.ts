@@ -3,6 +3,7 @@ import { EditorState } from './EditorState'
 import { EditorController } from './EditorController'
 import { UndoManager } from './UndoManager'
 import { resolveNoteIds } from './resolveNoteIds'
+import { computeHiddenIndices } from './CompletedLineUtils'
 
 /**
  * Encapsulates a self-contained editing session for a view note.
@@ -37,10 +38,17 @@ export class InlineEditSession {
     this.updateHiddenIndices()
   }
 
-  /** Recompute hidden indices. No lines are hidden under the new empty-line
-   * model — every line is real and should participate in move operations. */
-  updateHiddenIndices(): void {
-    this.controller.hiddenIndices = new Set<number>()
+  /** Recompute hidden indices. When this session is rendered inside a parent
+   * editor's view directive, the parent's `showCompleted` overrides the embedded
+   * note's own setting. Pass `undefined` (the standalone case) to leave nothing
+   * hidden — every line is real and should participate in move operations. */
+  updateHiddenIndices(parentShowCompleted?: boolean): void {
+    if (parentShowCompleted === false) {
+      const lineTexts = this.editorState.lines.map((l) => l.text)
+      this.controller.hiddenIndices = computeHiddenIndices(lineTexts, false)
+    } else {
+      this.controller.hiddenIndices = new Set<number>()
+    }
   }
 
   get isDirty(): boolean {

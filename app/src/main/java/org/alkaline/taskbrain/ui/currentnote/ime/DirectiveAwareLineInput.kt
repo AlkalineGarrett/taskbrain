@@ -97,9 +97,12 @@ import org.alkaline.taskbrain.ui.currentnote.EditorController
 import org.alkaline.taskbrain.ui.currentnote.EditorId
 import org.alkaline.taskbrain.ui.currentnote.EditorState
 import org.alkaline.taskbrain.ui.currentnote.LocalInlineEditState
+import org.alkaline.taskbrain.ui.currentnote.LocalParentShowCompleted
 import org.alkaline.taskbrain.ui.currentnote.util.LocalSymbolOverlaysProvider
 import org.alkaline.taskbrain.ui.currentnote.LocalSelectionCoordinator
 import org.alkaline.taskbrain.ui.currentnote.InlineEditSession
+import org.alkaline.taskbrain.ui.currentnote.rendering.CompletedPlaceholderRow
+import org.alkaline.taskbrain.ui.currentnote.util.CompletedLineUtils
 import org.alkaline.taskbrain.ui.currentnote.util.SymbolOverlay
 import org.alkaline.taskbrain.ui.currentnote.util.drawSymbolOverlays
 import org.alkaline.taskbrain.ui.currentnote.util.hasVisibleBadges
@@ -1179,6 +1182,38 @@ private fun InlineNoteEditor(
     inlineEditState?.viewLineLayouts?.set(session.noteId, lineLayouts)
     inlineEditState?.viewGutterStates?.set(session.noteId, gutterSelectionState)
 
+    // The parent editor's showCompleted overrides this embedded note's own setting.
+    // When opened standalone (no parent context), parentShowCompleted is null and we
+    // leave hidden indices empty.
+    val parentShowCompleted = LocalParentShowCompleted.current
+    val lineTexts = editorState.lines.map { it.text }
+    val hiddenIndices = remember(lineTexts, parentShowCompleted) {
+        if (parentShowCompleted == false) {
+            CompletedLineUtils.computeHiddenIndices(lineTexts, false)
+        } else {
+            emptySet()
+        }
+    }
+    val recentlyCheckedSnapshot = remember(controller.recentlyCheckedIndices.toSet()) {
+        controller.recentlyCheckedIndices.toSet()
+    }
+    val effectiveHidden = remember(hiddenIndices, recentlyCheckedSnapshot, lineTexts) {
+        CompletedLineUtils.computeEffectiveHidden(hiddenIndices, recentlyCheckedSnapshot, lineTexts)
+    }
+    val displayItems = remember(lineTexts, effectiveHidden) {
+        CompletedLineUtils.computeDisplayItemsFromHidden(lineTexts, effectiveHidden)
+    }
+    controller.hiddenIndices = effectiveHidden
+    // Clear stale layout data for hidden lines so gesture hit-testing can't match them.
+    remember(effectiveHidden) {
+        for (idx in effectiveHidden) {
+            if (idx < lineLayouts.size) {
+                lineLayouts[idx] = LineLayoutInfo(idx, 0f, 0f, null)
+            }
+        }
+        effectiveHidden
+    }
+
     val viewConfiguration = LocalViewConfiguration.current
 
     EditorSelectionLayer(
@@ -1221,18 +1256,38 @@ private fun InlineNoteEditor(
                 }
             }
     ) {
-        // Render each line using the shared ControlledLineView (same as the main editor),
-        // giving inline editors selection overlays, prefix rendering, and directives for free.
-        editorState.lines.forEachIndexed { index, lineState ->
-            if (index < lineFocusRequesters.size) {
-                val lineSelection = editorState.getLineSelection(index)
-                val lineEndOffset = editorState.getLineStartOffset(index) + lineState.text.length
-                val selectionIncludesNewline = editorState.hasSelection &&
-                    editorState.selection.min <= lineEndOffset &&
-                    editorState.selection.max > lineEndOffset &&
-                    index < editorState.lines.lastIndex
+        // Render lines using DisplayItem so completed subtrees collapse into a
+        // "(N completed)" placeholder when the parent's showCompleted is false —
+        // mirroring HangingIndentEditor's main-editor behavior.
+        for (item in displayItems) {
+            when (item) {
+                is CompletedLineUtils.DisplayItem.CompletedPlaceholder -> {
+                    val blockStart = item.blockStartIndex
+                    CompletedPlaceholderRow(
+                        count = item.count,
+                        indentLevel = item.indentLevel,
+                        textStyle = textStyle,
+                        onHeightMeasured = { height ->
+                            if (blockStart in lineLayouts.indices &&
+                                lineLayouts[blockStart].height != height
+                            ) {
+                                lineLayouts[blockStart] = lineLayouts[blockStart].copy(height = height)
+                            }
+                        }
+                    )
+                }
+                is CompletedLineUtils.DisplayItem.VisibleLine -> {
+                    val index = item.realIndex
+                    val lineState = editorState.lines.getOrNull(index) ?: continue
+                    if (index >= lineFocusRequesters.size) continue
+                    val lineSelection = editorState.getLineSelection(index)
+                    val lineEndOffset = editorState.getLineStartOffset(index) + lineState.text.length
+                    val selectionIncludesNewline = editorState.hasSelection &&
+                        editorState.selection.min <= lineEndOffset &&
+                        editorState.selection.max > lineEndOffset &&
+                        index < editorState.lines.lastIndex
 
-                ControlledLineView(
+                    ControlledLineView(
                     lineIndex = index,
                     lineState = lineState,
                     controller = controller,
@@ -1304,6 +1359,7 @@ private fun InlineNoteEditor(
                 }
             }
         }
+    }
     }
 
     }  // EditorSelectionLayer

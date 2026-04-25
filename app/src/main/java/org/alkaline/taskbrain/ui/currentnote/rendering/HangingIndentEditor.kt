@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.draw.alpha
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -15,6 +16,7 @@ import androidx.compose.runtime.mutableStateListOf
 import org.alkaline.taskbrain.ui.currentnote.EditorId
 import org.alkaline.taskbrain.ui.currentnote.InlineEditState
 import org.alkaline.taskbrain.ui.currentnote.LocalInlineEditState
+import org.alkaline.taskbrain.ui.currentnote.LocalParentShowCompleted
 import org.alkaline.taskbrain.ui.currentnote.LocalSelectionCoordinator
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -183,34 +185,36 @@ fun HangingIndentEditor(
 
     val gutterOffsetPx = if (showGutter) with(density) { EditorConfig.GutterWidth.toPx() } else 0f
 
-    EditorSelectionLayer(
-        state = state,
-        controller = controller,
-        lineLayouts = lineLayouts,
-        gutterOffsetPx = gutterOffsetPx,
-        directiveResults = directiveResults,
-        modifier = modifier
-    ) { selectionConfig ->
-        EditorRow(
+    CompositionLocalProvider(LocalParentShowCompleted provides showCompleted) {
+        EditorSelectionLayer(
             state = state,
             controller = controller,
-            textStyle = textStyle,
-            focusRequesters = focusRequesters,
             lineLayouts = lineLayouts,
-            viewConfiguration = viewConfiguration,
-            scrollState = scrollState,
-            showGutter = showGutter,
-            showCompleted = showCompleted,
-            gutterSelectionState = gutterSelectionState,
-            contextMenuState = selectionConfig.contextMenuState,
-            onEditorFocusChanged = onEditorFocusChanged,
-            onSelectionCompleted = selectionConfig.onSelectionCompleted,
+            gutterOffsetPx = gutterOffsetPx,
             directiveResults = directiveResults,
-            directiveCallbacks = directiveCallbacks,
-            buttonCallbacks = buttonCallbacks,
-            onSymbolTap = onSymbolTap,
-            symbolOverlaysProvider = symbolOverlaysProvider
-        )
+            modifier = modifier
+        ) { selectionConfig ->
+            EditorRow(
+                state = state,
+                controller = controller,
+                textStyle = textStyle,
+                focusRequesters = focusRequesters,
+                lineLayouts = lineLayouts,
+                viewConfiguration = viewConfiguration,
+                scrollState = scrollState,
+                showGutter = showGutter,
+                showCompleted = showCompleted,
+                gutterSelectionState = gutterSelectionState,
+                contextMenuState = selectionConfig.contextMenuState,
+                onEditorFocusChanged = onEditorFocusChanged,
+                onSelectionCompleted = selectionConfig.onSelectionCompleted,
+                directiveResults = directiveResults,
+                directiveCallbacks = directiveCallbacks,
+                buttonCallbacks = buttonCallbacks,
+                onSymbolTap = onSymbolTap,
+                symbolOverlaysProvider = symbolOverlaysProvider
+            )
+        }
     }
 }
 

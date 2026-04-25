@@ -19,6 +19,7 @@ import { db, auth } from '@/firebase/config'
 import { LineState } from '@/editor/LineState'
 import { newSentinelNoteId } from '@/data/NoteIdSentinel'
 import { ActiveEditorContext, type ActiveEditorContextValue } from '@/editor/ActiveEditorContext'
+import { ParentShowCompletedContext } from '@/editor/ParentShowCompletedContext'
 import type { InlineEditSession } from '@/editor/InlineEditSession'
 import { InlineSessionManager } from '@/editor/InlineSessionManager'
 import { UnifiedUndoManager } from '@/editor/UnifiedUndoManager'
@@ -635,6 +636,7 @@ export function NoteEditorScreen() {
       )}
 
       <ActiveEditorContext.Provider value={activeEditorCtx}>
+      <ParentShowCompletedContext.Provider value={showCompleted}>
       <div className={styles.editorArea}>
         <div
           ref={editorRef}
@@ -683,6 +685,7 @@ export function NoteEditorScreen() {
         )}
       </div>
       </div>
+      </ParentShowCompletedContext.Provider>
       </ActiveEditorContext.Provider>
 
     </div>

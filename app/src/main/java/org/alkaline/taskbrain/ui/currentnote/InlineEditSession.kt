@@ -170,6 +170,13 @@ class InlineEditSession(
 }
 
 /**
+ * CompositionLocal carrying the parent editor's `showCompleted` setting down the tree.
+ * Read by [InlineNoteEditor] inside a view directive so the parent's setting overrides
+ * each embedded note's own setting. Null when not inside a parent editor context.
+ */
+val LocalParentShowCompleted = compositionLocalOf<Boolean?> { null }
+
+/**
  * State holder for managing inline edit sessions.
  *
  * Only one inline edit session can be active at a time. When a new session is started,

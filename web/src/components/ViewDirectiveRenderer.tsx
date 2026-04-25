@@ -1,7 +1,6 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { useState, useCallback, useContext, useRef, useEffect, useMemo } from 'react'
 import type { Note, NoteLine } from '@/data/Note'
 import type { ViewVal } from '@/dsl/runtime/DslValue'
-import { directiveResultToValue } from '@/dsl/directives/DirectiveResult'
 import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
 import { findDirectives, directiveHash } from '@/dsl/directives/DirectiveFinder'
 import { executeDirectiveWithMutations } from '@/dsl/directives/DirectiveExecutor'
@@ -9,7 +8,10 @@ import { noteStore } from '@/data/NoteStore'
 import { InlineEditSession } from '@/editor/InlineEditSession'
 import { useActiveEditor } from '@/editor/ActiveEditorContext'
 import { useEditorInteractions } from '@/editor/useEditorInteractions'
+import { ParentShowCompletedContext } from '@/editor/ParentShowCompletedContext'
+import { computeDisplayItemsFromHidden } from '@/editor/CompletedLineUtils'
 import { EditorLine } from './EditorLine'
+import { CompletedPlaceholderRow } from './CompletedPlaceholderRow'
 import { EMPTY_VIEW, SAVE_ERROR_BANNER, SAVE_ERROR_DISMISS } from '@/strings'
 import styles from './ViewDirectiveRenderer.module.css'
 
@@ -119,6 +121,7 @@ function ViewNoteSection({
   onSave,
 }: ViewNoteSectionProps) {
   const { activateSession, deactivateSession, activeSession, notifyActiveChange, sessionManager } = useActiveEditor()
+  const parentShowCompleted = useContext(ParentShowCompletedContext)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [, setRenderVersion] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -128,17 +131,28 @@ function ViewNoteSection({
   const isActiveHereRef = useRef(isActiveHere)
   isActiveHereRef.current = isActiveHere
 
+  // The parent editor's showCompleted overrides the embedded note's own setting.
+  // Pass it to updateHiddenIndices so checked subtrees collapse into placeholders
+  // when the parent says hide.
+  const parentShowCompletedArg = parentShowCompleted ?? undefined
+
   // Connect change handlers to the session
   useEffect(() => {
     preCreatedSession.editorState.onTextChange = () => {
-      preCreatedSession.updateHiddenIndices()
+      preCreatedSession.updateHiddenIndices(parentShowCompletedArg)
       setRenderVersion(v => v + 1)
     }
     preCreatedSession.editorState.onSelectionChange = () => {
       setRenderVersion(v => v + 1)
       notifyActiveChange()
     }
-  }, [preCreatedSession, notifyActiveChange])
+  }, [preCreatedSession, notifyActiveChange, parentShowCompletedArg])
+
+  // Recompute hidden indices when the parent's showCompleted toggles.
+  useEffect(() => {
+    preCreatedSession.updateHiddenIndices(parentShowCompletedArg)
+    setRenderVersion(v => v + 1)
+  }, [parentShowCompletedArg, preCreatedSession])
 
   // Sync external content changes via the centralized session manager
   useEffect(() => {
@@ -168,6 +182,7 @@ function ViewNoteSection({
   const {
     handleDragStart, handleMoveStart,
     handleGutterDragStart, handleGutterDragUpdate,
+    selectLineRange, gutterAnchorRef,
   } = useEditorInteractions(
     containerRef, dropCursorRef, getState, getController, 'data-view-line-index',
   )
@@ -204,6 +219,10 @@ function ViewNoteSection({
   const displayLines = preCreatedSession.editorState.lines
   const displayController = preCreatedSession.controller
   const displayState = preCreatedSession.editorState
+  const displayItems = computeDisplayItemsFromHidden(
+    displayLines.map((l) => l.text),
+    displayController.hiddenIndices,
+  )
 
   return (
     <div
@@ -220,35 +239,47 @@ function ViewNoteSection({
           <button className={styles.inlineSaveErrorDismiss} onClick={() => setSaveError(null)}>{SAVE_ERROR_DISMISS}</button>
         </div>
       )}
-      {displayLines.map((line, i) => (
-        <div key={i} data-view-line-index={i} data-view-note-id={note.id} className={styles.viewLineRow}>
-          <div className={styles.viewNoteIdCell}>{line.noteIds.join(', ') || '\u00A0'}</div>
-          <div className={styles.viewLineContent}>
-            <EditorLine
-              lineIndex={i}
-              controller={displayController}
-              editorState={displayState}
-              directiveResults={viewDirectiveResults}
-              onDragStart={handleDragStart}
-              onGutterDragStart={handleGutterDragStart}
-              onGutterDragUpdate={handleGutterDragUpdate}
-              onMoveStart={handleMoveStart}
-              hideNoteId
-              allowAutoFocus={isActiveHere}
-            />
+      {displayItems.map((item, i) =>
+        item.type === 'placeholder' ? (
+          <CompletedPlaceholderRow
+            key={`ph-${i}`}
+            count={item.count}
+            indentLevel={item.indentLevel}
+            noteIdText={Array.from({ length: item.count }, (_, j) => displayLines[item.startIndex + j]?.noteIds ?? []).flat().join(', ')}
+            isSelected={displayState.hasSelection && (() => {
+              const [selFirst, selLast] = displayState.getSelectedLineRange()
+              return item.startIndex <= selLast && item.endIndex >= selFirst
+            })()}
+            onGutterDragStart={() => {
+              gutterAnchorRef.current = [item.startIndex, item.endIndex]
+              selectLineRange(item.startIndex, item.endIndex)
+            }}
+            onGutterDragUpdate={() => {
+              const [anchorStart, anchorEnd] = gutterAnchorRef.current
+              if (anchorStart < 0) return
+              selectLineRange(Math.min(anchorStart, item.startIndex), Math.max(anchorEnd, item.endIndex))
+            }}
+          />
+        ) : (
+          <div key={item.realIndex} data-view-line-index={item.realIndex} data-view-note-id={note.id} className={styles.viewLineRow}>
+            <div className={styles.viewNoteIdCell}>{displayLines[item.realIndex]?.noteIds.join(', ') || '\u00A0'}</div>
+            <div className={styles.viewLineContent}>
+              <EditorLine
+                lineIndex={item.realIndex}
+                controller={displayController}
+                editorState={displayState}
+                directiveResults={viewDirectiveResults}
+                onDragStart={handleDragStart}
+                onGutterDragStart={handleGutterDragStart}
+                onGutterDragUpdate={handleGutterDragUpdate}
+                onMoveStart={handleMoveStart}
+                hideNoteId
+                allowAutoFocus={isActiveHere}
+              />
+            </div>
           </div>
-        </div>
-      ))}
+        ),
+      )}
     </div>
   )
-}
-
-/**
- * Helper: extract ViewVal from a DirectiveResult, if it is one.
- */
-export function extractViewVal(result: DirectiveResult | null): ViewVal | null {
-  if (!result) return null
-  const val = directiveResultToValue(result)
-  if (val?.kind === 'ViewVal') return val
-  return null
 }
