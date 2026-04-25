@@ -441,7 +441,7 @@ private fun GutterContent(
                             )
                         }
                     } else {
-                        val lineCountForNote = note.content.count { it == '\n' } + 2
+                        val lineCountForNote = note.content.count { it == '\n' } + 1
                         val perLineHeight = metrics.noteHeights[noteIdx] / lineCountForNote
                         for (viewLineIdx in 0 until lineCountForNote) {
                             GutterBox(
@@ -506,7 +506,7 @@ internal fun computeNoteViewHeight(
     return if (layouts != null && layouts.isNotEmpty() && noteState != null) {
         layouts.sumOf { (it.height.takeIf { h -> h > 0f } ?: defaultLineHeight).toDouble() }.toFloat()
     } else {
-        val lineCountForNote = note.content.count { it == '\n' } + 2 // lines + trailing empty line
+        val lineCountForNote = note.content.count { it == '\n' } + 1
         lineCountForNote * defaultLineHeight
     }
 }

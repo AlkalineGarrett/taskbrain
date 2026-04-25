@@ -223,17 +223,18 @@ class NoteRepository(
         withContext(Dispatchers.IO) {
             if (trackedLines.isEmpty()) return@withContext emptyMap()
 
-            // One pass: categorize each non-empty line as real-id, sentinel
+            // One pass: categorize each descendant line as real-id, sentinel
             // (with origin), or null (upstream-bug signal). Sentinels are an
             // expected "needs allocation" marker; null = some lossy path
-            // wiped a real id and we can't tell where.
-            var nonEmpty = 0
+            // wiped a real id and we can't tell where. Empty lines are
+            // first-class docs and must carry an id or sentinel like any other.
+            var descendantCount = 0
             var nullCount = 0
             val sentinelByOrigin = HashMap<String, Int>()
             val firstNulls = ArrayList<Pair<Int, String>>(3)
-            for ((idx, line) in trackedLines.withIndex()) {
-                if (line.content.isEmpty()) continue
-                nonEmpty++
+            for (idx in 1 until trackedLines.size) {
+                val line = trackedLines[idx]
+                descendantCount++
                 val id = line.noteId
                 when {
                     id == null -> {
@@ -251,10 +252,10 @@ class NoteRepository(
             }
             if (nullCount > 0) {
                 // Promote to error when the ratio is bug-shaped (>= half of
-                // non-empty lines); warn otherwise (likely un-migrated creation site).
-                val bugShaped = nullCount * 2 >= nonEmpty && nonEmpty >= 3
-                val msg = "saveNoteWithChildren($noteId): $nullCount of $nonEmpty non-empty " +
-                    "lines have noteId=null. First: " +
+                // descendant lines); warn otherwise (likely un-migrated creation site).
+                val bugShaped = nullCount * 2 >= descendantCount && descendantCount >= 3
+                val msg = "saveNoteWithChildren($noteId): $nullCount of $descendantCount " +
+                    "descendant lines have noteId=null. First: " +
                     firstNulls.joinToString { "[${it.first}] '${it.second}'" }
                 if (bugShaped) Log.e(TAG, msg, Throwable("noteId=null at saveNoteWithChildren entry"))
                 else Log.w(TAG, msg)
@@ -288,7 +289,7 @@ class NoteRepository(
             fun effectiveId(lineIndex: Int): String = when {
                 lineIndex == 0 -> noteId
                 lineIndex in newRefs -> newRefs[lineIndex]!!.id
-                else -> linesToSave[lineIndex].noteId ?: ""
+                else -> linesToSave[lineIndex].noteId!!
             }
 
             // Empty lines don't push the indent stack — indented children

@@ -220,17 +220,13 @@ get text(): string {
 - **Round-trip risk**: HIGH if result fed to `updateFromText()`
 - **Risk level**: LOW (read-only getter, but dangerous downstream)
 
-#### 2. **InlineEditSession.getText()** (line 10–20)
+#### 2. **InlineEditSession.getText()**
 ```typescript
 getText(): string {
-  const texts = this.editorState.lines.map(l => l.text)
-  // Strip trailing empty lines
-  while (texts.length > 1 && texts[texts.length - 1] === '') {
-    texts.pop()
-  }
-  return texts.join('\n')
+  return this.editorState.lines.map((l) => l.text).join('\n')
 }
 ```
+Empty lines round-trip as their own Firestore docs post-migration, so no trailing-empty stripping is needed.
 - **Direction**: lines → text
 - **Caller**: Dirty tracking, save operations
 - **Purpose**: Get current content for comparison/save

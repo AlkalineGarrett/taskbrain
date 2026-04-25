@@ -255,7 +255,7 @@ export class NoteRepository {
       function effectiveId(lineIndex: number): string {
         if (lineIndex === 0) return noteId
         if (isRealNoteId(linesToSave[lineIndex]!.noteId)) return linesToSave[lineIndex]!.noteId!
-        return newRefs.get(lineIndex)?.id ?? ''
+        return newRefs.get(lineIndex)!.id
       }
 
       // Empty lines don't push the indent stack — indented children below

@@ -105,9 +105,8 @@ export function reconstructNoteLines(
   rawNotes: Map<string, Note>,
   childrenByParent: Map<string, Note[]>,
 ): [{ content: string; noteId: string | null }[], boolean] {
-  const hasDeclaredRefs = note.containedNotes.some(id => id.length > 0)
   const hasRealChildren = (childrenByParent.get(note.id)?.length ?? 0) > 0
-  if (!hasDeclaredRefs && !hasRealChildren && note.containedNotes.length === 0) {
+  if (note.containedNotes.length === 0 && !hasRealChildren) {
     return [[{ content: note.content, noteId: note.id }], false]
   }
 
@@ -149,6 +148,15 @@ function renderChildrenOf(
   const placed = new Set<string>()
 
   for (const childId of parent.containedNotes) {
+    if (childId.length === 0) {
+      fixed = true
+      console.error(
+        `reconstructNoteLines: empty-string entry in containedNotes of ${parent.id} — ` +
+        `data corruption (post-migration, every line must have a real noteId). ` +
+        `parentContent='${parent.content.slice(0, 40)}'`
+      )
+      continue
+    }
     const child = rawNotes.get(childId)
     if (!child || child.state === 'deleted' || child.parentNoteId !== parent.id) {
       fixed = true

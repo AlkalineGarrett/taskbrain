@@ -110,9 +110,8 @@ fun reconstructNoteLines(
     rawNotes: Map<String, Note>,
     childrenByParent: Map<String, List<Note>>,
 ): Pair<List<NoteLine>, Boolean> {
-    val hasDeclaredRefs = note.containedNotes.any { it.isNotEmpty() }
     val hasRealChildren = childrenByParent[note.id]?.isNotEmpty() == true
-    if (!hasDeclaredRefs && !hasRealChildren && note.containedNotes.isEmpty()) {
+    if (note.containedNotes.isEmpty() && !hasRealChildren) {
         return listOf(NoteLine(note.content, note.id)) to false
     }
 
@@ -127,11 +126,11 @@ fun reconstructNoteLines(
         visited = visited,
     )
 
-    if (lines.size == 1 && hasDeclaredRefs) {
-        val declaredNonEmpty = note.containedNotes.filter { it.isNotEmpty() }
-        val diagnosis = declaredNonEmpty.joinToString(", ") { id ->
+    if (lines.size == 1 && note.containedNotes.isNotEmpty()) {
+        val diagnosis = note.containedNotes.joinToString(", ") { id ->
             val child = rawNotes[id]
             when {
+                id.isEmpty() -> "<empty-string>"
                 child == null -> "$id=absent"
                 child.state == "deleted" -> "$id=deleted"
                 child.parentNoteId != note.id ->
@@ -141,7 +140,7 @@ fun reconstructNoteLines(
         }
         Log.w(
             TAG,
-            "reconstructNoteLines: note ${note.id} has ${declaredNonEmpty.size} " +
+            "reconstructNoteLines: note ${note.id} has ${note.containedNotes.size} " +
                 "declared children but rendered zero — ${diagnosis}. " +
                 "strays=${childrenByParent[note.id]?.size ?: 0}, " +
                 "rootContent='${note.content.take(40)}'"
@@ -185,6 +184,16 @@ private fun renderChildrenOf(
 
     // Declared order from containedNotes.
     for (childId in parent.containedNotes) {
+        if (childId.isEmpty()) {
+            fixed = true
+            Log.e(
+                TAG,
+                "reconstructNoteLines: empty-string entry in containedNotes of ${parent.id} — " +
+                    "data corruption (post-migration, every line must have a real noteId). " +
+                    "parentContent='${parent.content.take(40)}'"
+            )
+            continue
+        }
         val child = rawNotes[childId]
         if (child == null || child.state == "deleted" || child.parentNoteId != parent.id) {
             fixed = true

@@ -13,7 +13,7 @@ data class Note(
     val userId: String = "",
     val parentNoteId: String? = null,               // null = root note
     val content: String = "",                       // single line of text
-    val containedNotes: List<String> = emptyList(), // child IDs (or "" for spacers)
+    val containedNotes: List<String> = emptyList(), // ordered list of child note IDs
     val rootNoteId: String? = null,                 // denormalized root ancestor
     val path: String = "",                          // URL-safe slug for DSL find()
     val state: String? = null,                      // null = active, "deleted" = soft-deleted
@@ -65,8 +65,7 @@ Indentation is encoded as **leading tab characters** in the editor. Each tab = o
 ## Root Notes vs. Child Lines
 
 - **Root note**: `parentNoteId == null`. Its `content` is the title (first editor line). Its `containedNotes` holds first-level children.
-- **Child note**: Separate Firestore document with `parentNoteId` and `rootNoteId` set. Can itself have `containedNotes`.
-- **Spacer lines**: Empty strings (`""`) in the `containedNotes` array — no document created.
+- **Child note**: Separate Firestore document with `parentNoteId` and `rootNoteId` set. Can itself have `containedNotes`. Empty-content lines are also stored as documents — there are no spacer sentinels in `containedNotes`.
 - **Query pattern**: `where('rootNoteId', '==', rootId)` fetches the entire subtree in one query.
 
 A child note belongs to exactly one root tree. Lines cannot be children of multiple parents.

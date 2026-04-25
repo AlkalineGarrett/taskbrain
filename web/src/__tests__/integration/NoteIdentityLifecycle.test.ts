@@ -8,9 +8,13 @@ import type { NoteLine } from '../../data/Note'
 /**
  * Fake in-memory note repository that mimics Firestore's save/load contract.
  *
- * - loadNoteWithChildren: returns stored lines + trailing empty line
- * - saveNoteWithChildren: stores lines, assigns IDs to null-noteId lines,
- *   drops trailing empty lines, returns map of newly assigned IDs
+ * Post-migration model: every line is a real Firestore document, including
+ * empty lines. There is no auto-appended trailing-empty UI affordance and no
+ * trailing-empty stripping on save.
+ *
+ * - loadNoteWithChildren: returns stored lines verbatim
+ * - saveNoteWithChildren: stores lines, assigns IDs to every null-noteId
+ *   descendant (empty or not), returns map of newly assigned IDs
  */
 class FakeNoteRepository {
   private notes = new Map<string, NoteLine[]>()
@@ -26,31 +30,26 @@ class FakeNoteRepository {
     if (!stored || stored.length === 0) {
       return [{ content: '', noteId }]
     }
-    // Append trailing empty line for editor (unless note is a single empty line)
-    if (stored.length === 1 && stored[0]!.content === '') {
-      return [...stored]
-    }
-    return [...stored, { content: '', noteId: null }]
+    return [...stored]
   }
 
   async saveNoteWithChildren(
     noteId: string,
     trackedLines: NoteLine[],
   ): Promise<Map<number, string>> {
-    // Drop trailing empty lines (same as real repo)
-    let end = trackedLines.length
-    while (end > 1 && trackedLines[end - 1]!.content === '') end--
-    const linesToSave = trackedLines.slice(0, end)
+    const linesToSave = [...trackedLines]
 
     // Ensure first line has the parent noteId
     if (linesToSave.length > 0 && linesToSave[0]!.noteId !== noteId) {
       linesToSave[0] = { ...linesToSave[0]!, noteId }
     }
 
-    // Assign IDs to new lines (content !== '' and noteId === null)
+    // Allocate IDs for every descendant line that lacks one — empty lines
+    // included, since they are first-class docs post-migration.
     const createdIds = new Map<number, string>()
     const finalLines = linesToSave.map((line, index) => {
-      if (line.noteId == null && line.content.replace(/^\t+/, '') !== '') {
+      if (index === 0) return line
+      if (line.noteId == null) {
         const newId = `generated_${this.nextId++}`
         createdIds.set(index, newId)
         return { ...line, noteId: newId }

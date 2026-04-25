@@ -44,19 +44,20 @@ Run a single test class:
 
 ## Important Patterns
 
-**Trailing empty line handling:**
-- UI always shows an empty line at the end (for typing)
-- DB never stores trailing empty lines (dropped on save)
-- Loading a note appends an empty line for display
+**Every line is a Firestore document:**
+- Each editor line — including empty lines — round-trips as its own Firestore doc
+- No auto-appended trailing-empty UI line; no trailing-empty stripping on save
+- New empty lines get a TYPED/SPLIT sentinel noteId at edit time so save can allocate fresh docs for them
 
 **Note structure in Firestore:**
 - First line = parent note content
-- Additional lines = contained child notes (via `containedNotes` array)
+- Additional lines = contained child notes (via `containedNotes` array, ordered list of real document IDs only)
+- An empty-string entry (`""`) in `containedNotes` is data corruption — `reconstructNoteLines` logs it at error level and drops it
 - Deletion is soft (state = "deleted")
 
 **Whitespace semantics:**
-- Empty string ("") = spacer line
-- Whitespace-only ("   ") = actual content (creates child note)
+- Empty content string is a real, persisted, addressable line
+- Whitespace-only content ("   ") is also content — same as any other line
 
 ## Testing
 

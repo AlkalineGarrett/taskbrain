@@ -297,12 +297,12 @@ object NoteStore {
     fun getNoteLinesByIdOrSynthesize(noteId: String, fallbackContent: String): List<NoteLine> {
         getNoteLinesById(noteId)?.let { return it }
         val lines = fallbackContent.split("\n")
-        val nonRootNonEmpty = lines.drop(1).count { it.isNotEmpty() }
-        if (nonRootNonEmpty > 0) {
+        val nonRootCount = (lines.size - 1).coerceAtLeast(0)
+        if (nonRootCount > 0) {
             android.util.Log.w(
                 "NoteStore",
                 "getNoteLinesByIdOrSynthesize($noteId): NoteStore miss — synthesizing " +
-                    "$nonRootNonEmpty non-root line(s) with null noteIds. Caller should only " +
+                    "$nonRootCount non-root line(s) with null noteIds. Caller should only " +
                     "use this for NEW sessions, never for sync-on-external-change paths (those " +
                     "must skip the update when NoteStore has no structured lines). " +
                     "firstLine='${lines.firstOrNull()?.take(40)}'",
