@@ -71,6 +71,11 @@ export const ERROR_ALARM = 'Alarm Error'
 // Note actions (Android: action_delete_note_confirm_title, action_delete_note_confirm_message)
 export const DELETE_NOTE_CONFIRM_TITLE = 'Delete note?'
 export const DELETE_NOTE_CONFIRM_MESSAGE = 'This note will be moved to the deleted notes section.'
+export const CLEAR_DELETED = 'Clear deleted'
+export const CLEAR_DELETED_CONFIRM_TITLE = 'Permanently delete all?'
+export const CLEAR_DELETED_CONFIRM_MESSAGE =
+  'Every note in the deleted section will be removed from Firestore. This cannot be undone.'
+export const clearedDeletedCount = (count: number) => `Cleared ${count} deleted note(s)`
 export const NOTE_MENU = 'Note menu'
 
 // Note editor (Android: new_note, close_tab, tab_menu, empty_line)

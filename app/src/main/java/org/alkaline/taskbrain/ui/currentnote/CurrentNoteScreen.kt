@@ -36,6 +36,7 @@ import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -332,21 +333,32 @@ fun CurrentNoteScreen(
         if (anyInlineDirty) currentNoteViewModel.markAsDirty()
     }
 
-    // Alarm dialog state
-    var showAlarmDialog by remember { mutableStateOf(false) }
-    var alarmDialogLineContent by remember { mutableStateOf("") }
-    var alarmDialogLineIndex by remember { mutableStateOf<Int?>(null) }
-    // Capture the inline session at dialog-open time so alarm save routes correctly
-    // even if the session changes while the dialog is open.
+    // Alarm dialog state.
+    //
+    // Most fields use rememberSaveable so the dialog re-opens correctly after
+    // Activity recreation (rotation, etc.). The Alarm object and inline session
+    // are not directly persistable, so we store ID surrogates and re-derive
+    // them in a LaunchedEffect below.
+    var showAlarmDialog by rememberSaveable { mutableStateOf(false) }
+    var alarmDialogLineContent by rememberSaveable { mutableStateOf("") }
+    var alarmDialogLineIndex by rememberSaveable { mutableStateOf<Int?>(null) }
+    // Inline session that "owns" this alarm save. Held by reference (not Parcelable),
+    // so we also persist the session's noteId in alarmDialogInlineSessionNoteId and
+    // re-resolve the reference after recreation.
     var alarmDialogInlineSession by remember { mutableStateOf<InlineEditSession?>(null) }
+    var alarmDialogInlineSessionNoteId by rememberSaveable { mutableStateOf<String?>(null) }
     val alarmCacheForOverlay by currentNoteViewModel.alarmManager.alarmCache.observeAsState(emptyMap())
     val recurringAlarmCacheForOverlay by currentNoteViewModel.alarmManager.recurringAlarmCache.observeAsState(emptyMap())
-    // The alarm being viewed/edited in the dialog (set when tapping a directive)
+    // The alarm being viewed/edited in the dialog (set when tapping a directive).
+    // Re-fetched from alarmDialogAlarmIdToRestore / alarmDialogRecurringAlarmIdToRestore
+    // after recreation so the dialog re-opens populated.
     var alarmDialogAlarm by remember { mutableStateOf<Alarm?>(null) }
     val alarmDialogExistingAlarm = alarmDialogAlarm
-    var alarmDialogInitialMode by remember { mutableStateOf(AlarmDialogMode.INSTANCE) }
+    var alarmDialogAlarmIdToRestore by rememberSaveable { mutableStateOf<String?>(null) }
+    var alarmDialogRecurringAlarmIdToRestore by rememberSaveable { mutableStateOf<String?>(null) }
+    var alarmDialogInitialMode by rememberSaveable { mutableStateOf(AlarmDialogMode.INSTANCE) }
     // The directive text that was tapped to open the dialog (for directive switching after save)
-    var tappedDirectiveText by remember { mutableStateOf<String?>(null) }
+    var tappedDirectiveText by rememberSaveable { mutableStateOf<String?>(null) }
     val alarmDialogRecurrenceConfig by currentNoteViewModel.alarmManager.recurrenceConfig.observeAsState()
     val alarmDialogRecurringAlarm by currentNoteViewModel.alarmManager.recurringAlarm.observeAsState()
 
@@ -358,6 +370,37 @@ fun CurrentNoteScreen(
             currentNoteViewModel.alarmManager.getInstancesForRecurring(alarmDialogRecurringId)
         } else {
             emptyList()
+        }
+    }
+
+    // Restore transient alarm-dialog state after Activity recreation. The saveable
+    // fields above persist scalars, but the Alarm object and the inline session
+    // reference are not Parcelable — re-derive them here when the dialog is open
+    // and the transients are missing.
+    LaunchedEffect(
+        showAlarmDialog,
+        alarmDialogAlarmIdToRestore,
+        alarmDialogRecurringAlarmIdToRestore,
+        alarmDialogInlineSessionNoteId,
+    ) {
+        if (!showAlarmDialog) return@LaunchedEffect
+        if (alarmDialogAlarm == null) {
+            val instanceId = alarmDialogAlarmIdToRestore
+            val recurringId = alarmDialogRecurringAlarmIdToRestore
+            when {
+                instanceId != null -> currentNoteViewModel.alarmManager.fetchAlarmById(instanceId) {
+                    alarmDialogAlarm = it
+                }
+                recurringId != null -> currentNoteViewModel.alarmManager.fetchRecurringAlarmInstance(recurringId) {
+                    alarmDialogAlarm = it
+                }
+            }
+        }
+        if (alarmDialogInlineSession == null) {
+            val sessionNoteId = alarmDialogInlineSessionNoteId
+            if (sessionNoteId != null) {
+                alarmDialogInlineSession = inlineEditState.viewSessions[sessionNoteId]
+            }
         }
     }
 
@@ -521,7 +564,10 @@ fun CurrentNoteScreen(
             showAlarmDialog = false
             alarmDialogLineIndex = null
             alarmDialogInlineSession = null
+            alarmDialogInlineSessionNoteId = null
             alarmDialogAlarm = null
+            alarmDialogAlarmIdToRestore = null
+            alarmDialogRecurringAlarmIdToRestore = null
             alarmDialogInitialMode = AlarmDialogMode.INSTANCE
             tappedDirectiveText = null
             currentNoteViewModel.alarmManager.fetchRecurrenceConfig(null)
@@ -693,10 +739,14 @@ fun CurrentNoteScreen(
                                     val lineContent = editorState.lines.getOrNull(tapInfo.lineIndex)?.text ?: ""
                                     alarmDialogLineContent = TextLineUtils.trimLineForAlarm(lineContent)
                                     alarmDialogLineIndex = tapInfo.lineIndex
+                                    alarmDialogInlineSession = null
+                                    alarmDialogInlineSessionNoteId = null
 
                                     if (tapInfo.recurringAlarmId != null) {
                                         tappedDirectiveText = AlarmSymbolUtils.recurringAlarmDirective(tapInfo.recurringAlarmId)
                                         alarmDialogInitialMode = AlarmDialogMode.RECURRENCE
+                                        alarmDialogAlarmIdToRestore = null
+                                        alarmDialogRecurringAlarmIdToRestore = tapInfo.recurringAlarmId
                                         currentNoteViewModel.alarmManager.fetchRecurringAlarmInstance(tapInfo.recurringAlarmId) { alarm ->
                                             alarmDialogAlarm = alarm
                                             showAlarmDialog = true
@@ -704,6 +754,8 @@ fun CurrentNoteScreen(
                                     } else if (tapInfo.alarmId != null) {
                                         tappedDirectiveText = AlarmSymbolUtils.alarmDirective(tapInfo.alarmId)
                                         alarmDialogInitialMode = AlarmDialogMode.INSTANCE
+                                        alarmDialogAlarmIdToRestore = tapInfo.alarmId
+                                        alarmDialogRecurringAlarmIdToRestore = null
                                         currentNoteViewModel.alarmManager.fetchAlarmById(tapInfo.alarmId) { alarm ->
                                             alarmDialogAlarm = alarm
                                             showAlarmDialog = true
@@ -769,7 +821,10 @@ fun CurrentNoteScreen(
                 alarmDialogLineContent = TextLineUtils.trimLineForAlarm(lineContent)
                 alarmDialogLineIndex = activeState.focusedLineIndex
                 alarmDialogInlineSession = coordinator.activeSession
+                alarmDialogInlineSessionNoteId = coordinator.activeSession?.noteId
                 alarmDialogAlarm = null
+                alarmDialogAlarmIdToRestore = null
+                alarmDialogRecurringAlarmIdToRestore = null
                 alarmDialogInitialMode = AlarmDialogMode.INSTANCE
                 tappedDirectiveText = null
                 showAlarmDialog = true

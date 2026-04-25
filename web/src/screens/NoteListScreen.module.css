@@ -356,3 +356,30 @@
 .deletedItem .noteContent {
   color: var(--color-text-secondary);
 }
+
+.clearDeletedRow {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.75rem;
+}
+
+.clearDeletedButton {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  border: 1px solid var(--color-menu-danger-text);
+  border-radius: 4px;
+  background: white;
+  color: var(--color-menu-danger-text);
+  cursor: pointer;
+}
+
+.clearDeletedButton:hover:not(:disabled) {
+  background: var(--color-menu-danger-bg-hover);
+}
+
+.clearDeletedButton:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+

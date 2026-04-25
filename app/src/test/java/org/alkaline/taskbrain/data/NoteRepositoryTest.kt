@@ -123,16 +123,14 @@ class NoteRepositoryTest {
     }
 
     @Test
-    fun `loadNoteWithChildren returns parent content with trailing empty line`() = runTest {
+    fun `loadNoteWithChildren returns just parent content when no children`() = runTest {
         mockDocument("note_1", Note(content = "Parent content", containedNotes = emptyList()))
 
         val lines = repository.loadNoteWithChildren("note_1").getOrThrow().lines
 
-        assertEquals(2, lines.size)
+        assertEquals(1, lines.size)
         assertEquals("Parent content", lines[0].content)
         assertEquals("note_1", lines[0].noteId)
-        assertEquals("", lines[1].content)
-        assertNull(lines[1].noteId)
     }
 
     @Test
@@ -365,10 +363,12 @@ class NoteRepositoryTest {
     }
 
     @Test
-    fun `saveNoteWithChildren drops trailing empty lines`() = runTest {
+    fun `saveNoteWithChildren persists trailing empty lines as docs`() = runTest {
         mockDocument("note_1", null)
-        val childRef = mockk<DocumentReference> { every { id } returns "child_1" }
-        every { mockCollection.document() } returns childRef
+        val refs = listOf("child_1", "trailing").map { id ->
+            mockk<DocumentReference> { every { this@mockk.id } returns id }
+        }
+        every { mockCollection.document() } returnsMany refs
         mockBatch()
 
         val result = repository.saveNoteWithChildren(
@@ -376,12 +376,13 @@ class NoteRepositoryTest {
             listOf(
                 NoteLine("Parent", "note_1"),
                 NoteLine("\tChild content", null),
-                NoteLine("", null)  // Trailing empty line should be dropped
+                NoteLine("", null),
             )
         ).getOrThrow()
 
-        assertEquals(1, result.size)
+        assertEquals(2, result.size)
         assertEquals("child_1", result[1])
+        assertEquals("trailing", result[2])
     }
 
     @Test
@@ -423,10 +424,12 @@ class NoteRepositoryTest {
     }
 
     @Test
-    fun `saveNoteWithChildren drops multiple trailing empty lines`() = runTest {
+    fun `saveNoteWithChildren persists multiple trailing empty lines as docs`() = runTest {
         mockDocument("note_1", null)
-        val childRef = mockk<DocumentReference> { every { id } returns "child_1" }
-        every { mockCollection.document() } returns childRef
+        val refs = listOf("child_1", "t1", "t2", "t3").map { id ->
+            mockk<DocumentReference> { every { this@mockk.id } returns id }
+        }
+        every { mockCollection.document() } returnsMany refs
         mockBatch()
 
         val result = repository.saveNoteWithChildren(
@@ -440,29 +443,37 @@ class NoteRepositoryTest {
             )
         ).getOrThrow()
 
-        assertEquals(1, result.size)
+        assertEquals(4, result.size)
         assertEquals("child_1", result[1])
+        assertEquals("t1", result[2])
+        assertEquals("t2", result[3])
+        assertEquals("t3", result[4])
     }
 
     @Test
     fun `saveNoteWithChildren preserves empty lines in the middle`() = runTest {
         mockDocument("note_1", null)
-        val childRef = mockk<DocumentReference> { every { id } returns "child_1" }
-        every { mockCollection.document() } returns childRef
+        // One ref per new line (mid-spacer + child + trailing).
+        val refs = listOf("middle", "child_1", "trailing").map { id ->
+            mockk<DocumentReference> { every { this@mockk.id } returns id }
+        }
+        every { mockCollection.document() } returnsMany refs
         mockBatch()
 
         val result = repository.saveNoteWithChildren(
             "note_1",
             listOf(
                 NoteLine("Parent", "note_1"),
-                NoteLine("\t", null),  // Spacer in middle — preserved
+                NoteLine("\t", null),
                 NoteLine("\tChild", null),
-                NoteLine("", null)   // Trailing empty — dropped
+                NoteLine("", null),
             )
         ).getOrThrow()
 
-        assertEquals(1, result.size)
-        assertEquals("child_1", result[2])  // Index 2 because of the spacer
+        assertEquals(3, result.size)
+        assertEquals("middle", result[1])
+        assertEquals("child_1", result[2])
+        assertEquals("trailing", result[3])
     }
 
     @Test
@@ -512,8 +523,8 @@ class NoteRepositoryTest {
     }
 
     @Test
-    fun `createMultiLineNote treats blank lines as spacers`() = runTest {
-        val refs = listOf("parent_id", "child_id").map { id ->
+    fun `createMultiLineNote allocates a doc for blank lines`() = runTest {
+        val refs = listOf("parent_id", "blank_id", "child_id").map { id ->
             mockk<DocumentReference> { every { this@mockk.id } returns id }
         }
         every { mockCollection.document() } returnsMany refs
@@ -521,7 +532,8 @@ class NoteRepositoryTest {
 
         repository.createMultiLineNote("Line 1\n\nLine 3").getOrThrow()
 
-        verify(exactly = 2) { batch.set(any(), any<Map<String, Any?>>()) }
+        // parent + blank-line doc + Line 3 child
+        verify(exactly = 3) { batch.set(any(), any<Map<String, Any?>>()) }
     }
 
     @Test
@@ -579,11 +591,12 @@ class NoteRepositoryTest {
 
         val lines = repository.loadNoteWithChildren("root").getOrThrow().lines
 
-        assertEquals(4, lines.size)
+        // No more auto-appended trailing empty — the persisted shape is what
+        // comes back.
+        assertEquals(3, lines.size)
         assertEquals(NoteLine("Root", "root"), lines[0])
         assertEquals(NoteLine("Child 1", "c1"), lines[1])
         assertEquals(NoteLine("Child 2", "c2"), lines[2])
-        assertEquals(NoteLine("", null), lines[3])
     }
 
     @Test
@@ -600,11 +613,10 @@ class NoteRepositoryTest {
 
         val lines = repository.loadNoteWithChildren("root").getOrThrow().lines
 
-        assertEquals(4, lines.size)
+        assertEquals(3, lines.size)
         assertEquals(NoteLine("Root", "root"), lines[0])
         assertEquals(NoteLine("A", "a"), lines[1])
         assertEquals(NoteLine("\tB", "b"), lines[2])
-        assertEquals(NoteLine("", null), lines[3])
     }
 
     @Test
@@ -621,10 +633,9 @@ class NoteRepositoryTest {
 
         val lines = repository.loadNoteWithChildren("root").getOrThrow().lines
 
-        assertEquals(3, lines.size)
+        assertEquals(2, lines.size)
         assertEquals(NoteLine("Root", "root"), lines[0])
         assertEquals(NoteLine("Alive", "c1"), lines[1])
-        assertEquals(NoteLine("", null), lines[2])
     }
 
     @Test
@@ -644,7 +655,7 @@ class NoteRepositoryTest {
 
         val lines = repository.loadNoteWithChildren("root").getOrThrow().lines
 
-        assertEquals(listOf("Root", "Declared", "Stray", ""), lines.map { it.content })
+        assertEquals(listOf("Root", "Declared", "Stray"), lines.map { it.content })
     }
 
     @Test

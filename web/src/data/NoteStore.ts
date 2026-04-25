@@ -277,13 +277,6 @@ export class NoteStore {
     const note = this.rawNotes.get(noteId)
     if (!note) return undefined
     const childrenByParent = indexChildrenByParent(this.rawNotes)
-    const hasStrays = (childrenByParent.get(noteId)?.length ?? 0) > 0
-    if (note.containedNotes.length === 0 && !hasStrays) {
-      return note.content.split('\n').map((line, i) => ({
-        content: line,
-        noteId: i === 0 ? noteId : null,
-      }))
-    }
     const [lines, fixed] = reconstructNoteLines(note, this.rawNotes, childrenByParent)
     // Keep the editor view in sync with rebuildAffected: if the shared walk
     // dropped a declared child (missing from rawNotes — typically a fresh

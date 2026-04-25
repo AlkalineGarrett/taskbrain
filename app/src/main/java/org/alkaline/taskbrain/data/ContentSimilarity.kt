@@ -128,14 +128,13 @@ fun splitNoteIds(
         beforeContentLen >= afterContentLen -> noteIds to emptyList()
         else -> emptyList<String>() to noteIds
     }
-    // Any side that ended up with content but no id gets a SPLIT sentinel, so
-    // save-time attribution ("where did this fresh doc come from?") is consistent.
-    return stampSplitSentinelIfNeeded(before, beforeHasContent) to
-        stampSplitSentinelIfNeeded(after, afterHasContent)
+    // Sentinel marks a fresh doc's origin so save-time attribution
+    // ("where did this come from?") stays consistent.
+    return stampSplitSentinelIfNeeded(before) to stampSplitSentinelIfNeeded(after)
 }
 
-private fun stampSplitSentinelIfNeeded(ids: List<String>, hasContent: Boolean): List<String> =
-    if (ids.isEmpty() && hasContent) listOf(NoteIdSentinel.new(NoteIdSentinel.Origin.SPLIT)) else ids
+private fun stampSplitSentinelIfNeeded(ids: List<String>): List<String> =
+    if (ids.isEmpty()) listOf(NoteIdSentinel.new(NoteIdSentinel.Origin.SPLIT)) else ids
 
 /**
  * Distributes noteIds to before/after halves based on how much of each noteId's

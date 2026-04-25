@@ -272,14 +272,6 @@ object NoteStore {
         val (lines, fixed) = rawNotesLock.read {
             val rootNote = rawNotes[noteId] ?: return null
             val childrenByParent = indexChildrenByParent(rawNotes)
-            val hasStrays = childrenByParent[noteId]?.isNotEmpty() == true
-            if (rootNote.containedNotes.isEmpty() && !hasStrays) {
-                // Pure leaf: preserve embedded newlines as separate editor lines
-                // so multi-line content shows correctly in the editor.
-                return rootNote.content.split("\n").mapIndexed { index, line ->
-                    NoteLine(line, if (index == 0) noteId else null)
-                }
-            }
             reconstructNoteLines(rootNote, rawNotes, childrenByParent)
         }
         // Keep the editor view in sync with rebuildAffected: if the shared walk

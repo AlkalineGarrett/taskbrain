@@ -172,9 +172,10 @@ class NoteIdPropagationTest {
 
         assertEquals("Hello", state.lines[0].text)
         assertEquals(listOf("note1"), state.lines[0].noteIds)
-        // New empty line gets fresh tempId, not the original noteId
-        assertTrue(state.lines[1].noteIds.isEmpty())
-        assertTrue(state.lines[1].effectiveId != "note1")
+        // Empty lines are first-class docs now: the new empty half gets a
+        // SPLIT sentinel so save allocates a fresh doc for it.
+        assertTrue(state.lines[1].hasNoRealNoteId())
+        assertEquals(1, state.lines[1].noteIds.size)
     }
 
     @Test
@@ -190,10 +191,12 @@ class NoteIdPropagationTest {
 
         controller.splitLine(0)
 
-        // Original line is now empty, should lose noteIds
+        // Original line is now empty — gets a SPLIT sentinel so save allocates
+        // a fresh doc for the empty line (it's no longer a containedNotes "" entry).
         assertEquals("", state.lines[0].text)
-        assertTrue(state.lines[0].noteIds.isEmpty())
-        // New line has the content, should keep noteIds
+        assertTrue(state.lines[0].hasNoRealNoteId())
+        assertEquals(1, state.lines[0].noteIds.size)
+        // New line has the content, should keep the original noteId
         assertEquals("Hello", state.lines[1].text)
         assertEquals(listOf("note1"), state.lines[1].noteIds)
     }
@@ -212,7 +215,8 @@ class NoteIdPropagationTest {
         controller.splitLine(0)
 
         assertEquals(listOf("note1"), state.lines[0].noteIds)
-        assertTrue(state.lines[1].noteIds.isEmpty())
+        assertTrue(state.lines[1].hasNoRealNoteId())
+        assertEquals(1, state.lines[1].noteIds.size)
     }
 
     @Test
@@ -228,8 +232,10 @@ class NoteIdPropagationTest {
 
         controller.splitLine(0)
 
-        // Original line has just prefix (no content), should lose noteIds
-        assertTrue(state.lines[0].noteIds.isEmpty())
+        // Original line has just prefix (no content) — gets a SPLIT sentinel
+        // so save allocates a fresh doc for the empty content half.
+        assertTrue(state.lines[0].hasNoRealNoteId())
+        assertEquals(1, state.lines[0].noteIds.size)
         // New line has the content, should keep noteIds
         assertEquals(listOf("note1"), state.lines[1].noteIds)
     }
@@ -250,7 +256,9 @@ class NoteIdPropagationTest {
 
         assertEquals("Hello", state.lines[0].content)
         assertEquals(listOf("note1"), state.lines[0].noteIds)
-        assertTrue(state.lines[1].noteIds.isEmpty())
+        // Empty halves get a SPLIT sentinel under the new empty-line-as-doc model.
+        assertTrue(state.lines[1].hasNoRealNoteId())
+        assertEquals(1, state.lines[1].noteIds.size)
     }
 
     @Test
@@ -266,7 +274,9 @@ class NoteIdPropagationTest {
         controller.updateLineContent(0, "\nHello", 0)
 
         assertEquals("", state.lines[0].content)
-        assertTrue(state.lines[0].noteIds.isEmpty())
+        // Empty halves get a SPLIT sentinel under the new empty-line-as-doc model.
+        assertTrue(state.lines[0].hasNoRealNoteId())
+        assertEquals(1, state.lines[0].noteIds.size)
         assertEquals("Hello", state.lines[1].content)
         assertEquals(listOf("note1"), state.lines[1].noteIds)
     }
@@ -287,6 +297,71 @@ class NoteIdPropagationTest {
         // id; the other side gets a SPLIT sentinel.
         assertEquals(listOf("note1"), state.lines[0].noteIds)
         assertTrue(state.lines[1].hasNoRealNoteId())
+    }
+
+    // ==================== updateLineContent typed-sentinel stamping ====================
+
+    @Test
+    fun `updateLineContent stamps TYPED sentinel when id-less line gains content`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.initFromNoteLines(listOf(
+            "Root" to listOf("rootId"),
+            "" to emptyList()
+        ))
+        state.focusedLineIndex = 1
+
+        controller.updateLineContent(1, "T", 1)
+
+        assertEquals(1, state.lines[1].noteIds.size)
+        assertEquals("typed", NoteIdSentinel.originOf(state.lines[1].noteIds[0]))
+    }
+
+    @Test
+    fun `updateLineContent does not change noteIds when line already has an id`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.initFromNoteLines(listOf(
+            "Root" to listOf("rootId"),
+            "Hello" to listOf("childId"),
+            "" to emptyList()
+        ))
+        state.focusedLineIndex = 1
+
+        controller.updateLineContent(1, "Hello!", 6)
+
+        assertEquals(listOf("childId"), state.lines[1].noteIds)
+    }
+
+    @Test
+    fun `updateLineContent does not stamp sentinel on root line 0`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        // Brand-new note: root line has no parentNoteId yet, no noteIds.
+        state.initFromNoteLines(listOf("" to emptyList()))
+        state.focusedLineIndex = 0
+
+        controller.updateLineContent(0, "First content", 13)
+
+        // Line 0 stays id-less so the save path can allocate a fresh root doc
+        // (or so toNoteLines can stamp the eventual parentNoteId).
+        assertTrue(state.lines[0].noteIds.isEmpty())
+    }
+
+    @Test
+    fun `updateLineContent does not stamp sentinel when content stays empty`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.initFromNoteLines(listOf(
+            "Root" to listOf("rootId"),
+            "" to emptyList()
+        ))
+        state.focusedLineIndex = 1
+
+        // Some IME paths fire updateLineContent with the unchanged empty content.
+        controller.updateLineContent(1, "", 0)
+
+        assertTrue(state.lines[1].noteIds.isEmpty())
     }
 
     // ==================== Merge line propagation ====================

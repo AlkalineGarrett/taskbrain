@@ -116,16 +116,16 @@ export function splitNoteIds(
     [before, after] = distributeNoteIdsByOverlap(noteIds, beforeContentLen, noteIdContentLengths)
   } else if (beforeContentLen >= afterContentLen) { before = noteIds; after = [] }
   else { before = []; after = noteIds }
-  // Stamp SPLIT sentinels on any content-bearing side without an id so
-  // save-time attribution ("where did this fresh doc come from?") is consistent.
+  // Sentinel marks a fresh doc's origin so save-time attribution
+  // ("where did this come from?") stays consistent.
   return [
-    stampSplitSentinelIfNeeded(before, beforeHasContent),
-    stampSplitSentinelIfNeeded(after, afterHasContent),
+    stampSplitSentinelIfNeeded(before),
+    stampSplitSentinelIfNeeded(after),
   ]
 }
 
-function stampSplitSentinelIfNeeded(ids: string[], hasContent: boolean): string[] {
-  return ids.length === 0 && hasContent ? [newSentinelNoteId('split')] : ids
+function stampSplitSentinelIfNeeded(ids: string[]): string[] {
+  return ids.length === 0 ? [newSentinelNoteId('split')] : ids
 }
 
 function distributeNoteIdsByOverlap(

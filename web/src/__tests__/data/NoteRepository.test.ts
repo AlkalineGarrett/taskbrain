@@ -128,7 +128,7 @@ describe('NoteRepository', () => {
       expect(lines[0]!.noteId).toBe('note_1')
     })
 
-    it('returns parent content with trailing empty line', async () => {
+    it('returns just parent content when no children', async () => {
       vi.mocked(mockDoc).mockReturnValue({ id: 'note_1' } as any)
       vi.mocked(mockGetDoc).mockResolvedValue({
         exists: () => true,
@@ -138,11 +138,9 @@ describe('NoteRepository', () => {
 
       const { lines } = await repository.loadNoteWithChildren('note_1')
 
-      expect(lines).toHaveLength(2)
+      expect(lines).toHaveLength(1)
       expect(lines[0]!.content).toBe('Parent content')
       expect(lines[0]!.noteId).toBe('note_1')
-      expect(lines[1]!.content).toBe('')
-      expect(lines[1]!.noteId).toBeNull()
     })
 
   })
@@ -278,9 +276,10 @@ describe('NoteRepository', () => {
       expect(result.get(1)).toBe('new_child')
     })
 
-    it('drops trailing empty lines', async () => {
+    it('persists trailing empty lines as docs', async () => {
+      let counter = 0
       vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
-        if (args.length === 1) return { id: 'child_1' } as any
+        if (args.length === 1) return { id: `new_${++counter}` } as any
         return { id: args[args.length - 1] } as any
       })
 
@@ -299,16 +298,18 @@ describe('NoteRepository', () => {
       const result = await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
         { content: '\tChild content', noteId: null },
-        { content: '', noteId: null }, // Trailing empty line should be dropped
+        { content: '', noteId: null },
       ])
 
-      expect(result.size).toBe(1)
-      expect(result.get(1)).toBe('child_1')
+      expect(result.size).toBe(2)
+      expect(result.get(1)).toBe('new_1')
+      expect(result.get(2)).toBe('new_2')
     })
 
-    it('drops multiple trailing empty lines', async () => {
+    it('persists multiple trailing empty lines as docs', async () => {
+      let counter = 0
       vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
-        if (args.length === 1) return { id: 'child_1' } as any
+        if (args.length === 1) return { id: `new_${++counter}` } as any
         return { id: args[args.length - 1] } as any
       })
 
@@ -332,8 +333,12 @@ describe('NoteRepository', () => {
         { content: '', noteId: null },
       ])
 
-      expect(result.size).toBe(1)
-      expect(result.get(1)).toBe('child_1')
+      // Child + 3 trailing empties = 4 new docs.
+      expect(result.size).toBe(4)
+      expect(result.get(1)).toBe('new_1')
+      expect(result.get(2)).toBe('new_2')
+      expect(result.get(3)).toBe('new_3')
+      expect(result.get(4)).toBe('new_4')
     })
 
     it('sentinel noteIds are written to a fresh ref via CREATE with userId', async () => {
@@ -436,8 +441,8 @@ describe('NoteRepository', () => {
       expect(batch.set).toHaveBeenCalledTimes(3) // parent + 2 children
     })
 
-    it('treats blank lines as spacers', async () => {
-      const ids = ['parent_id', 'child_id']
+    it('allocates a doc for blank lines', async () => {
+      const ids = ['parent_id', 'blank_id', 'child_id']
       let idIdx = 0
       vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
         if (args.length === 1) {
@@ -451,8 +456,8 @@ describe('NoteRepository', () => {
 
       await repository.createMultiLineNote('Line 1\n\nLine 3')
 
-      // Only 2 sets: parent + Line 3 child (blank line is spacer, no set call)
-      expect(batch.set).toHaveBeenCalledTimes(2)
+      // parent + blank-line doc + Line 3 child
+      expect(batch.set).toHaveBeenCalledTimes(3)
     })
 
     it('treats whitespace-only lines as content, not spacers', async () => {
@@ -500,11 +505,12 @@ describe('NoteRepository', () => {
 
       const { lines } = await repository.loadNoteWithChildren('root')
 
+      // No more auto-appended trailing empty — the persisted shape is what
+      // comes back.
       expect(lines).toEqual([
         { content: 'Root', noteId: 'root' },
         { content: 'Child 1', noteId: 'c1' },
         { content: 'Child 2', noteId: 'c2' },
-        { content: '', noteId: null },
       ])
     })
 
@@ -532,7 +538,6 @@ describe('NoteRepository', () => {
         { content: 'Root', noteId: 'root' },
         { content: 'A', noteId: 'a' },
         { content: '\tB', noteId: 'b' },
-        { content: '', noteId: null },
       ])
     })
 
@@ -556,10 +561,9 @@ describe('NoteRepository', () => {
 
       const { lines } = await repository.loadNoteWithChildren('root')
 
-      expect(lines).toHaveLength(3)
+      expect(lines).toHaveLength(2)
       expect(lines[0]).toEqual({ content: 'Root', noteId: 'root' })
       expect(lines[1]).toEqual({ content: 'Alive', noteId: 'c1' })
-      expect(lines[2]).toEqual({ content: '', noteId: null })
     })
 
     it('drops orphan ref in containedNotes and appends stray child linked by parentNoteId', () => {
@@ -585,7 +589,7 @@ describe('NoteRepository', () => {
       } as any)
 
       return repository.loadNoteWithChildren('root').then(({ lines }) => {
-        expect(lines.map(l => l.content)).toEqual(['Root', 'Declared', 'Stray', ''])
+        expect(lines.map(l => l.content)).toEqual(['Root', 'Declared', 'Stray'])
       })
     })
   })

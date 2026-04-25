@@ -6,11 +6,13 @@ import { noteStore } from '@/data/NoteStore'
 import { db, auth } from '@/firebase/config'
 import type { NoteSearchResult, SearchMatch, ContentSnippet } from '@/data/NoteSearchUtils'
 import type { SearchHistoryEntry } from '@/data/SearchHistoryRepository'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import {
   ADD_NOTE, DELETE_NOTE, RESTORE_NOTE, SECTION_DELETED_NOTES,
   NO_NOTES_FOUND, EMPTY_NOTE, REFRESH, LOADING, NOTE_MENU,
   SEARCH, SEARCH_HINT, SEARCH_FILTER_NAME, SEARCH_FILTER_CONTENT,
   SEARCH_GO, SEARCH_NO_RESULTS, SEARCH_HISTORY_BUTTON,
+  CLEAR_DELETED, CLEAR_DELETED_CONFIRM_TITLE, CLEAR_DELETED_CONFIRM_MESSAGE, clearedDeletedCount,
 } from '@/strings'
 import styles from './NoteListScreen.module.css'
 
@@ -25,6 +27,7 @@ export function NoteListScreen() {
     createNote,
     deleteNote,
     undeleteNote,
+    clearDeleted,
     refresh,
   } = useNotes()
   const {
@@ -47,6 +50,24 @@ export function NoteListScreen() {
   }
 
   const showSearchResults = searchState.isSearchOpen && searchState.query.length > 0
+
+  // Hard-delete all soft-deleted notes. Destructive — gated by a confirm dialog.
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false)
+  const [clearStatus, setClearStatus] = useState<{ count: number } | null>(null)
+  const [clearing, setClearing] = useState(false)
+
+  const handleClearDeleted = async () => {
+    setClearConfirmOpen(false)
+    setClearing(true)
+    try {
+      const count = await clearDeleted()
+      setClearStatus({ count })
+    } catch (e) {
+      console.error('Failed to clear deleted notes', e)
+    } finally {
+      setClearing(false)
+    }
+  }
 
   return (
     <div className={styles.container}>
@@ -145,11 +166,33 @@ export function NoteListScreen() {
                     </li>
                   ))}
                 </ul>
+                <div className={styles.clearDeletedRow}>
+                  <button
+                    className={styles.clearDeletedButton}
+                    onClick={() => setClearConfirmOpen(true)}
+                    disabled={clearing}
+                  >
+                    {CLEAR_DELETED}
+                  </button>
+                </div>
               </>
+            )}
+            {clearStatus && (
+              <p className={styles.status}>{clearedDeletedCount(clearStatus.count)}</p>
             )}
           </>
         )}
       </main>
+
+      <ConfirmDialog
+        open={clearConfirmOpen}
+        title={CLEAR_DELETED_CONFIRM_TITLE}
+        message={CLEAR_DELETED_CONFIRM_MESSAGE}
+        confirmLabel={CLEAR_DELETED}
+        danger
+        onConfirm={() => void handleClearDeleted()}
+        onCancel={() => setClearConfirmOpen(false)}
+      />
     </div>
   )
 }

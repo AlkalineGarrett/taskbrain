@@ -1026,6 +1026,18 @@ class EditorController(
         } else {
             line.updateContent(newContent, contentCursor)
         }
+
+        // Stamp a TYPED sentinel as soon as a non-root line gets non-empty content
+        // and has no id yet. Without this, a save fired before the user presses
+        // Enter (e.g. Activity ON_STOP from rotation) would carry a bare null id
+        // — the upstream-bug shape that the recovery path warns about.
+        // Line 0 (root) is intentionally excluded: its id is enforced from
+        // parentNoteId in toNoteLines, and an empty list there means "fresh
+        // root doc to be allocated" for brand-new notes.
+        if (lineIndex > 0 && line.noteIds.isEmpty() && line.content.isNotEmpty()) {
+            line.noteIds = listOf(NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED))
+        }
+
         state.notifyChange()
 
         // Only mark content changed if it actually changed

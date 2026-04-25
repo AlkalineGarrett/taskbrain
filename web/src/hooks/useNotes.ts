@@ -57,6 +57,12 @@ export function useNotes() {
     [refresh],
   )
 
+  const clearDeleted = useCallback(async (): Promise<number> => {
+    const count = await repo.hardDeleteAllSoftDeleted()
+    await refresh()
+    return count
+  }, [refresh])
+
   return {
     activeNotes,
     deletedNotes,
@@ -65,6 +71,7 @@ export function useNotes() {
     createNote,
     deleteNote,
     undeleteNote,
+    clearDeleted,
     refresh,
   }
 }

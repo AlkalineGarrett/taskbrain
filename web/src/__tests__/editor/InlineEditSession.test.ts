@@ -7,18 +7,18 @@ describe('InlineEditSession', () => {
   it('initializes with single-line content', () => {
     const session = new InlineEditSession('note1', 'Hello')
     expect(session.noteId).toBe('note1')
-    expect(session.editorState.lines.length).toBe(2) // content + trailing empty
+    // Content is loaded verbatim — no auto-appended trailing empty since
+    // empty lines are first-class docs that round-trip via Firestore now.
+    expect(session.editorState.lines.length).toBe(1)
     expect(session.editorState.lines[0]!.text).toBe('Hello')
-    expect(session.editorState.lines[1]!.text).toBe('')
   })
 
   it('initializes with multi-line content', () => {
     const session = new InlineEditSession('note1', 'Line 1\nLine 2\nLine 3')
-    expect(session.editorState.lines.length).toBe(4) // 3 lines + trailing empty
+    expect(session.editorState.lines.length).toBe(3)
     expect(session.editorState.lines[0]!.text).toBe('Line 1')
     expect(session.editorState.lines[1]!.text).toBe('Line 2')
     expect(session.editorState.lines[2]!.text).toBe('Line 3')
-    expect(session.editorState.lines[3]!.text).toBe('')
   })
 
   it('initializes with empty content', () => {
@@ -80,30 +80,25 @@ describe('InlineEditSession', () => {
 
   // --- updateHiddenIndices ---
 
-  it('hides trailing empty line', () => {
+  it('hides nothing — every line is a real doc under the new model', () => {
     const session = new InlineEditSession('note1', 'Line 1\nLine 2')
-    // Lines: ['Line 1', 'Line 2', ''] — trailing empty at index 2
-    expect(session.controller.hiddenIndices.has(2)).toBe(true)
-    expect(session.controller.hiddenIndices.has(0)).toBe(false)
-    expect(session.controller.hiddenIndices.has(1)).toBe(false)
+    expect(session.controller.hiddenIndices.size).toBe(0)
   })
 
   it('does not hide anything for single empty line', () => {
     const session = new InlineEditSession('note1', '')
-    // Lines: [''] — only one line, don't hide it
     expect(session.controller.hiddenIndices.size).toBe(0)
   })
 
   it('updates hidden indices after line count changes', () => {
     const session = new InlineEditSession('note1', 'A\nB')
-    // Lines: ['A', 'B', ''] — hidden = {2}
-    expect(session.controller.hiddenIndices.has(2)).toBe(true)
+    expect(session.controller.hiddenIndices.size).toBe(0)
 
     // Simulate adding a line (split)
     session.controller.splitLine(1)
     session.updateHiddenIndices()
-    // Lines should now have 4 lines, trailing empty at index 3
-    expect(session.controller.hiddenIndices.has(session.editorState.lines.length - 1)).toBe(true)
+    // Empty lines are no longer hidden — the trailing-empty UI affordance is gone.
+    expect(session.controller.hiddenIndices.size).toBe(0)
   })
 
   // --- syncOriginalContent ---

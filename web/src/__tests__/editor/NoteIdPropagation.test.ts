@@ -173,9 +173,10 @@ describe('splitLine preserves noteIds', () => {
 
     expect(controller.state.lines[0]!.text).toBe('Hello')
     expect(controller.state.lines[0]!.noteIds).toEqual(['note1'])
-    // New empty line gets fresh tempId, not the original noteId
-    expect(controller.state.lines[1]!.noteIds).toEqual([])
-    expect(controller.state.lines[1]!.effectiveId).not.toBe('note1')
+    // Empty lines are first-class docs now: the new empty half gets a SPLIT
+    // sentinel so save allocates a fresh doc.
+    expect(hasNoRealNoteId(controller.state.lines[1]!.noteIds)).toBe(true)
+    expect(controller.state.lines[1]!.noteIds).toHaveLength(1)
   })
 
   it('gives original empty line a fresh id when splitting at beginning', () => {
@@ -188,9 +189,11 @@ describe('splitLine preserves noteIds', () => {
 
     controller.splitLine(0)
 
-    // Original line is now empty, should lose noteIds
+    // Original line is now empty — gets a SPLIT sentinel so save allocates a
+    // fresh doc for the empty line.
     expect(controller.state.lines[0]!.text).toBe('')
-    expect(controller.state.lines[0]!.noteIds).toEqual([])
+    expect(hasNoRealNoteId(controller.state.lines[0]!.noteIds)).toBe(true)
+    expect(controller.state.lines[0]!.noteIds).toHaveLength(1)
     // New line has the content, should keep noteIds
     expect(controller.state.lines[1]!.text).toBe('Hello')
     expect(controller.state.lines[1]!.noteIds).toEqual(['note1'])
@@ -207,7 +210,8 @@ describe('splitLine preserves noteIds', () => {
     controller.splitLine(0)
 
     expect(controller.state.lines[0]!.noteIds).toEqual(['note1'])
-    expect(controller.state.lines[1]!.noteIds).toEqual([])
+    expect(hasNoRealNoteId(controller.state.lines[1]!.noteIds)).toBe(true)
+    expect(controller.state.lines[1]!.noteIds).toHaveLength(1)
   })
 
   it('gives original line a fresh id when splitting prefixed line at prefix boundary', () => {
@@ -220,8 +224,9 @@ describe('splitLine preserves noteIds', () => {
 
     controller.splitLine(0)
 
-    // Original line has just prefix (no content), should lose noteIds
-    expect(controller.state.lines[0]!.noteIds).toEqual([])
+    // Original line has just prefix (no content) — gets a SPLIT sentinel.
+    expect(hasNoRealNoteId(controller.state.lines[0]!.noteIds)).toBe(true)
+    expect(controller.state.lines[0]!.noteIds).toHaveLength(1)
     // New line has the content, should keep noteIds
     expect(controller.state.lines[1]!.noteIds).toEqual(['note1'])
   })
@@ -242,7 +247,9 @@ describe('updateLineContent newline assigns noteIds correctly', () => {
 
     expect(controller.state.lines[0]!.content).toBe('Hello')
     expect(controller.state.lines[0]!.noteIds).toEqual(['note1'])
-    expect(controller.state.lines[1]!.noteIds).toEqual([])
+    // Empty halves get a SPLIT sentinel under the new empty-line-as-doc model.
+    expect(hasNoRealNoteId(controller.state.lines[1]!.noteIds)).toBe(true)
+    expect(controller.state.lines[1]!.noteIds).toHaveLength(1)
   })
 
   it('gives original line a fresh id when newline at beginning of content', () => {
@@ -256,7 +263,9 @@ describe('updateLineContent newline assigns noteIds correctly', () => {
     controller.updateLineContent(0, '\nHello', 0)
 
     expect(controller.state.lines[0]!.content).toBe('')
-    expect(controller.state.lines[0]!.noteIds).toEqual([])
+    // Empty halves get a SPLIT sentinel under the new empty-line-as-doc model.
+    expect(hasNoRealNoteId(controller.state.lines[0]!.noteIds)).toBe(true)
+    expect(controller.state.lines[0]!.noteIds).toHaveLength(1)
     expect(controller.state.lines[1]!.content).toBe('Hello')
     expect(controller.state.lines[1]!.noteIds).toEqual(['note1'])
   })

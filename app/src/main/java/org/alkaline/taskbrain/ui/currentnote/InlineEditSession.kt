@@ -60,15 +60,14 @@ class InlineEditSession(
     /**
      * Builds tracked lines (content + noteId) from editor state, ready for
      * saveNoteWithChildren. Mirrors the main editor's save path.
+     *
+     * Empty lines are first-class docs now, so no trailing-empty stripping is
+     * needed here.
      */
     fun getTrackedLines(): List<NoteLine> {
         val lines = editorState.lines
-        // Strip trailing empty lines to match save convention
-        var count = lines.size
-        while (count > 1 && lines[count - 1].text.isEmpty()) count--
-
-        val contentLines = lines.subList(0, count).map { it.text }
-        val lineNoteIds = lines.subList(0, count).map { it.noteIds }
+        val contentLines = lines.map { it.text }
+        val lineNoteIds = lines.map { it.noteIds }
         val tracked = resolveNoteIds(contentLines, lineNoteIds).toMutableList()
 
         // Ensure first line always maps to the parent noteId

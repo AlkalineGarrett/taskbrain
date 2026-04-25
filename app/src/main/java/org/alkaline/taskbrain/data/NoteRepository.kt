@@ -72,16 +72,8 @@ class NoteRepository(
 
             val allLines = loadNoteLines(note)
 
-            // Append an empty line for user to type on, unless the note is already
-            // a single empty line (new note case — the existing empty line suffices)
-            val lines = if (allLines.size == 1 && allLines[0].content.isEmpty()) {
-                allLines
-            } else {
-                allLines + NoteLine("", null)
-            }
-
             NoteLoadResult(
-                lines = lines,
+                lines = allLines,
                 isDeleted = note.state == "deleted",
                 showCompleted = note.showCompleted,
             )
@@ -272,9 +264,7 @@ class NoteRepository(
             val parentRef = noteRef(noteId)
             val rootContent = trackedLines[0].content.trimStart('\t')
 
-            // Drop trailing empty lines (editor's typing line)
-            val childPortion = trackedLines.drop(1).dropLastWhile { it.content.isEmpty() }
-            val linesToSaveUnreconciled = listOf(trackedLines[0]) + childPortion
+            val linesToSaveUnreconciled = trackedLines
 
             // Recover noteIds that the editor lost along the way: if a null-id
             // line sits at the same tree position and has identical content to
@@ -286,11 +276,9 @@ class NoteRepository(
 
             // Pre-allocate refs for lines that need a fresh Firestore doc —
             // either null (bug path — id was wiped) or a sentinel (expected —
-            // marks a new line from paste/split/agent/etc.).
+            // marks a new line from paste/split/agent/typed/etc.).
             val newRefs = mutableMapOf<Int, DocumentReference>()
             for (i in 1 until linesToSave.size) {
-                val content = linesToSave[i].content.trimStart('\t')
-                if (content.isEmpty()) continue
                 val id = linesToSave[i].noteId
                 if (id == null || NoteIdSentinel.isSentinel(id)) {
                     newRefs[i] = newNoteRef()
@@ -303,7 +291,8 @@ class NoteRepository(
                 else -> linesToSave[lineIndex].noteId ?: ""
             }
 
-            // Compute tree structure from indentation
+            // Empty lines don't push the indent stack — indented children
+            // below them attach to the last content-bearing ancestor.
             val parentOfLine = IntArray(linesToSave.size)
             val childrenOfLine = Array(linesToSave.size) { mutableListOf<String>() }
 
@@ -318,11 +307,8 @@ class NoteRepository(
                     stack.removeLast()
                 }
                 parentOfLine[i] = stack.last().lineIndex
-
-                if (content.isEmpty()) {
-                    childrenOfLine[parentOfLine[i]].add("")
-                } else {
-                    childrenOfLine[parentOfLine[i]].add(effectiveId(i))
+                childrenOfLine[parentOfLine[i]].add(effectiveId(i))
+                if (content.isNotEmpty()) {
                     stack.add(StackEntry(depth, i))
                 }
             }
@@ -331,13 +317,10 @@ class NoteRepository(
             // unlike the Firestore query that fetchExistingDescendantIds used).
             val existingDescendantIds = NoteStore.getDescendantIds(noteId)
 
-            // Compute surviving IDs upfront for the content-drop guard
+            // Compute surviving IDs upfront for the content-drop guard.
             val survivingIds = mutableSetOf<String>()
             for (i in 1 until linesToSave.size) {
-                val content = linesToSave[i].content.trimStart('\t')
-                if (content.isNotEmpty()) {
-                    survivingIds.add(effectiveId(i))
-                }
+                survivingIds.add(effectiveId(i))
             }
             val toDelete = existingDescendantIds - survivingIds
 
@@ -347,7 +330,7 @@ class NoteRepository(
             // auto-fix reconstruction; counting them as deletions would cause
             // a save of a healed note to falsely trip the guard.
             val declaredContainedNotes = (NoteStore.getNoteById(noteId)?.containedNotes
-                ?: emptyList()).filter { it.isNotEmpty() }.toSet()
+                ?: emptyList()).toSet()
             val realContainedNotes = declaredContainedNotes.intersect(existingDescendantIds)
 
             val orphanRefs = declaredContainedNotes - existingDescendantIds
@@ -398,7 +381,6 @@ class NoteRepository(
             // Descendants
             for (i in 1 until linesToSave.size) {
                 val content = linesToSave[i].content.trimStart('\t')
-                if (content.isEmpty()) continue // spacer
 
                 val parentId = effectiveId(parentOfLine[i])
 
@@ -499,7 +481,6 @@ class NoteRepository(
         var nullTrace: ArrayList<NullIdRecovery>? = null
         for (i in 1 until result.size) {
             val content = result[i].content.trimStart('\t')
-            if (content.isEmpty()) continue
             val existing = result[i].noteId
             // A real id (non-sentinel, non-null) means we already know which
             // doc this line maps to. Sentinels and nulls are placeholders —
@@ -684,18 +665,12 @@ class NoteRepository(
         withContext(Dispatchers.IO) {
             requireUserId()
 
-            // Prefer NoteStore in-memory data (works offline) with Firestore fallback
+            // Prefer NoteStore in-memory data (works offline) with Firestore fallback.
             val existingLines = NoteStore.getNoteLinesById(noteId)
                 ?: loadNoteWithChildren(noteId).getOrThrow().lines
-            // Remove trailing empty line that loadNoteWithChildren appends for the editor
-            val existingLinesNoTrailing = if (existingLines.size > 1 && existingLines.last().content.isEmpty()) {
-                existingLines.dropLast(1)
-            } else {
-                existingLines
-            }
 
             val newLinesContent = newContent.lines()
-            val trackedLines = matchLinesToIds(noteId, existingLinesNoTrailing, newLinesContent)
+            val trackedLines = matchLinesToIds(noteId, existingLines, newLinesContent)
             saveNoteWithChildren(noteId, trackedLines).getOrThrow()
 
             Log.d(TAG, "Saved note with full content: $noteId (${trackedLines.size} lines)")
@@ -755,13 +730,13 @@ class NoteRepository(
                 }
                 val parent = stack.last()
 
-                if (lineContent.isEmpty()) {
-                    parent.children.add("")
-                } else {
-                    val ref = newNoteRef()
-                    val nodeChildren = mutableListOf<String>()
-                    nodes.add(NodeInfo(ref, lineContent, parent.id, nodeChildren))
-                    parent.children.add(ref.id)
+                // Empty lines don't push the indent stack — children below
+                // attach to the last content-bearing ancestor.
+                val ref = newNoteRef()
+                val nodeChildren = mutableListOf<String>()
+                nodes.add(NodeInfo(ref, lineContent, parent.id, nodeChildren))
+                parent.children.add(ref.id)
+                if (lineContent.isNotEmpty()) {
                     stack.add(StackEntry(depth, ref.id, nodeChildren))
                 }
             }
@@ -905,14 +880,14 @@ class NoteRepository(
         appendLine("=== CONTENT DROP GUARD TRIGGERED ===")
         appendLine("noteId: $noteId")
         appendLine("originalTrackedLines: ${originalTrackedLines.size}")
-        appendLine("linesToSave (after trailing-empty drop): ${linesToSave.size}")
+        appendLine("linesToSave: ${linesToSave.size}")
         appendLine("existingDescendants (rootNoteId query): ${existingDescendantIds.size} $existingDescendantIds")
         appendLine("survivingIds: ${survivingIds.size} $survivingIds")
         appendLine("toDelete: ${toDelete.size} $toDelete")
 
         appendLine("--- containedNotes guard ---")
         val storeNote = NoteStore.getNoteById(noteId)
-        val containedNotes = storeNote?.containedNotes?.filter { it.isNotEmpty() } ?: emptyList()
+        val containedNotes = storeNote?.containedNotes ?: emptyList()
         appendLine("  containedNotes: ${containedNotes.size} $containedNotes")
         val directToDelete = containedNotes.toSet() - survivingIds
         appendLine("  directToDelete (containedNotes - surviving): ${directToDelete.size} $directToDelete")

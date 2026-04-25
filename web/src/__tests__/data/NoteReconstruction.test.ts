@@ -195,14 +195,17 @@ describe('reconstructNoteContent', () => {
     expect(fixed).toBe(false)
   })
 
-  it('spacer in containedNotes renders as blank line', () => {
+  it('legacy "" in containedNotes is dropped as an orphan (post-migration)', () => {
+    // Pre-migration, "" was a spacer sentinel. Post-migration, all empty
+    // lines are real docs — an "" entry is data corruption that the orphan-
+    // drop path catches and flags via `fixed = true`.
     const root = note({ id: 'r', content: 'Root', containedNotes: ['c1', '', 'c2'] })
     const c1 = note({ id: 'c1', content: 'A', parentNoteId: 'r' })
     const c2 = note({ id: 'c2', content: 'B', parentNoteId: 'r' })
     const raw = toMap([root, c1, c2])
     const [result, fixed] = reconstructNoteContent(root, raw, childrenByParent(raw))
-    expect(result.content).toBe('Root\nA\n\nB')
-    expect(fixed).toBe(false)
+    expect(result.content).toBe('Root\nA\nB')
+    expect(fixed).toBe(true)
   })
 
   it('orphan ref dropped sets fixed true', () => {

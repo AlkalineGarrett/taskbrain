@@ -263,14 +263,17 @@ class NoteReconstructionTest {
     }
 
     @Test
-    fun `reconstructContent - spacer in containedNotes renders as blank line`() {
+    fun `reconstructContent - legacy "" in containedNotes is dropped as an orphan`() {
+        // Pre-migration, "" was a spacer sentinel. Post-migration, all empty
+        // lines are real docs — an "" entry is data corruption that the
+        // orphan-drop path catches and flags via fixed = true.
         val root = note("r", "Root", containedNotes = listOf("c1", "", "c2"))
         val c1 = note("c1", "A", parentNoteId = "r")
         val c2 = note("c2", "B", parentNoteId = "r")
         val raw = mapOf("r" to root, "c1" to c1, "c2" to c2)
         val (result, fixed) = reconstructNoteContent(root, raw, childrenByParent(raw))
-        assertEquals("Root\nA\n\nB", result.content)
-        assertFalse(fixed)
+        assertEquals("Root\nA\nB", result.content)
+        assertTrue(fixed)
     }
 
     @Test

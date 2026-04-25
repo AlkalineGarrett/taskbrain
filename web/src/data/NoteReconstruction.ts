@@ -149,10 +149,6 @@ function renderChildrenOf(
   const placed = new Set<string>()
 
   for (const childId of parent.containedNotes) {
-    if (childId.length === 0) {
-      lines.push({ content: childPrefix, noteId: null })
-      continue
-    }
     const child = rawNotes.get(childId)
     if (!child || child.state === 'deleted' || child.parentNoteId !== parent.id) {
       fixed = true

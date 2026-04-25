@@ -98,13 +98,8 @@ export class NoteRepository {
       const note = noteFromFirestore(docSnap.id, docSnap.data())
       const allLines = await this.loadNoteLines(note)
 
-      // Append empty line for typing, unless note is a single empty line
-      const lines = allLines.length === 1 && allLines[0]!.content === ''
-        ? allLines
-        : [...allLines, { content: '', noteId: null }]
-
       return {
-        lines,
+        lines: allLines,
         isDeleted: note.state === 'deleted',
         showCompleted: note.showCompleted ?? true,
       }
@@ -238,9 +233,7 @@ export class NoteRepository {
       const parentRef = this.noteRef(noteId)
       const rootContent = trackedLines[0]!.content.replace(/^\t+/, '')
 
-      // Drop trailing empty lines (editor's typing line)
-      const childPortion = dropLastWhile(trackedLines.slice(1), (l) => l.content === '')
-      const linesToSaveUnreconciled = [trackedLines[0]!, ...childPortion]
+      const linesToSaveUnreconciled = trackedLines
 
       // Recover noteIds that the editor lost along the way: if a null-id
       // line sits at the same tree position and has identical content to
@@ -249,12 +242,12 @@ export class NoteRepository {
       const linesToSave = reconcileNullNoteIdsByContent(noteId, linesToSaveUnreconciled)
 
       // Pre-allocate refs for new notes. Both null (upstream-bug signal) and
-      // sentinel (expected placeholder from paste/split/etc.) ids need a fresh
-      // Firestore doc — only real ids refer to existing docs we can update.
+      // sentinel (expected placeholder from paste/split/typed/etc.) ids
+      // need a fresh Firestore doc — only real ids refer to existing docs we
+      // can update.
       const newRefs = new Map<number, DocumentReference>()
       for (let i = 1; i < linesToSave.length; i++) {
-        const content = linesToSave[i]!.content.replace(/^\t+/, '')
-        if (!isRealNoteId(linesToSave[i]!.noteId) && content !== '') {
+        if (!isRealNoteId(linesToSave[i]!.noteId)) {
           newRefs.set(i, doc(this.notesRef))
         }
       }
@@ -265,7 +258,8 @@ export class NoteRepository {
         return newRefs.get(lineIndex)?.id ?? ''
       }
 
-      // Compute tree structure from indentation
+      // Empty lines don't push the indent stack — indented children below
+      // them attach to the last content-bearing ancestor.
       const parentOfLine = new Array<number>(linesToSave.length).fill(0)
       const childrenOfLine = linesToSave.map(() => [] as string[])
 
@@ -280,11 +274,8 @@ export class NoteRepository {
           stack.pop()
         }
         parentOfLine[i] = stack[stack.length - 1]!.lineIndex
-
-        if (content === '') {
-          childrenOfLine[parentOfLine[i]!]!.push('')
-        } else {
-          childrenOfLine[parentOfLine[i]!]!.push(effectiveId(i))
+        childrenOfLine[parentOfLine[i]!]!.push(effectiveId(i))
+        if (content !== '') {
           stack.push({ depth, lineIndex: i })
         }
       }
@@ -313,7 +304,6 @@ export class NoteRepository {
         // Write each descendant
         for (let i = 1; i < linesToSave.length; i++) {
           const content = linesToSave[i]!.content.replace(/^\t+/, '')
-          if (content === '') continue // spacer
 
           const id = effectiveId(i)
           const parentId = effectiveId(parentOfLine[i]!)
@@ -401,15 +391,10 @@ export class NoteRepository {
     return this.logged('saveNoteWithFullContent', async () => {
       this.requireUserId()
 
-      // Load existing structure (tree-aware)
       const { lines: existingLines } = await this.loadNoteWithChildren(noteId)
-      const existingLinesNoTrailing =
-        existingLines.length > 1 && existingLines[existingLines.length - 1]!.content === ''
-          ? existingLines.slice(0, -1)
-          : existingLines
 
       const newLinesContent = newContent.split('\n')
-      const trackedLines = matchLinesToIds(noteId, existingLinesNoTrailing, newLinesContent, editorNoteIds)
+      const trackedLines = matchLinesToIds(noteId, existingLines, newLinesContent, editorNoteIds)
       return this.saveNoteWithChildren(noteId, trackedLines)
     })
   }
@@ -465,13 +450,13 @@ export class NoteRepository {
         }
         const parent = stack[stack.length - 1]!
 
-        if (lineContent === '') {
-          parent.children.push('')
-        } else {
-          const ref = doc(this.notesRef)
-          const nodeChildren: string[] = []
-          nodes.push({ ref, content: lineContent, parentId: parent.id, children: nodeChildren })
-          parent.children.push(ref.id)
+        // Empty lines don't push the indent stack — children below attach
+        // to the last content-bearing ancestor.
+        const ref = doc(this.notesRef)
+        const nodeChildren: string[] = []
+        nodes.push({ ref, content: lineContent, parentId: parent.id, children: nodeChildren })
+        parent.children.push(ref.id)
+        if (lineContent !== '') {
           stack.push({ depth, id: ref.id, children: nodeChildren })
         }
       }
@@ -528,6 +513,37 @@ export class NoteRepository {
   }
 
   /**
+   * Hard-deletes every note already in soft-deleted state (root + descendant
+   * docs are all flagged when softDeleteNote runs, so a single
+   * `state == "deleted"` query catches the whole tree). Returns the number of
+   * docs removed. Chunks at the 500-op Firestore batch limit.
+   *
+   * Irreversible — callers should confirm before invoking.
+   */
+  async hardDeleteAllSoftDeleted(): Promise<number> {
+    return this.logged('hardDeleteAllSoftDeleted', async () => {
+      const userId = this.requireUserId()
+      const q = query(
+        this.notesRef,
+        where('state', '==', 'deleted'),
+        where('userId', '==', userId),
+      )
+      const snap = await getDocs(q)
+      if (snap.empty) return 0
+
+      const BATCH_LIMIT = 500
+      for (let i = 0; i < snap.docs.length; i += BATCH_LIMIT) {
+        const batch = writeBatch(this.db)
+        for (const d of snap.docs.slice(i, i + BATCH_LIMIT)) {
+          batch.delete(d.ref)
+        }
+        await batch.commit()
+      }
+      return snap.size
+    })
+  }
+
+  /**
    * Restores a deleted note and all its descendants.
    */
   async undeleteNote(noteId: string): Promise<void> {
@@ -575,15 +591,6 @@ export class NoteRepository {
   }
 }
 
-// --- Utility functions ---
-
-function dropLastWhile<T>(arr: T[], predicate: (item: T) => boolean): T[] {
-  let end = arr.length
-  while (end > 0 && predicate(arr[end - 1]!)) {
-    end--
-  }
-  return arr.slice(0, end)
-}
 
 /**
  * For each non-empty line whose `noteId` is null, try to recover a real id
@@ -637,7 +644,6 @@ function reconcileNullNoteIdsByContent(
   const nullTrace: NullIdRecovery[] = []
   for (let i = 1; i < result.length; i++) {
     const content = result[i]!.content.replace(/^\t+/, '')
-    if (content.length === 0) continue
     const existing = result[i]!.noteId
     if (isRealNoteId(existing)) {
       lineIds[i] = existing

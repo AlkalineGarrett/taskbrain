@@ -23,32 +23,24 @@ export class InlineEditSession {
     this.undoManager = new UndoManager()
     this.controller = new EditorController(this.editorState, this.undoManager)
 
-    // Split content into lines and initialize the editor.
-    // Append a trailing empty line for typing (matches main editor convention).
+    // Split content into lines and initialize the editor. Empty lines are
+    // first-class docs now, so whatever the source content provides — including
+    // any trailing empty — is loaded verbatim. No auto-append.
     const rawLines = content.split('\n')
     const noteLines = rawLines.map((text, i) => ({
       text,
       noteIds: lineNoteIds?.[i] ?? [],
     }))
-    if (noteLines.length === 0 || noteLines[noteLines.length - 1]!.text !== '') {
-      noteLines.push({ text: '', noteIds: [] })
-    }
     this.editorState.initFromNoteLines(noteLines)
     this.undoManager.setBaseline(this.editorState.lines, this.editorState.focusedLineIndex)
 
-    // Hide the trailing empty line from move operations so move-down
-    // correctly disables at the last content line.
     this.updateHiddenIndices()
   }
 
-  /** Recompute hidden indices — hides the trailing empty line. */
+  /** Recompute hidden indices. No lines are hidden under the new empty-line
+   * model — every line is real and should participate in move operations. */
   updateHiddenIndices(): void {
-    const lines = this.editorState.lines
-    const hidden = new Set<number>()
-    if (lines.length > 1 && lines[lines.length - 1]!.text === '') {
-      hidden.add(lines.length - 1)
-    }
-    this.controller.hiddenIndices = hidden
+    this.controller.hiddenIndices = new Set<number>()
   }
 
   get isDirty(): boolean {
@@ -66,18 +58,10 @@ export class InlineEditSession {
     this.originalContent = content
   }
 
-  /**
-   * Returns the serialized content, stripping the trailing empty line
-   * that was added for editing (matches main editor save convention).
-   */
+  /** Returns the serialized content. Empty lines round-trip as their own
+   * docs now, so no trailing-empty stripping is needed. */
   getText(): string {
-    const lines = this.editorState.lines
-    const texts = lines.map((l) => l.text)
-    // Drop trailing empty line(s) — UI always has one for typing
-    while (texts.length > 1 && texts[texts.length - 1] === '') {
-      texts.pop()
-    }
-    return texts.join('\n')
+    return this.editorState.lines.map((l) => l.text).join('\n')
   }
 
   /**
@@ -86,12 +70,8 @@ export class InlineEditSession {
    */
   getTrackedLines(): NoteLine[] {
     const lines = this.editorState.lines
-    // Strip trailing empty lines to match getText()
-    let count = lines.length
-    while (count > 1 && lines[count - 1]!.text === '') count--
-
-    const contentLines = lines.slice(0, count).map(l => l.text)
-    const lineNoteIds = lines.slice(0, count).map(l => l.noteIds)
+    const contentLines = lines.map(l => l.text)
+    const lineNoteIds = lines.map(l => l.noteIds)
     const tracked = resolveNoteIds(contentLines, lineNoteIds)
 
     // Ensure first line always maps to the parent noteId

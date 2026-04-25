@@ -185,10 +185,6 @@ private fun renderChildrenOf(
 
     // Declared order from containedNotes.
     for (childId in parent.containedNotes) {
-        if (childId.isEmpty()) {
-            lines.add(NoteLine(childPrefix, null))
-            continue
-        }
         val child = rawNotes[childId]
         if (child == null || child.state == "deleted" || child.parentNoteId != parent.id) {
             fixed = true
