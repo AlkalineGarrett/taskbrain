@@ -1,6 +1,7 @@
 package org.alkaline.taskbrain.ui.currentnote.selection
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,3 +55,12 @@ class ContextMenuState {
 fun rememberContextMenuState(): ContextMenuState {
     return remember { ContextMenuState() }
 }
+
+/**
+ * Per-line tap handlers run before the editor-wide gesture handler can fire (their
+ * [androidx.compose.foundation.gestures.detectTapGestures] consumes the touch). This local
+ * exposes the active editor's "tap on selection" routine so those line handlers can
+ * toggle the menu instead of clearing the selection. Provided by [EditorSelectionLayer];
+ * null outside an editor.
+ */
+internal val LocalContextMenuTapHandler = compositionLocalOf<((Offset) -> Unit)?> { null }

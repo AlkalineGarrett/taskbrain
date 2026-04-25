@@ -2,6 +2,7 @@ package org.alkaline.taskbrain.ui.currentnote.selection
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -52,7 +53,11 @@ internal fun EditorSelectionLayer(
     )
 
     Box(modifier = modifier) {
-        content(config)
+        CompositionLocalProvider(
+            LocalContextMenuTapHandler provides contextMenuState::handleTapOnSelection
+        ) {
+            content(config)
+        }
 
         SelectionOverlay(
             state = state,

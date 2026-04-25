@@ -938,6 +938,17 @@ class EditorController(
     }
 
     /**
+     * True if a tap at [contentPosition] within line [lineIndex] would land inside
+     * the active selection.
+     */
+    fun isContentOffsetInSelection(lineIndex: Int, contentPosition: Int): Boolean {
+        if (!state.hasSelection) return false
+        val line = state.lines.getOrNull(lineIndex) ?: return false
+        val globalOffset = state.getLineStartOffset(lineIndex) + line.prefix.length + contentPosition
+        return globalOffset in state.selection.min..state.selection.max
+    }
+
+    /**
      * Set cursor from global character offset.
      * Properly handles undo state when focus changes.
      */

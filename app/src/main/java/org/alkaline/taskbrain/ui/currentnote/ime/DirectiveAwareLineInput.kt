@@ -88,6 +88,7 @@ import org.alkaline.taskbrain.ui.currentnote.rendering.ButtonCallbacks
 import org.alkaline.taskbrain.ui.currentnote.rendering.ControlledLineView
 import org.alkaline.taskbrain.ui.currentnote.rendering.DirectiveCallbacks
 import org.alkaline.taskbrain.ui.currentnote.selection.EditorSelectionLayer
+import org.alkaline.taskbrain.ui.currentnote.selection.LocalContextMenuTapHandler
 import org.alkaline.taskbrain.ui.currentnote.gestures.LineLayoutInfo
 import org.alkaline.taskbrain.ui.currentnote.selection.GutterSelectionState
 import org.alkaline.taskbrain.ui.currentnote.selection.rememberGutterSelectionState
@@ -277,6 +278,8 @@ internal fun DirectiveAwareLineInput(
         } else null
     }
 
+    val onTapInsideSelection = LocalContextMenuTapHandler.current
+
     Box(
         modifier = modifier
             .focusRequester(focusRequester)
@@ -298,7 +301,7 @@ internal fun DirectiveAwareLineInput(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .pointerInput(content, onSymbolTap, onTapStarting, controller) {
+                    .pointerInput(content, onSymbolTap, onTapStarting, controller, onTapInsideSelection) {
                         detectTapGestures { offset ->
                             textLayoutResultState?.let { layout ->
                                 val position = layout.getOffsetForPosition(offset)
@@ -310,6 +313,11 @@ internal fun DirectiveAwareLineInput(
                                         onSymbolTap?.invoke(lineIndex, symbolIndex)
                                         return@detectTapGestures
                                     }
+                                }
+                                if (onTapInsideSelection != null
+                                    && controller.isContentOffsetInSelection(lineIndex, position)) {
+                                    onTapInsideSelection(offset)
+                                    return@detectTapGestures
                                 }
                                 onTapStarting?.invoke()
                                 controller.setContentCursor(lineIndex, position)
@@ -399,9 +407,14 @@ internal fun DirectiveAwareLineInput(
                     textLayoutResultState = layoutResult
                     onTextLayoutResult(layoutResult)
                 },
-                onTapAtSourcePosition = { sourcePosition ->
-                    onTapStarting?.invoke()
-                    controller.setContentCursor(lineIndex, sourcePosition)
+                onTapAtSourcePosition = { sourcePosition, tapOffset ->
+                    if (onTapInsideSelection != null
+                        && controller.isContentOffsetInSelection(lineIndex, sourcePosition)) {
+                        onTapInsideSelection(tapOffset)
+                    } else {
+                        onTapStarting?.invoke()
+                        controller.setContentCursor(lineIndex, sourcePosition)
+                    }
                 },
                 onSymbolTap = onSymbolTap,
                 symbolOverlays = symbolOverlays
@@ -427,7 +440,7 @@ private fun DirectiveOverlayText(
     cursorAlpha: Float,
     onDirectiveTap: ((directiveKey: String, sourceText: String) -> Unit)?,
     onTextLayout: (TextLayoutResult) -> Unit,
-    onTapAtSourcePosition: (Int) -> Unit,
+    onTapAtSourcePosition: (sourcePosition: Int, tapOffset: Offset) -> Unit,
     onSymbolTap: ((lineIndex: Int, charOffsetInLine: Int) -> Unit)? = null,
     symbolOverlays: List<SymbolOverlay> = emptyList()
 ) {
@@ -489,7 +502,7 @@ private fun DirectiveOverlayText(
                             if (symbolIndex != null && onSymbolTap != null) {
                                 onSymbolTap(lineIndex, symbolIndex)
                             } else {
-                                onTapAtSourcePosition(sourcePosition)
+                                onTapAtSourcePosition(sourcePosition, offset)
                             }
                         }
                     }

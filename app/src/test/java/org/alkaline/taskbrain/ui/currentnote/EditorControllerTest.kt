@@ -304,4 +304,77 @@ class EditorControllerTest {
         assertEquals("\t${LinePrefixes.CHECKBOX_CHECKED}", state.lines[0].text)
         assertEquals("\t${LinePrefixes.CHECKBOX_CHECKED}", state.lines[0].prefix)
     }
+
+    // ==================== isContentOffsetInSelection ====================
+    // Per-line tap handlers consume the touch before the editor-wide gesture
+    // handler can fire, so they need their own selection check to avoid clearing
+    // the selection on a tap that's meant to toggle the menu.
+
+    @Test
+    fun `isContentOffsetInSelection returns false when no selection`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.updateFromText("hello world")
+
+        assertFalse(controller.isContentOffsetInSelection(0, 5))
+    }
+
+    @Test
+    fun `isContentOffsetInSelection returns true for tap inside selection on same line`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.updateFromText("hello world")
+        state.setSelection(2, 8)
+
+        assertTrue(controller.isContentOffsetInSelection(0, 5))
+    }
+
+    @Test
+    fun `isContentOffsetInSelection returns false for tap outside selection`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.updateFromText("hello world")
+        state.setSelection(2, 5)
+
+        assertFalse(controller.isContentOffsetInSelection(0, 8))
+    }
+
+    @Test
+    fun `isContentOffsetInSelection returns true at selection boundary`() {
+        // Match the editor-wide gesture handler's inclusive range so both paths
+        // route the same boundary tap to the menu toggle.
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.updateFromText("hello world")
+        state.setSelection(2, 5)
+
+        assertTrue(controller.isContentOffsetInSelection(0, 2))
+        assertTrue(controller.isContentOffsetInSelection(0, 5))
+    }
+
+    @Test
+    fun `isContentOffsetInSelection accounts for prefix when computing global offset`() {
+        // Bullet prefix length 2 — content offset 3 maps to global offset 5,
+        // which sits inside selection [4, 7].
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.updateFromText("${LinePrefixes.BULLET}hello")
+        state.setSelection(4, 7)
+
+        assertTrue(controller.isContentOffsetInSelection(0, 3))
+        assertFalse(controller.isContentOffsetInSelection(0, 0))
+    }
+
+    @Test
+    fun `isContentOffsetInSelection works on a later line`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.updateFromText("first\nsecond\nthird")
+        // "first\n" = 6 chars; line 1 starts at offset 6. Select [8, 11] inside "second".
+        state.setSelection(8, 11)
+
+        assertTrue(controller.isContentOffsetInSelection(1, 3))
+        assertFalse(controller.isContentOffsetInSelection(1, 0))
+        assertFalse(controller.isContentOffsetInSelection(2, 0))
+    }
 }
