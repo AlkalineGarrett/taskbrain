@@ -516,7 +516,20 @@ fun CurrentNoteScreen(
                 // Non-recurring save: switch [recurringAlarm(...)] → [alarm(...)]
                 switchDirectiveIfNeeded(AlarmSymbolUtils.alarmDirective(existing.id))
             } else {
-                currentNoteViewModel.saveAndCreateAlarm(editorState.toNoteLines(), alarmDialogLineContent, alarmDialogLineIndex, dueTime, stages, inlineSession = alarmDialogInlineSession)
+                // Pre-allocate the alarm ID and embed its directive into the line so
+                // the note save and the alarm doc create ride one batch.
+                val alarmId = currentNoteViewModel.newAlarmId()
+                val targetController = alarmDialogInlineSession?.controller ?: controller
+                targetController.insertAtEndOfCurrentLine(AlarmSymbolUtils.alarmDirective(alarmId))
+                currentNoteViewModel.saveAndCreateAlarm(
+                    trackedLines = editorState.toNoteLines(),
+                    lineContent = alarmDialogLineContent,
+                    lineIndex = alarmDialogLineIndex,
+                    alarmId = alarmId,
+                    dueTime = dueTime,
+                    stages = stages,
+                    inlineSession = alarmDialogInlineSession,
+                )
             }
         },
         onAlarmSaveRecurring = { dueTime, stages, recurrenceConfig ->
@@ -529,7 +542,21 @@ fun CurrentNoteScreen(
                     switchDirectiveIfNeeded(AlarmSymbolUtils.recurringAlarmDirective(recurringId))
                 }
             } else {
-                currentNoteViewModel.saveAndCreateRecurringAlarm(editorState.toNoteLines(), alarmDialogLineContent, alarmDialogLineIndex, dueTime, stages, recurrenceConfig, inlineSession = alarmDialogInlineSession)
+                val recurringAlarmId = currentNoteViewModel.newRecurringAlarmId()
+                val alarmId = currentNoteViewModel.newAlarmId()
+                val targetController = alarmDialogInlineSession?.controller ?: controller
+                targetController.insertAtEndOfCurrentLine(AlarmSymbolUtils.recurringAlarmDirective(recurringAlarmId))
+                currentNoteViewModel.saveAndCreateRecurringAlarm(
+                    trackedLines = editorState.toNoteLines(),
+                    lineContent = alarmDialogLineContent,
+                    lineIndex = alarmDialogLineIndex,
+                    recurringAlarmId = recurringAlarmId,
+                    alarmId = alarmId,
+                    dueTime = dueTime,
+                    stages = stages,
+                    recurrenceConfig = recurrenceConfig,
+                    inlineSession = alarmDialogInlineSession,
+                )
             }
         },
         onAlarmSaveInstance = alarmDialogRecurringAlarm?.let { recurring ->
@@ -1118,37 +1145,14 @@ private fun ContentSyncEffects(
     // Note: Tab removal on delete is handled by the onDeleteNote callback in NoteStatusBar,
     // which closes the tab and navigates to the next one in a single step.
 
-    // Handle alarm creation - insert alarm directive, record for undo, and save
     LaunchedEffect(alarmCreated) {
         alarmCreated?.let { event ->
-            val directive = if (event.recurringAlarmId != null) {
-                AlarmSymbolUtils.recurringAlarmDirective(event.recurringAlarmId)
-            } else {
-                AlarmSymbolUtils.alarmDirective(event.alarmId)
+            event.alarmSnapshot?.let { snapshot ->
+                val session = inlineEditState.activeSession
+                val isInlineAlarm = session != null && snapshot.noteId == session.noteId
+                val targetController = if (isInlineAlarm) session!!.controller else controller
+                targetController.recordAlarmCreation(snapshot)
             }
-
-            val session = inlineEditState.activeSession
-            val targetNoteId = event.alarmSnapshot?.noteId
-            val isInlineAlarm = session != null && targetNoteId == session.noteId
-
-            if (isInlineAlarm) {
-                // Insert directive in the inline editor and save the inline note
-                session!!.controller.insertAtEndOfCurrentLine(directive)
-                event.alarmSnapshot?.let { snapshot ->
-                    session.controller.recordAlarmCreation(snapshot)
-                }
-                currentNoteViewModel.directiveManager.saveInlineEditSession(session)
-            } else {
-                // Insert directive in the main editor and save the parent note
-                controller.insertAtEndOfCurrentLine(directive)
-                onContentChanged(editorState.text)
-                event.alarmSnapshot?.let { snapshot ->
-                    controller.recordAlarmCreation(snapshot)
-                }
-                currentNoteViewModel.saveContent(editorState.toNoteLines())
-            }
-
-            // Immediately render the new alarm icon (without waiting for snapshot reload)
             currentNoteViewModel.directiveManager.bumpDirectiveCacheGeneration()
             currentNoteViewModel.alarmManager.clearAlarmCreatedEvent()
         }

@@ -22,6 +22,7 @@ import org.alkaline.taskbrain.data.AlarmStage
 import org.alkaline.taskbrain.data.RecurringAlarmRepository
 import org.alkaline.taskbrain.service.AlarmScheduler
 import org.alkaline.taskbrain.service.AlarmStateManager
+import org.alkaline.taskbrain.service.RecurrenceConfigMapper
 import org.alkaline.taskbrain.service.RecurrenceTemplateManager
 import org.alkaline.taskbrain.ui.currentnote.components.RecurrenceConfig
 import org.alkaline.taskbrain.data.NoteLine
@@ -215,8 +216,12 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      * On success, handles post-save bookkeeping: updating noteIds,
      * notifying the UI, and syncing alarm line content.
      */
-    private suspend fun persistCurrentNote(noteId: String, trackedLines: List<NoteLine>): Result<Map<Int, String>> {
-        val result = repository.saveNoteWithChildren(noteId, trackedLines)
+    private suspend fun persistCurrentNote(
+        noteId: String,
+        trackedLines: List<NoteLine>,
+        extraOpsBuilder: NoteRepository.ExtraOpsBuilder?,
+    ): Result<Map<Int, String>> {
+        val result = repository.saveNoteWithChildren(noteId, trackedLines, extraOpsBuilder)
         result.fold(
             onSuccess = { newIdsMap ->
                 // Update currentNoteLines with newly assigned IDs
@@ -583,7 +588,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         // persistCurrentNote does a structured save (with noteId mappings) — more
         // precise than the auto-persist callback, so we passed persist = false above.
         viewModelScope.launch {
-            val result = persistCurrentNote(savedNoteId, trackedLines)
+            val result = persistCurrentNote(savedNoteId, trackedLines, extraOpsBuilder = null)
 
             result.onSuccess {
                 alarmManager.syncAlarmNoteIds(trackedLines)
@@ -630,66 +635,105 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         }
     }
 
+    /** Mints a fresh alarm doc ID client-side, no Firestore write. */
+    fun newAlarmId(): String = alarmRepository.newAlarmId()
+
+    /** Mints a fresh recurringAlarm doc ID client-side, no Firestore write. */
+    fun newRecurringAlarmId(): String = recurringAlarmRepository.newRecurringAlarmId()
+
     /**
-     * Saves the note, then creates a new alarm for the specified line.
-     * For the main editor, saves via [persistCurrentNote]; for inline editors,
-     * saves via [NoteDirectiveManager.saveInlineEditSession].
-     *
-     * Callers must build [trackedLines] via [EditorState.toNoteLines] so per-line
-     * noteIds flow straight through to save — we no longer reconstruct the id
-     * list from a joined-content string, which was a lossy step that could
-     * silently drop ids and trigger the content-drop guard.
+     * Saves the note and creates the alarm doc atomically in one batch, then
+     * schedules and emits [NoteAlarmManager.alarmCreated]. The directive must
+     * already be in [trackedLines] (inserted by the caller using [newAlarmId]).
      */
     fun saveAndCreateAlarm(
         trackedLines: List<NoteLine>,
         lineContent: String,
-        lineIndex: Int? = null,
+        lineIndex: Int?,
+        alarmId: String,
         dueTime: Timestamp?,
-        stages: List<AlarmStage> = Alarm.DEFAULT_STAGES,
-        inlineSession: InlineEditSession? = null
-    ) {
-        viewModelScope.launch {
-            val noteId = saveAndResolveNoteId(trackedLines, lineIndex, inlineSession)
-            alarmManager.createAlarmForNote(noteId, lineContent, lineIndex, dueTime, stages)
-        }
+        stages: List<AlarmStage>,
+        inlineSession: InlineEditSession?,
+    ) = saveAndCreateAlarmInBatch(trackedLines, lineContent, lineIndex, inlineSession) { lineNoteId ->
+        val alarm = Alarm(
+            id = alarmId,
+            noteId = lineNoteId,
+            lineContent = lineContent,
+            dueTime = dueTime,
+            stages = stages,
+        )
+        alarm to listOf(alarmRepository.buildCreateBatchOp(alarm))
     }
 
     /**
-     * Saves the note, then creates a recurring alarm for the specified line.
-     * See [saveAndCreateAlarm] for notes on [trackedLines].
+     * Saves the note + recurringAlarm template + first instance alarm
+     * atomically in one batch, then schedules and emits the create event.
      */
     fun saveAndCreateRecurringAlarm(
         trackedLines: List<NoteLine>,
         lineContent: String,
-        lineIndex: Int? = null,
+        lineIndex: Int?,
+        recurringAlarmId: String,
+        alarmId: String,
         dueTime: Timestamp?,
-        stages: List<AlarmStage> = Alarm.DEFAULT_STAGES,
+        stages: List<AlarmStage>,
         recurrenceConfig: RecurrenceConfig,
-        inlineSession: InlineEditSession? = null
-    ) {
-        viewModelScope.launch {
-            val noteId = saveAndResolveNoteId(trackedLines, lineIndex, inlineSession)
-            alarmManager.createRecurringAlarmForNote(noteId, lineContent, lineIndex, dueTime, stages, recurrenceConfig)
-        }
+        inlineSession: InlineEditSession?,
+    ) = saveAndCreateAlarmInBatch(trackedLines, lineContent, lineIndex, inlineSession) { lineNoteId ->
+        val recurring = RecurrenceConfigMapper.toRecurringAlarm(
+            noteId = lineNoteId,
+            lineContent = lineContent,
+            dueTime = dueTime,
+            stages = stages,
+            config = recurrenceConfig,
+        ).copy(id = recurringAlarmId, currentAlarmId = alarmId)
+        val instance = Alarm(
+            id = alarmId,
+            noteId = lineNoteId,
+            lineContent = lineContent,
+            dueTime = dueTime,
+            stages = stages,
+            recurringAlarmId = recurringAlarmId,
+        )
+        instance to listOf(
+            recurringAlarmRepository.buildCreateBatchOp(recurring),
+            alarmRepository.buildCreateBatchOp(instance),
+        )
     }
 
     /**
-     * Saves the note and resolves the noteId for the given line.
-     * Routes to the inline or main editor save path based on [inlineSession].
+     * Shared driver for the alarm/recurring-alarm batch-create paths.
+     * [build] runs after the save resolves the line's noteId; it returns the
+     * Alarm to schedule plus the batch ops to splice into the note save.
      */
-    private suspend fun saveAndResolveNoteId(
+    private fun saveAndCreateAlarmInBatch(
         trackedLines: List<NoteLine>,
+        lineContent: String,
         lineIndex: Int?,
-        inlineSession: InlineEditSession?
-    ): String {
-        return if (inlineSession != null) {
-            directiveManager.saveInlineEditSession(inlineSession)
-            val line = lineIndex?.let { inlineSession.editorState.lines.getOrNull(it) }
-            line?.noteIds?.firstOrNull() ?: inlineSession.noteId
-        } else {
-            currentNoteLines = trackedLines
-            persistCurrentNote(currentNoteId, currentNoteLines)
-            if (lineIndex != null) getNoteIdForLine(lineIndex) else currentNoteId
+        inlineSession: InlineEditSession?,
+        build: (lineNoteId: String) -> Pair<Alarm, List<NoteRepository.BatchExtraOp>>,
+    ) {
+        viewModelScope.launch {
+            var alarmToSchedule: Alarm? = null
+            val builder = NoteRepository.ExtraOpsBuilder { resolveLineId, _ ->
+                val lineNoteId = when {
+                    lineIndex != null -> resolveLineId(lineIndex)
+                    inlineSession != null -> inlineSession.noteId
+                    else -> currentNoteId
+                }
+                val (alarm, ops) = build(lineNoteId)
+                alarmToSchedule = alarm
+                ops
+            }
+            val result = if (inlineSession != null) {
+                directiveManager.saveInlineEditSessionWithExtras(inlineSession, builder)
+            } else {
+                currentNoteLines = trackedLines
+                persistCurrentNote(currentNoteId, currentNoteLines, builder)
+            }
+            if (result.isSuccess) {
+                alarmToSchedule?.let { alarmManager.completeAlarmCreation(it, lineContent) }
+            }
         }
     }
 
@@ -796,7 +840,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 var lastError: Throwable? = null
 
                 // Save main note (without persistCurrentNote's status side effects)
-                val mainResult = repository.saveNoteWithChildren(savedNoteId, trackedLines)
+                val mainResult = repository.saveNoteWithChildren(savedNoteId, trackedLines, extraOpsBuilder = null)
                 mainResult.onSuccess { newIdsMap ->
                     if (newIdsMap.isNotEmpty()) {
                         val updated = currentNoteLines.toMutableList()

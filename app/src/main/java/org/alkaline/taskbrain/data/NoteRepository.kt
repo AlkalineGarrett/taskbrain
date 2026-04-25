@@ -206,6 +206,27 @@ class NoteRepository(
     // ── Save operations ─────────────────────────────────────────────────
 
     /**
+     * Extra batch op the caller can splice into the same WriteBatch as the note save.
+     * Used to atomically combine note writes with related cross-collection writes
+     * (e.g. an alarm doc) so a single commit lands both. The [data] map is written
+     * via `batch.set(ref, data)` (or merged when [merge] is true).
+     */
+    data class BatchExtraOp(
+        val ref: DocumentReference,
+        val data: Map<String, Any?>,
+        val merge: Boolean,
+    )
+
+    /**
+     * Invoked after line IDs are resolved (sentinels swapped for real refs), so the
+     * builder can ask [resolveLineId] for the resolved noteId of any line — including
+     * newly allocated ones — when constructing cross-collection writes that point at it.
+     */
+    fun interface ExtraOpsBuilder {
+        fun build(resolveLineId: (Int) -> String, userId: String): List<BatchExtraOp>
+    }
+
+    /**
      * Saves a note with tree structure derived from tab-indented lines.
      *
      * Computes parentNoteId and containedNotes from indentation, sets rootNoteId
@@ -218,7 +239,8 @@ class NoteRepository(
      */
     suspend fun saveNoteWithChildren(
         noteId: String,
-        trackedLines: List<NoteLine>
+        trackedLines: List<NoteLine>,
+        extraOpsBuilder: ExtraOpsBuilder?,
     ): Result<Map<Int, String>> = runCatching {
         withContext(Dispatchers.IO) {
             if (trackedLines.isEmpty()) return@withContext emptyMap()
@@ -427,6 +449,10 @@ class NoteRepository(
                     ),
                     merge = true
                 ))
+            }
+
+            extraOpsBuilder?.build(::effectiveId, userId)?.forEach { extra ->
+                ops.add(BatchOp(extra.ref, extra.data, extra.merge))
             }
 
             commitInBatches(ops)
@@ -672,7 +698,7 @@ class NoteRepository(
 
             val newLinesContent = newContent.lines()
             val trackedLines = matchLinesToIds(noteId, existingLines, newLinesContent)
-            saveNoteWithChildren(noteId, trackedLines).getOrThrow()
+            saveNoteWithChildren(noteId, trackedLines, extraOpsBuilder = null).getOrThrow()
 
             Log.d(TAG, "Saved note with full content: $noteId (${trackedLines.size} lines)")
             Unit

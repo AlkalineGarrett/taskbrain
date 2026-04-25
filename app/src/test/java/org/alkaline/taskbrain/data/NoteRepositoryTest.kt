@@ -86,7 +86,7 @@ class NoteRepositoryTest {
 
         val results = listOf(
             repository.loadNoteWithChildren("note_1"),
-            repository.saveNoteWithChildren("note_1", listOf(NoteLine("Content", "note_1"))),
+            repository.saveNoteWithChildren("note_1", listOf(NoteLine("Content", "note_1")), extraOpsBuilder = null),
             repository.loadUserNotes(),
             repository.createNote(),
             repository.createMultiLineNote("Line 1\nLine 2")
@@ -238,7 +238,7 @@ class NoteRepositoryTest {
         mockDocument("note_1", null)
         val batch = mockBatch()
 
-        val result = repository.saveNoteWithChildren("note_1", listOf(NoteLine("Content", "note_1")))
+        val result = repository.saveNoteWithChildren("note_1", listOf(NoteLine("Content", "note_1")), extraOpsBuilder = null)
 
         assertTrue(result.isSuccess)
         verify { batch.set(any(), any<Map<String, Any?>>(), any<SetOptions>()) }
@@ -253,7 +253,8 @@ class NoteRepositoryTest {
 
         val result = repository.saveNoteWithChildren(
             "note_1",
-            listOf(NoteLine("Parent", "note_1"), NoteLine("\tNew child", null))
+            listOf(NoteLine("Parent", "note_1"), NoteLine("\tNew child", null)),
+            extraOpsBuilder = null,
         ).getOrThrow()
 
         assertEquals("new_child", result[1])
@@ -277,6 +278,7 @@ class NoteRepositoryTest {
         repository.saveNoteWithChildren(
             "note_1",
             listOf(NoteLine("Parent", "note_1"), NoteLine("• Item A", null)),
+            extraOpsBuilder = null,
         ).getOrThrow()
 
         // Warning must reach the user via NoteStore.raiseWarning (which the VM
@@ -302,6 +304,7 @@ class NoteRepositoryTest {
         repository.saveNoteWithChildren(
             "note_1",
             listOf(NoteLine("Parent", "note_1"), NoteLine("• Item A", sentinel)),
+            extraOpsBuilder = null,
         ).getOrThrow()
 
         verify(exactly = 0) { NoteStore.raiseWarning(any()) }
@@ -320,7 +323,8 @@ class NoteRepositoryTest {
         val sentinel = NoteIdSentinel.new(NoteIdSentinel.Origin.PASTE)
         val result = repository.saveNoteWithChildren(
             "note_1",
-            listOf(NoteLine("Parent", "note_1"), NoteLine("\tPasted line", sentinel))
+            listOf(NoteLine("Parent", "note_1"), NoteLine("\tPasted line", sentinel)),
+            extraOpsBuilder = null,
         ).getOrThrow()
 
         assertEquals("fresh Firestore id replaces the sentinel", "fresh_id", result[1])
@@ -342,7 +346,8 @@ class NoteRepositoryTest {
 
         val result = repository.saveNoteWithChildren(
             "note_1",
-            listOf(NoteLine("Parent", "note_1"), NoteLine("\tUpdated", "child_1"))
+            listOf(NoteLine("Parent", "note_1"), NoteLine("\tUpdated", "child_1")),
+            extraOpsBuilder = null,
         )
 
         assertTrue(result.isSuccess)
@@ -356,7 +361,8 @@ class NoteRepositoryTest {
 
         val result = repository.saveNoteWithChildren(
             "note_1",
-            listOf(NoteLine("Parent only", "note_1"))
+            listOf(NoteLine("Parent only", "note_1")),
+            extraOpsBuilder = null,
         )
 
         assertTrue(result.isSuccess)
@@ -377,7 +383,8 @@ class NoteRepositoryTest {
                 NoteLine("Parent", "note_1"),
                 NoteLine("\tChild content", null),
                 NoteLine("", null),
-            )
+            ),
+            extraOpsBuilder = null,
         ).getOrThrow()
 
         assertEquals(2, result.size)
@@ -415,7 +422,8 @@ class NoteRepositoryTest {
                 NoteLine("• Decided", null),       // was cUa99-style; lost its id
                 NoteLine("\t• Dining table", null), // was aE5e-style; lost its id
                 NoteLine("• Undecided", null),     // was wvKV-style; lost its id
-            )
+            ),
+            extraOpsBuilder = null,
         )
 
         // Reconciliation should have matched the three lines against existing
@@ -440,7 +448,8 @@ class NoteRepositoryTest {
                 NoteLine("", null),
                 NoteLine("", null),
                 NoteLine("", null)
-            )
+            ),
+            extraOpsBuilder = null,
         ).getOrThrow()
 
         assertEquals(4, result.size)
@@ -467,7 +476,8 @@ class NoteRepositoryTest {
                 NoteLine("\t", null),
                 NoteLine("\tChild", null),
                 NoteLine("", null),
-            )
+            ),
+            extraOpsBuilder = null,
         ).getOrThrow()
 
         assertEquals(3, result.size)
@@ -488,7 +498,8 @@ class NoteRepositoryTest {
             listOf(
                 NoteLine("Parent", "note_1"),
                 NoteLine("\t   ", null)  // Tab + whitespace — whitespace is content
-            )
+            ),
+            extraOpsBuilder = null,
         ).getOrThrow()
 
         assertEquals("new_child", result[1])
@@ -723,7 +734,8 @@ class NoteRepositoryTest {
                 NoteLine("Root", "root"),
                 NoteLine("\tA", null),
                 NoteLine("\t\tB", null),
-            )
+            ),
+            extraOpsBuilder = null,
         ).getOrThrow()
 
         assertEquals("child_a", result[1])
@@ -732,7 +744,7 @@ class NoteRepositoryTest {
 
     @Test
     fun `saveNoteWithChildren returns empty map for empty lines`() = runTest {
-        val result = repository.saveNoteWithChildren("note_1", emptyList()).getOrThrow()
+        val result = repository.saveNoteWithChildren("note_1", emptyList(), extraOpsBuilder = null).getOrThrow()
 
         assertEquals(emptyMap<Int, String>(), result)
     }
@@ -753,7 +765,7 @@ class NoteRepositoryTest {
             lines.add(NoteLine("\tChild $i", null))
         }
 
-        val result = repository.saveNoteWithChildren("root", lines).getOrThrow()
+        val result = repository.saveNoteWithChildren("root", lines, extraOpsBuilder = null).getOrThrow()
 
         assertEquals(501, result.size)
         // Should commit multiple batches (502 ops: 1 root + 501 children)

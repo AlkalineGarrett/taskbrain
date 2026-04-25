@@ -30,14 +30,33 @@ class RecurringAlarmRepository(
     private fun newDocRef(userId: String): DocumentReference =
         collection(userId).document()
 
+    /** Mints a fresh recurringAlarm doc ID client-side, no Firestore write. */
+    fun newRecurringAlarmId(): String = newDocRef(requireUserId()).id
+
+    /**
+     * Builds a batch op for a recurringAlarm create. Pair with
+     * [AlarmRepository.buildCreateBatchOp] for the first instance.
+     */
+    fun buildCreateBatchOp(recurringAlarm: RecurringAlarm): NoteRepository.BatchExtraOp {
+        val userId = requireUserId()
+        return NoteRepository.BatchExtraOp(
+            ref = docRef(userId, recurringAlarm.id),
+            data = createData(recurringAlarm.copy(userId = userId)),
+            merge = false,
+        )
+    }
+
+    private fun createData(ra: RecurringAlarm): MutableMap<String, Any?> =
+        toMap(ra).toMutableMap().apply {
+            put("createdAt", FieldValue.serverTimestamp())
+            put("updatedAt", FieldValue.serverTimestamp())
+        }
+
     suspend fun create(recurringAlarm: RecurringAlarm): Result<String> = runCatching {
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             val ref = newDocRef(userId)
-            val data = toMap(recurringAlarm.copy(id = ref.id, userId = userId)).toMutableMap()
-            data["createdAt"] = FieldValue.serverTimestamp()
-            data["updatedAt"] = FieldValue.serverTimestamp()
-            ref.set(data).await()
+            ref.set(createData(recurringAlarm.copy(id = ref.id, userId = userId))).await()
             Log.d(TAG, "RecurringAlarm created: ${ref.id}")
             ref.id
         }

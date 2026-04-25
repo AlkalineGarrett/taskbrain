@@ -262,119 +262,34 @@ class NoteAlarmManager(
 
     // region Creation
 
-    internal suspend fun createAlarmForNote(
-        noteId: String,
-        lineContent: String,
-        lineIndex: Int?,
-        dueTime: Timestamp?,
-        stages: List<AlarmStage>
-    ) {
-        val alarm = Alarm(
-            noteId = noteId,
-            lineContent = lineContent,
-            dueTime = dueTime,
-            stages = stages
-        )
-
-        checkPermissions()
-
-        alarmStateManager.create(alarm).fold(
-            onSuccess = { (alarmId, scheduleResult) ->
-                if (!scheduleResult.success) {
-                    _schedulingWarning.value = scheduleResult.message
-                }
-
-                val alarmSnapshot = AlarmSnapshot(
-                    id = alarmId,
-                    noteId = alarm.noteId,
-                    lineContent = alarm.lineContent,
-                    dueTime = alarm.dueTime,
-                    stages = alarm.stages
-                )
-
-                _alarmCreated.value = AlarmCreatedEvent(alarmId, lineContent, alarmSnapshot)
-                loadAlarmStates()
-            },
-            onFailure = { e ->
-                _alarmError.value = e
-            }
-        )
-    }
-
-    internal suspend fun createRecurringAlarmForNote(
-        noteId: String,
-        lineContent: String,
-        lineIndex: Int?,
-        dueTime: Timestamp?,
-        stages: List<AlarmStage>,
-        recurrenceConfig: RecurrenceConfig
-    ) {
-        val recurringAlarm = RecurrenceConfigMapper.toRecurringAlarm(
-            noteId = noteId,
-            lineContent = lineContent,
-            dueTime = dueTime,
-            stages = stages,
-            config = recurrenceConfig
-        )
-
-        val createResult = recurringAlarmRepository.create(recurringAlarm)
-        val recurringId = createResult.getOrNull()
-        if (recurringId == null) {
-            val cause = createResult.exceptionOrNull()
-            Log.e(TAG, "Failed to create recurring alarm", cause)
-            _alarmError.value = cause ?: Exception("Failed to create recurring alarm")
-            return
-        }
-
-        val firstAlarm = Alarm(
-            noteId = noteId,
-            lineContent = lineContent,
-            dueTime = dueTime,
-            stages = stages,
-            recurringAlarmId = recurringId
-        )
-
-        checkPermissions()
-
-        alarmStateManager.create(firstAlarm).fold(
-            onSuccess = { (alarmId, scheduleResult) ->
-                recurringAlarmRepository.updateCurrentAlarmId(recurringId, alarmId, null)
-
-                if (!scheduleResult.success) {
-                    _schedulingWarning.value = scheduleResult.message
-                }
-
-                val alarmSnapshot = AlarmSnapshot(
-                    id = alarmId,
-                    noteId = firstAlarm.noteId,
-                    lineContent = firstAlarm.lineContent,
-                    dueTime = firstAlarm.dueTime,
-                    stages = firstAlarm.stages
-                )
-
-                _alarmCreated.value = AlarmCreatedEvent(alarmId, lineContent, alarmSnapshot, recurringAlarmId = recurringId)
-                loadAlarmStates()
-            },
-            onFailure = { e ->
-                recurringAlarmRepository.delete(recurringId)
-                _alarmError.value = e
-            }
-        )
-    }
-
     /**
-     * Creates a new alarm for the current line (no save).
+     * Schedules system-level triggers for an alarm whose doc already landed
+     * via a batched save, surfaces any scheduling warning, refreshes the alarm
+     * cache, and emits [alarmCreated] so the editor can record undo state.
      */
-    fun createAlarm(
-        lineContent: String,
-        lineIndex: Int? = null,
-        dueTime: Timestamp?,
-        stages: List<AlarmStage> = Alarm.DEFAULT_STAGES
-    ) {
-        scope.launch {
-            val noteId = if (lineIndex != null) getNoteIdForLine(lineIndex) else getCurrentNoteId()
-            createAlarmForNote(noteId, lineContent, lineIndex, dueTime, stages)
+    internal suspend fun completeAlarmCreation(alarm: Alarm, lineContent: String) {
+        checkPermissions()
+
+        val scheduleResult = alarmScheduler.scheduleAlarm(alarm)
+        if (!scheduleResult.success) {
+            _schedulingWarning.value = scheduleResult.message
         }
+
+        val alarmSnapshot = AlarmSnapshot(
+            id = alarm.id,
+            noteId = alarm.noteId,
+            lineContent = alarm.lineContent,
+            dueTime = alarm.dueTime,
+            stages = alarm.stages,
+        )
+
+        _alarmCreated.value = AlarmCreatedEvent(
+            alarmId = alarm.id,
+            lineContent = lineContent,
+            alarmSnapshot = alarmSnapshot,
+            recurringAlarmId = alarm.recurringAlarmId,
+        )
+        loadAlarmStates()
     }
 
     private fun checkPermissions() {

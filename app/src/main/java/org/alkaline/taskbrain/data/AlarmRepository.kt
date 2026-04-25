@@ -32,6 +32,28 @@ class AlarmRepository(
     private fun newAlarmRef(userId: String): DocumentReference =
         alarmsCollection(userId).document()
 
+    /** Mints a fresh alarm doc ID client-side, no Firestore write. */
+    fun newAlarmId(): String = newAlarmRef(requireUserId()).id
+
+    /**
+     * Builds a batch op for an alarm create. Pair with [newAlarmId] to embed
+     * the ID in a directive before the doc lands.
+     */
+    fun buildCreateBatchOp(alarm: Alarm): NoteRepository.BatchExtraOp {
+        val userId = requireUserId()
+        return NoteRepository.BatchExtraOp(
+            ref = alarmRef(userId, alarm.id),
+            data = createAlarmData(alarm.copy(userId = userId)),
+            merge = false,
+        )
+    }
+
+    private fun createAlarmData(alarm: Alarm): MutableMap<String, Any?> =
+        alarmToMap(alarm).toMutableMap().apply {
+            put("createdAt", FieldValue.serverTimestamp())
+            put("updatedAt", FieldValue.serverTimestamp())
+        }
+
     /**
      * Creates a new alarm.
      * Returns the ID of the created alarm.
@@ -40,10 +62,7 @@ class AlarmRepository(
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             val ref = newAlarmRef(userId)
-            val data = alarmToMap(alarm.copy(id = ref.id, userId = userId)).toMutableMap()
-            data["createdAt"] = FieldValue.serverTimestamp()
-            data["updatedAt"] = FieldValue.serverTimestamp()
-            ref.set(data).await()
+            ref.set(createAlarmData(alarm.copy(id = ref.id, userId = userId))).await()
             Log.d(TAG, "Alarm created with ID: ${ref.id}")
             ref.id
         }

@@ -717,6 +717,42 @@ class NoteDirectiveManager(
     }
 
     /**
+     * Inline-session save that splices caller-supplied extra batch ops into
+     * the same WriteBatch as the note write — used by alarm creation to land
+     * the note + alarm doc atomically. Suspends so the caller can branch on
+     * success/failure.
+     */
+    suspend fun saveInlineEditSessionWithExtras(
+        session: InlineEditSession,
+        extraOpsBuilder: NoteRepository.ExtraOpsBuilder,
+    ): Result<Map<Int, String>> {
+        session.controller.sortCompletedToBottom()
+        val trackedLines = session.getTrackedLines()
+        val newContent = trackedLines.joinToString("\n") { it.content }
+
+        val existing = NoteStore.getNoteById(session.noteId)
+        if (existing != null) {
+            NoteStore.updateNote(session.noteId, existing.copy(content = newContent), persist = false)
+        }
+
+        if (!editSessionManager.isEditSessionActive() ||
+            editSessionManager.getEditContext()?.editedNoteId != session.noteId) {
+            startInlineEditSession(session.noteId)
+        }
+
+        val result = repository.saveNoteWithChildren(session.noteId, trackedLines, extraOpsBuilder)
+        result.onSuccess {
+            MetadataHasher.invalidateCache()
+            directiveCacheManager.clearAll()
+            endInlineEditSession()
+        }.onFailure { e ->
+            Log.e(TAG, "saveInlineEditSessionWithExtras failed for ${session.noteId}", e)
+            editSessionManager.abortEditSession()
+        }
+        return result
+    }
+
+    /**
      * Synchronous (suspend) variant of [saveInlineEditSession] for use in coroutines
      * that need to await completion before proceeding (e.g., unified save).
      */
