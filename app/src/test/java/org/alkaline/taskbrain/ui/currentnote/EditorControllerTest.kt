@@ -4,10 +4,69 @@ import org.alkaline.taskbrain.ui.currentnote.undo.UndoManager
 import org.alkaline.taskbrain.ui.currentnote.util.LinePrefixes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EditorControllerTest {
+
+    // ==================== findVisibleNeighbor ====================
+
+    @Test
+    fun `findVisibleNeighbor returns fromIndex when already visible`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.updateFromText("a\nb\nc")
+        // No hidden indices: any in-bounds index is its own neighbor.
+        assertEquals(0, controller.findVisibleNeighbor(0, -1))
+        assertEquals(2, controller.findVisibleNeighbor(2, 1))
+    }
+
+    @Test
+    fun `findVisibleNeighbor walks down past hidden lines`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.updateFromText("a\nh1\nh2\nb")
+        controller.hiddenIndices = setOf(1, 2)
+        assertEquals(3, controller.findVisibleNeighbor(1, 1))
+    }
+
+    @Test
+    fun `findVisibleNeighbor walks up past hidden lines`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.updateFromText("a\nh1\nh2\nb")
+        controller.hiddenIndices = setOf(1, 2)
+        assertEquals(0, controller.findVisibleNeighbor(2, -1))
+    }
+
+    @Test
+    fun `findVisibleNeighbor returns null when walk runs off the top`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.updateFromText("h0\nh1\nb")
+        controller.hiddenIndices = setOf(0, 1)
+        assertNull(controller.findVisibleNeighbor(1, -1))
+    }
+
+    @Test
+    fun `findVisibleNeighbor returns null when walk runs off the bottom`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.updateFromText("a\nh1\nh2")
+        controller.hiddenIndices = setOf(1, 2)
+        assertNull(controller.findVisibleNeighbor(1, 1))
+    }
+
+    @Test
+    fun `findVisibleNeighbor returns null when fromIndex is out of bounds`() {
+        val state = EditorState()
+        val controller = EditorController(state)
+        state.updateFromText("a\nb")
+        // Mirrors how deleteBackward calls findVisibleNeighbor(-1, -1) at line 0.
+        assertNull(controller.findVisibleNeighbor(-1, -1))
+        assertNull(controller.findVisibleNeighbor(2, 1))
+    }
 
     // ==================== deleteBackward skips hidden lines ====================
 

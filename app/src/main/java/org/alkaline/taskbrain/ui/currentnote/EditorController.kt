@@ -80,6 +80,22 @@ class EditorController(
         private var sharedCutLines: List<LineState> = emptyList()
     }
 
+    /**
+     * Walks from [fromIndex] in [direction] (-1 = up, 1 = down), skipping any
+     * lines in [hiddenIndices]. Returns the first visible line index, or null
+     * if the walk runs off the edge. Callers typically pass `lineIndex ± 1` to
+     * find the visible neighbor of a given line.
+     */
+    fun findVisibleNeighbor(fromIndex: Int, direction: Int): Int? {
+        val max = state.lines.size
+        var target = fromIndex
+        while (target in 0 until max) {
+            if (target !in hiddenIndices) return target
+            target += direction
+        }
+        return null
+    }
+
     // =========================================================================
     // Undo/Redo Operations
     // =========================================================================
@@ -104,22 +120,6 @@ class EditorController(
         if (continueEditing) {
             undoManager.beginEditingLine(state, state.focusedLineIndex)
         }
-    }
-
-    /**
-     * Records a command bar action for undo grouping.
-     * Bullet/Checkbox: Each is a separate undo step.
-     * Indent/Unindent: Consecutive presses are grouped.
-     */
-    fun recordCommand(type: CommandType) {
-        undoManager.recordCommand(state, type)
-    }
-
-    /**
-     * Call after command completes for commands that should immediately commit.
-     */
-    fun commitAfterCommand(type: CommandType) {
-        undoManager.commitAfterCommand(state, type)
     }
 
     /**
@@ -613,12 +613,7 @@ class EditorController(
 
         // At start of line content (at or before prefix end)
         if (cursor <= line.prefix.length) {
-            if (lineIndex <= 0) return
-            // Skip hidden lines when merging backward
-            var target = lineIndex - 1
-            while (target >= 0 && target in hiddenIndices) target--
-            if (target < 0) return
-
+            val target = findVisibleNeighbor(lineIndex - 1, -1) ?: return
             val previousLine = state.lines.getOrNull(target) ?: return
             val currentHasContent = line.content.isNotEmpty()
             val previousHasContent = previousLine.content.isNotEmpty()
@@ -663,9 +658,7 @@ class EditorController(
 
         // At end of line - merge with next visible line (creates its own undo boundary)
         if (cursor >= line.text.length) {
-            var target = lineIndex + 1
-            while (target < state.lines.size && target in hiddenIndices) target++
-            if (target >= state.lines.size) return
+            val target = findVisibleNeighbor(lineIndex + 1, 1) ?: return
             val nextLine = state.lines.getOrNull(target) ?: return
 
             val currentHasContent = line.content.isNotEmpty()
