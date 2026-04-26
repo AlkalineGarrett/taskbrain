@@ -145,6 +145,7 @@ export class NoteStore {
     if (this.unsubscribe) return
     const userId = auth.currentUser?.uid
     if (!userId) return
+    this.surfacePersistentCacheError()
 
     // Create promise for ensureLoaded() callers to await
     if (!this.loadPromise) {
@@ -201,6 +202,29 @@ export class NoteStore {
       console.error('NoteStore snapshot listener error:', error)
       this._error = error instanceof Error ? error.message : 'Note sync failed'
       this.emitErrorChange()
+    })
+  }
+
+  private persistentCacheWarningSurfaced = false
+  private surfacePersistentCacheError(): void {
+    if (this.persistentCacheWarningSurfaced) return
+    this.persistentCacheWarningSurfaced = true
+    // Lazy import: pulling @/firebase/config at module init would force
+    // every test that imports NoteStore to mock initializeFirestore.
+    void import('@/firebase/config').then(({ persistentCacheError }) => {
+      if (!persistentCacheError) return
+      const stack = new Error().stack ?? '(unavailable)'
+      console.error(
+        `[Firestore persistence] persistent cache unavailable — every cold ` +
+        `start will re-fetch the full notes collection from Firestore.\n` +
+        `Reason: ${persistentCacheError}\n` +
+        `Stack:\n${stack}`,
+      )
+      this.raiseWarning(
+        `Local note cache is unavailable in this browser; every reload will ` +
+        `re-download all notes. Use a different browser or disable private ` +
+        `browsing if you want faster startup. (${persistentCacheError})`,
+      )
     })
   }
 

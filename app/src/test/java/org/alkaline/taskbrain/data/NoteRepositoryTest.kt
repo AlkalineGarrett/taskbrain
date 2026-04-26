@@ -108,6 +108,53 @@ class NoteRepositoryTest {
     // region Load Tests
 
     @Test
+    fun `loadNoteWithChildren prefers NoteStore when loaded and has the note`() = runTest {
+        val storeNote = Note(
+            id = "note_1",
+            content = "Cached parent",
+            containedNotes = emptyList(),
+            showCompleted = false,
+        )
+        every { NoteStore.getRawNoteById("note_1") } returns storeNote
+        every { NoteStore.getNoteLinesById("note_1") } returns listOf(
+            NoteLine("Cached parent", "note_1"),
+            NoteLine("Cached child", "child_1"),
+        )
+
+        val result = repository.loadNoteWithChildren("note_1").getOrThrow()
+
+        assertEquals(2, result.lines.size)
+        assertEquals("Cached parent", result.lines[0].content)
+        assertEquals("Cached child", result.lines[1].content)
+        assertFalse(result.isDeleted)
+        assertFalse(result.showCompleted)
+        // No Firestore document fetch should have been issued
+        verify(exactly = 0) { mockCollection.document("note_1") }
+    }
+
+    @Test
+    fun `loadNoteWithChildren falls back to Firestore when NoteStore not loaded`() = runTest {
+        every { NoteStore.isLoaded() } returns false
+        mockDocument("note_1", Note(content = "From Firestore", containedNotes = emptyList()))
+
+        val lines = repository.loadNoteWithChildren("note_1").getOrThrow().lines
+
+        assertEquals(1, lines.size)
+        assertEquals("From Firestore", lines[0].content)
+    }
+
+    @Test
+    fun `loadNoteWithChildren falls back to Firestore when NoteStore loaded but missing the note`() = runTest {
+        every { NoteStore.getRawNoteById("note_1") } returns null
+        mockDocument("note_1", Note(content = "From Firestore", containedNotes = emptyList()))
+
+        val lines = repository.loadNoteWithChildren("note_1").getOrThrow().lines
+
+        assertEquals(1, lines.size)
+        assertEquals("From Firestore", lines[0].content)
+    }
+
+    @Test
     fun `loadNoteWithChildren returns empty line when document does not exist`() = runTest {
         mockDocument("note_1", null)
 

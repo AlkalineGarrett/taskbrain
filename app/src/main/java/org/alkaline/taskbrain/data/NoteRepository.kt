@@ -117,13 +117,44 @@ class NoteRepository(
 
     /**
      * Loads a note and its descendants, returning lines plus note metadata.
-     * Queries descendants via rootNoteId and flattens the tree with tabs from depth.
+     *
+     * Prefers the in-memory NoteStore when loaded — the live listener already
+     * holds every note for the user, so the parent + descendant Firestore
+     * reads are redundant. Falls back to Firestore only when the listener
+     * hasn't synced yet or doesn't contain this note (e.g., immediately after
+     * createNote or a deep-link to a brand-new doc).
      */
     suspend fun loadNoteWithChildren(noteId: String): Result<NoteLoadResult> = ioLogged("loadNoteWithChildren") {
         requireUserId()
-        val document = noteRef(noteId).get().await()
         val emptyResult = NoteLoadResult(listOf(NoteLine("", noteId)), isDeleted = false, showCompleted = true)
 
+        if (NoteStore.isLoaded()) {
+            val rawNote = NoteStore.getRawNoteById(noteId)
+            val storeLines = if (rawNote != null) NoteStore.getNoteLinesById(noteId) else null
+            if (rawNote != null && storeLines != null) {
+                return@ioLogged NoteLoadResult(
+                    lines = storeLines,
+                    isDeleted = rawNote.state == "deleted",
+                    showCompleted = rawNote.showCompleted,
+                )
+            }
+            // Invariant: getRawNoteById and getNoteLinesById should agree on
+            // existence — both look at rawNotes. A mismatch points at a race
+            // (note removed mid-call) or a reconstruction bug.
+            if (rawNote != null && storeLines == null) {
+                val stack = Throwable("loadNoteWithChildren NoteStore mismatch").stackTraceToString()
+                Log.w(
+                    TAG,
+                    "[NoteStore inconsistency] loadNoteWithChildren(noteId=$noteId): " +
+                        "getRawNoteById returned a note but getNoteLinesById returned null. " +
+                        "Falling back to Firestore. State: parentNoteId=${rawNote.parentNoteId}, " +
+                        "rootNoteId=${rawNote.rootNoteId}, state=${rawNote.state}, " +
+                        "containedNotes=${rawNote.containedNotes.size}.\n$stack"
+                )
+            }
+        }
+
+        val document = noteRef(noteId).get().await()
         val note = if (document.exists()) document.toObject(Note::class.java)?.copy(id = noteId) else null
         if (note == null) {
             emptyResult
