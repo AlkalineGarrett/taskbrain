@@ -32,6 +32,7 @@ import com.google.firebase.Timestamp
 import org.alkaline.taskbrain.data.RecurrencePreset
 import org.alkaline.taskbrain.data.RecurrenceType
 import org.alkaline.taskbrain.ui.components.DateTimePickerRow
+import org.alkaline.taskbrain.util.HOUR_MS
 import java.util.Calendar
 
 /**
@@ -63,9 +64,9 @@ enum class CustomFrequency(val label: String) {
 }
 
 enum class RelativeUnit(val label: String, val toMs: Long) {
-    HOURS("Hours", 60 * 60 * 1000L),
-    DAYS("Days", 24 * 60 * 60 * 1000L),
-    WEEKS("Weeks", 7 * 24 * 60 * 60 * 1000L)
+    HOURS("Hours", HOUR_MS),
+    DAYS("Days", 24 * HOUR_MS),
+    WEEKS("Weeks", 7 * 24 * HOUR_MS)
 }
 
 enum class EndType(val label: String) {

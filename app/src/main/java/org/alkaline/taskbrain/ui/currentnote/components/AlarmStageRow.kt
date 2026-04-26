@@ -1,9 +1,7 @@
 package org.alkaline.taskbrain.ui.currentnote.components
 
 import android.text.format.DateFormat
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -12,14 +10,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TimePicker
-import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -30,19 +23,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import com.google.firebase.Timestamp
 import org.alkaline.taskbrain.R
 import org.alkaline.taskbrain.data.AlarmStage
 import org.alkaline.taskbrain.data.AlarmStageType
 import org.alkaline.taskbrain.data.TimeOfDay
+import org.alkaline.taskbrain.ui.components.TimePickerDialog
 import org.alkaline.taskbrain.ui.components.ValueChip
-import java.text.SimpleDateFormat
+import org.alkaline.taskbrain.util.HOUR_MS
+import org.alkaline.taskbrain.util.MINUTE_MS
+import org.alkaline.taskbrain.util.formatTimeOfDay
 import java.util.Calendar
-import java.util.Locale
-
-private const val MINUTE_MS = 60 * 1000L
-private const val HOUR_MS = 60 * MINUTE_MS
 
 private val OFFSET_PRESETS = listOf(
     0L,
@@ -55,7 +46,6 @@ private val OFFSET_PRESETS = listOf(
     3 * HOUR_MS
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun StageRow(
     stage: AlarmStage,
@@ -70,7 +60,7 @@ internal fun StageRow(
     val is24Hour = remember { DateFormat.is24HourFormat(context) }
 
     val stageLabel = stageTypeLabel(stage.type)
-    val chipText = formatStageTime(stage, is24Hour)
+    val chipText = formatStageTime(stage)
 
     Row(
         modifier = Modifier
@@ -141,7 +131,6 @@ internal fun StageRow(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun StageTimePicker(
     stage: AlarmStage,
@@ -164,51 +153,13 @@ private fun StageTimePicker(
         initialMinute = calendar.get(Calendar.MINUTE)
     }
 
-    val timePickerState = rememberTimePickerState(
+    TimePickerDialog(
         initialHour = initialHour,
         initialMinute = initialMinute,
-        is24Hour = is24Hour
+        is24Hour = is24Hour,
+        onDismiss = onDismiss,
+        onConfirm = { hour, minute -> onConfirm(TimeOfDay(hour, minute)) },
     )
-
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = MaterialTheme.shapes.extraLarge,
-            tonalElevation = 6.dp
-        ) {
-            Column(
-                modifier = Modifier.padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = stringResource(R.string.datetime_select_time),
-                    style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 20.dp)
-                )
-
-                TimePicker(state = timePickerState)
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 20.dp),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    TextButton(onClick = onDismiss) {
-                        Text(stringResource(R.string.action_cancel))
-                    }
-                    TextButton(
-                        onClick = {
-                            onConfirm(TimeOfDay(timePickerState.hour, timePickerState.minute))
-                        }
-                    ) {
-                        Text(stringResource(R.string.action_ok))
-                    }
-                }
-            }
-        }
-    }
 }
 
 @Composable
@@ -219,14 +170,9 @@ private fun stageTypeLabel(type: AlarmStageType): String = when (type) {
 }
 
 @Composable
-private fun formatStageTime(stage: AlarmStage, is24Hour: Boolean): String {
+private fun formatStageTime(stage: AlarmStage): String {
     if (stage.absoluteTimeOfDay != null) {
-        val cal = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, stage.absoluteTimeOfDay.hour)
-            set(Calendar.MINUTE, stage.absoluteTimeOfDay.minute)
-        }
-        val pattern = if (is24Hour) "HH:mm" else "h:mm a"
-        return SimpleDateFormat(pattern, Locale.getDefault()).format(cal.time)
+        return formatTimeOfDay(LocalContext.current, stage.absoluteTimeOfDay.hour, stage.absoluteTimeOfDay.minute)
     }
     return formatOffset(stage.offsetMs)
 }

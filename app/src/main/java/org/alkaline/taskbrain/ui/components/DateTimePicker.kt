@@ -3,8 +3,6 @@ package org.alkaline.taskbrain.ui.components
 import android.text.format.DateFormat
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -23,9 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberDatePickerState
-import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,10 +33,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import com.google.firebase.Timestamp
 import org.alkaline.taskbrain.R
 import org.alkaline.taskbrain.util.DateTimeUtils
+import org.alkaline.taskbrain.util.formatTimeOfDay
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
@@ -79,8 +75,7 @@ fun DateTimePickerRow(
     }
 
     val timeText = if (value != null) {
-        val pattern = if (is24Hour) "HH:mm" else "h:mm a"
-        SimpleDateFormat(pattern, Locale.getDefault()).format(value.toDate())
+        formatTimeOfDay(context, value.toDate())
     } else {
         stringResource(R.string.datetime_time)
     }
@@ -180,77 +175,33 @@ fun DateTimePickerRow(
 
     // Time Picker Dialog
     if (showTimePicker) {
-        val calendar = Calendar.getInstance()
-        if (value != null) {
-            calendar.time = value.toDate()
+        val initialCalendar = Calendar.getInstance().apply {
+            if (value != null) time = value.toDate()
         }
-        val timePickerState = rememberTimePickerState(
-            initialHour = calendar.get(Calendar.HOUR_OF_DAY),
-            initialMinute = calendar.get(Calendar.MINUTE),
-            is24Hour = is24Hour
-        )
-
-        Dialog(onDismissRequest = { showTimePicker = false }) {
-            Surface(
-                shape = MaterialTheme.shapes.extraLarge,
-                tonalElevation = 6.dp
-            ) {
-                Column(
-                    modifier = Modifier.padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = stringResource(R.string.datetime_select_time),
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 20.dp)
-                    )
-
-                    TimePicker(state = timePickerState)
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 20.dp),
-                        horizontalArrangement = Arrangement.End
-                    ) {
-                        TextButton(onClick = { showTimePicker = false }) {
-                            Text(stringResource(R.string.action_cancel))
-                        }
-                        TextButton(
-                            onClick = {
-                                val dateMillis = if (value != null) {
-                                    DateTimeUtils.getDatePickerMillisFromTimestamp(value)
-                                } else {
-                                    // Default to today or tomorrow based on selected time
-                                    val now = Calendar.getInstance()
-                                    val selectedIsBeforeNow =
-                                        timePickerState.hour < now.get(Calendar.HOUR_OF_DAY) ||
-                                        (timePickerState.hour == now.get(Calendar.HOUR_OF_DAY) &&
-                                            timePickerState.minute <= now.get(Calendar.MINUTE))
-                                    if (selectedIsBeforeNow) {
-                                        now.add(Calendar.DAY_OF_MONTH, 1)
-                                    }
-                                    DateTimeUtils.getDatePickerMillisFromTimestamp(
-                                        Timestamp(now.time)
-                                    )
-                                }
-                                val timestamp = DateTimeUtils.combineDatePickerWithTime(
-                                    datePickerMillis = dateMillis,
-                                    hour = timePickerState.hour,
-                                    minute = timePickerState.minute
-                                )
-                                onValueChange(timestamp)
-                                showTimePicker = false
-                            }
-                        ) {
-                            Text(stringResource(R.string.action_ok))
-                        }
+        TimePickerDialog(
+            initialHour = initialCalendar.get(Calendar.HOUR_OF_DAY),
+            initialMinute = initialCalendar.get(Calendar.MINUTE),
+            is24Hour = is24Hour,
+            onDismiss = { showTimePicker = false },
+            onConfirm = { hour, minute ->
+                val dateMillis = if (value != null) {
+                    DateTimeUtils.getDatePickerMillisFromTimestamp(value)
+                } else {
+                    // Default to today or tomorrow based on selected time
+                    val now = Calendar.getInstance()
+                    val selectedIsBeforeNow =
+                        hour < now.get(Calendar.HOUR_OF_DAY) ||
+                            (hour == now.get(Calendar.HOUR_OF_DAY) &&
+                                minute <= now.get(Calendar.MINUTE))
+                    if (selectedIsBeforeNow) {
+                        now.add(Calendar.DAY_OF_MONTH, 1)
                     }
+                    DateTimeUtils.getDatePickerMillisFromTimestamp(Timestamp(now.time))
                 }
-            }
-        }
+                onValueChange(DateTimeUtils.combineDatePickerWithTime(dateMillis, hour, minute))
+                showTimePicker = false
+            },
+        )
     }
 }
 

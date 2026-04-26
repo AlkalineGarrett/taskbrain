@@ -1,8 +1,39 @@
 package org.alkaline.taskbrain.util
 
+import android.content.Context
+import android.text.format.DateFormat
 import com.google.firebase.Timestamp
+import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 import java.util.TimeZone
+
+/** One minute in milliseconds. */
+const val MINUTE_MS: Long = 60 * 1000L
+
+/** One hour in milliseconds. */
+const val HOUR_MS: Long = 60 * MINUTE_MS
+
+/**
+ * Formats [date] as a time-of-day string using the device's preferred 12h/24h format.
+ */
+fun formatTimeOfDay(context: Context, date: Date): String {
+    val pattern = if (DateFormat.is24HourFormat(context)) "HH:mm" else "h:mm a"
+    return SimpleDateFormat(pattern, Locale.getDefault()).format(date)
+}
+
+/**
+ * Formats an (hour, minute) pair as a time-of-day string using the device's preferred
+ * 12h/24h format. Convenience wrapper over [formatTimeOfDay] with a [Date].
+ */
+fun formatTimeOfDay(context: Context, hour: Int, minute: Int): String {
+    val cal = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, hour)
+        set(Calendar.MINUTE, minute)
+    }
+    return formatTimeOfDay(context, cal.time)
+}
 
 /**
  * Utility functions for date/time operations.

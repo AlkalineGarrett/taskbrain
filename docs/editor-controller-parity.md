@@ -39,14 +39,14 @@ class-private vs TS module-level functions) but their inputs and outputs match.
 | `clearSelection()` | mirrored | |
 | `insertText(lineIndex, text)` | mirrored | |
 | `deleteBackward(lineIndex)` / `deleteForward(lineIndex)` | mirrored | |
-| `splitLine(lineIndex)` | mirrored | |
+| `splitLine(lineIndex)` | mirrored | Both share a private `splitLineByContent(lineIndex, line, beforeContent, afterContent, preserveCheckedAfter)` helper with `splitLineOnNewline`. |
 | `mergeToPreviousLine(lineIndex, targetIndex?)` | mirrored | |
 | `mergeNextLine(lineIndex, targetIndex?)` | mirrored | |
 | `setCursor(lineIndex, position)` | mirrored | |
 | `setContentCursor(lineIndex, contentPosition)` | **android-only** | Convenience wrapper used by Android IME/touch plumbing; web callers compute the offset inline. |
 | `isContentOffsetInSelection(lineIndex, contentPosition)` | **android-only** | Tap hit-test for selection; web does this in mouse-handler hooks. |
 | `setCursorFromGlobalOffset(globalOffset)` | mirrored | |
-| `updateLineContent(lineIndex, newContent, contentCursor)` | mirrored | Used by IME/onChange path. Body decomposed into private helpers `splitLineOnNewline`, `applyContent`, and (Android-only) `stampNoteIdSentinelIfNeeded`. |
+| `updateLineContent(lineIndex, newContent, contentCursor)` | mirrored | Used by IME/onChange path. Body decomposed into private helpers `splitLineOnNewline`, `applyContent`, and (Android-only) `stampNoteIdSentinelIfNeeded`. Early-returns for no-op IME syncs (`line.content === newContent`) to skip prefix conversion + selection clear + sentinel stamp. |
 | `focusLine(lineIndex)` | mirrored | |
 | `hasSelection()` | mirrored | Method on Android, getter on web. |
 | `setSelection(start, end)` | mirrored | |

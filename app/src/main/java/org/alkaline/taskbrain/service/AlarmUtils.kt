@@ -1,12 +1,11 @@
 package org.alkaline.taskbrain.service
 
 import android.content.Context
-import android.text.format.DateFormat
 import org.alkaline.taskbrain.data.Alarm
 import org.alkaline.taskbrain.data.AlarmStageType
 import org.alkaline.taskbrain.data.AlarmType
-import java.text.SimpleDateFormat
-import java.util.Locale
+import org.alkaline.taskbrain.util.MINUTE_MS
+import org.alkaline.taskbrain.util.formatTimeOfDay
 
 /**
  * Utility functions for alarm-related logic.
@@ -77,7 +76,7 @@ object AlarmUtils {
         durationMinutes: Int,
         currentTimeMillis: Long = System.currentTimeMillis()
     ): Long {
-        return currentTimeMillis + durationMinutes * 60 * 1000L
+        return currentTimeMillis + durationMinutes * MINUTE_MS
     }
 
     /**
@@ -120,13 +119,7 @@ object AlarmUtils {
     fun formatDisplayText(context: Context, alarm: Alarm): String {
         val dueTime = alarm.dueTime?.toDate()
         return if (dueTime != null) {
-            // Use device's preferred time format (12h or 24h)
-            val timeFormat = if (DateFormat.is24HourFormat(context)) {
-                SimpleDateFormat("HH:mm", Locale.getDefault())
-            } else {
-                SimpleDateFormat("h:mm a", Locale.getDefault())
-            }
-            "${alarm.displayName}: due ${timeFormat.format(dueTime)}"
+            "${alarm.displayName}: due ${formatTimeOfDay(context, dueTime)}"
         } else {
             alarm.displayName
         }

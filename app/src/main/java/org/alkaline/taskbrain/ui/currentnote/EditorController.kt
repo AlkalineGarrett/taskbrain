@@ -775,49 +775,68 @@ class EditorController(
     fun splitLine(lineIndex: Int) {
         // Prepare for structural change - commits prior typing, captures pre-split state
         undoManager.prepareForStructuralChange(state)
-
         state.clearSelection()
         val line = state.lines.getOrNull(lineIndex) ?: return
         val cursor = line.cursorPosition
         val prefix = line.prefix
-        val noteIds = line.noteIds
 
-        val beforeCursor = line.text.substring(0, cursor)
-        val afterCursor = line.text.substring(cursor)
-
-        val beforeHasContent = beforeCursor.length > prefix.length
-        val afterHasContent = afterCursor.isNotEmpty()
-        val (currentNoteIds, newNoteIds) = org.alkaline.taskbrain.data.splitNoteIds(
-            noteIds, beforeCursor.length - prefix.length, afterCursor.length,
-            beforeHasContent, afterHasContent, line.noteIdContentLengths
-        )
-
-        // Update current line
-        line.updateFull(beforeCursor, beforeCursor.length)
-        line.noteIds = currentNoteIds
-
-        // Whichever side of the split is empty gets unchecked.
-        // Both have content (mid-line split): both stay checked.
-        // Cursor at end: new line is empty → uncheck new line.
-        // Cursor at start of content: current line is empty → uncheck current, keep new checked.
-        if (cursor >= prefix.length) {
-            val preserveChecked = afterHasContent
-            createNewLineWithPrefix(lineIndex, afterCursor, prefix, newNoteIds, preserveChecked)
-            if (!beforeHasContent && prefix.contains(LinePrefixes.CHECKBOX_CHECKED)) {
-                val uncheckedText = beforeCursor.replace(LinePrefixes.CHECKBOX_CHECKED, LinePrefixes.CHECKBOX_UNCHECKED)
-                line.updateFull(uncheckedText, uncheckedText.length)
-            }
-        } else {
-            // Cursor within prefix, don't continue prefix
-            val newLine = LineState(afterCursor, 0, newNoteIds)
-            state.lines.add(lineIndex + 1, newLine)
+        if (cursor < prefix.length) {
+            // Cursor inside prefix: text-level split with no prefix continuation.
+            val beforeText = line.text.substring(0, cursor)
+            val afterText = line.text.substring(cursor)
+            val (currentNoteIds, newNoteIds) = org.alkaline.taskbrain.data.splitNoteIds(
+                line.noteIds, 0, afterText.length, false, afterText.isNotEmpty(),
+                line.noteIdContentLengths,
+            )
+            line.updateFull(beforeText, beforeText.length)
+            line.noteIds = currentNoteIds
+            state.lines.add(lineIndex + 1, LineState(afterText, 0, newNoteIds))
             state.focusedLineIndex = lineIndex + 1
             state.requestFocusUpdate()
             state.notifyChange()
+        } else {
+            val beforeContent = line.text.substring(prefix.length, cursor)
+            val afterContent = line.text.substring(cursor)
+            // Whichever side of the split is empty gets unchecked.
+            // Mid-line split: both stay checked.
+            // Cursor at end: new line is empty → uncheck new line.
+            // Cursor at start of content: current line is empty → uncheck current, keep new checked.
+            splitLineByContent(lineIndex, line, beforeContent, afterContent, preserveCheckedAfter = afterContent.isNotEmpty())
+            if (beforeContent.isEmpty() && prefix.contains(LinePrefixes.CHECKBOX_CHECKED)) {
+                val uncheckedText = line.text.replace(LinePrefixes.CHECKBOX_CHECKED, LinePrefixes.CHECKBOX_UNCHECKED)
+                line.updateFull(uncheckedText, uncheckedText.length)
+            }
         }
 
         // Continue pending state on new line (groups Enter + subsequent typing)
         undoManager.continueAfterStructuralChange(state.focusedLineIndex)
+    }
+
+    /**
+     * Splits a line at a content boundary: writes [beforeContent] to the existing line
+     * (preserving prefix), inserts a new line below with [afterContent] and a continued
+     * prefix (per [preserveCheckedAfter]), and distributes noteIds across the split.
+     * splitNoteIds stamps SPLIT sentinels on any content-bearing side without an id.
+     *
+     * Caller must wrap with prepareForStructuralChange / continueAfterStructuralChange
+     * + clearSelection.
+     */
+    private fun splitLineByContent(
+        lineIndex: Int,
+        line: LineState,
+        beforeContent: String,
+        afterContent: String,
+        preserveCheckedAfter: Boolean,
+    ) {
+        val (currentNoteIds, newNoteIds) = org.alkaline.taskbrain.data.splitNoteIds(
+            line.noteIds,
+            beforeContent.length, afterContent.length,
+            beforeContent.isNotEmpty(), afterContent.isNotEmpty(),
+            line.noteIdContentLengths,
+        )
+        line.updateContent(beforeContent, beforeContent.length)
+        line.noteIds = currentNoteIds
+        createNewLineWithPrefix(lineIndex, afterContent, line.prefix, newNoteIds, preserveCheckedAfter)
     }
 
     /**
@@ -981,23 +1000,20 @@ class EditorController(
             return
         }
 
-        // Don't clear selection on no-op IME syncs (finishComposingText) — that would
-        // wipe gutter selections. Old "diff and replace" logic also produced corruption
-        // bugs (e.g. "Jg" → "Hg") by mis-extracting the inserted text.
-        val contentChanged = line.content != newContent
-        if (contentChanged) {
-            state.clearSelection()
+        if (line.content == newContent) {
+            // No-op IME sync (e.g. finishComposingText echoing same text): update cursor
+            // only — skip selection clear (would wipe gutter selections), prefix conversion,
+            // sentinel stamp, and markContentChanged (would clobber redo after undo).
+            line.updateContent(newContent, contentCursor)
+            state.notifyChange()
+            return
         }
 
+        state.clearSelection()
         applyContent(line, newContent, contentCursor)
         stampNoteIdSentinelIfNeeded(lineIndex, line)
-
         state.notifyChange()
-
-        // Skip markContentChanged on no-op IME sync after undo — would clobber redo.
-        if (contentChanged) {
-            undoManager.markContentChanged()
-        }
+        undoManager.markContentChanged()
     }
 
     private fun splitLineOnNewline(lineIndex: Int, line: LineState, newContent: String) {
@@ -1008,17 +1024,7 @@ class EditorController(
         val newlineIndex = newContent.indexOf('\n')
         val beforeNewline = newContent.substring(0, newlineIndex)
         val afterNewline = newContent.substring(newlineIndex + 1)
-
-        val (currentNoteIds, newNoteIds) = org.alkaline.taskbrain.data.splitNoteIds(
-            line.noteIds, beforeNewline.length, afterNewline.length,
-            beforeNewline.isNotEmpty(), afterNewline.isNotEmpty(), line.noteIdContentLengths
-        )
-
-        line.updateContent(beforeNewline, beforeNewline.length)
-        line.noteIds = currentNoteIds
-
-        val preserveChecked = afterNewline.isNotEmpty()
-        createNewLineWithPrefix(lineIndex, afterNewline, line.prefix, newNoteIds, preserveChecked)
+        splitLineByContent(lineIndex, line, beforeNewline, afterNewline, preserveCheckedAfter = afterNewline.isNotEmpty())
 
         // Continue pending state on new line so Enter + subsequent typing group as one undo.
         undoManager.continueAfterStructuralChange(state.focusedLineIndex)
