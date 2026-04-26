@@ -222,10 +222,7 @@ class InlineEditState {
             // Always use NoteStore (with synthesized fallback) so the session is initialized
             // via initFromNoteLines and never goes through the lossy updateFromText path.
             val storeLines = NoteStore.getNoteLinesByIdOrSynthesize(note.id, note.content)
-            val noteLines = storeLines.map { nl ->
-                nl.content to (nl.noteId?.let { listOf(it) } ?: emptyList())
-            }
-            editorState.initFromNoteLines(noteLines)
+            editorState.initFromNoteLines(storeLines, preserveCursor = false)
             val session = InlineEditSession(
                 noteId = note.id,
                 originalContent = note.content,
@@ -315,9 +312,7 @@ class InlineEditState {
         // Always go through initFromNoteLines (with synthesized fallback) so the session
         // never starts in the lossy updateFromText path with empty parentNoteId.
         val storeLines = NoteStore.getNoteLinesByIdOrSynthesize(noteId, content)
-        editorState.initFromNoteLines(
-            storeLines.map { nl -> nl.content to (nl.noteId?.let { listOf(it) } ?: emptyList()) }
-        )
+        editorState.initFromNoteLines(storeLines, preserveCursor = false)
         val controller = EditorController(editorState)
 
         val session = InlineEditSession(

@@ -7,8 +7,8 @@ Master list of code-quality issues identified in the codebase audit (2026-04-26)
 - [x] **1. `web/src/screens/NoteEditorScreen.tsx` — 660-line screen mixing concerns.** _(done; 693 → 258 lines)_
   Extracted 9 hooks under `web/src/hooks/`: `useNoteDeletion`, `useTabSync`, `useDirectiveMutations`, `useCompletedLineDisplay`, `useActiveEditorSession`, `useUnifiedUndo`, `useSaveCoordinator`, `useGlobalKeyboardShortcuts`, `useGutterRouting`. Screen body is now hook composition + JSX. All 1536 web tests pass.
 
-- [ ] **2. `app/src/main/java/org/alkaline/taskbrain/ui/currentnote/CurrentNoteScreen.kt` — 1316-line composable, 20+ ViewModel observations, lines 75-224 are pure setup, heavy `LaunchedEffect` chains.**
-  Move tab/cache logic into a `rememberEditorCache`; push content-sync `LaunchedEffect`s into the ViewModel; extract sub-composables for header/body/footer regions.
+- [x] **2. `app/src/main/java/org/alkaline/taskbrain/ui/currentnote/CurrentNoteScreen.kt` — 1316-line composable.** _(done; 1316 → 1068 total lines, main `CurrentNoteScreen` body 803 → ~530 lines)_
+  Extracted 6 helpers under `ui/currentnote/`: `AlarmDialogState`, `DisplayedNoteIdState`, `EditorContentState`, `DirectiveResultsState`, `UnifiedUndoState`, `NoteEditorBody`. Added `EditorState.initFromNoteLines(List<NoteLine>, …)` overload to consolidate 6 inline-mapped call sites (screen, InlineEditSession ×2, DirectiveAwareLineInput ×2). Fixed a preexisting recurring no-op write to `controller.hiddenIndices` by wrapping in `SideEffect`. Two unit-test files for `AlarmDialogState` and the unified-undo context-id helpers.
 
 - [ ] **3. `app/src/main/java/org/alkaline/taskbrain/ui/currentnote/ime/DirectiveAwareLineInput.kt` — 1502 lines mixing composition, custom drawing, text measurement, and IME coordination.**
   Split out a `TextMeasurer`, isolate `DrawScope` logic into its own file, decompose into smaller composables.

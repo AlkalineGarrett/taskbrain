@@ -732,6 +732,16 @@ class EditorState {
      *   line (by noteId) and position. Used for external change reloads where
      *   the user's cursor should stay in place.
      */
+    /** Convenience overload that accepts the [NoteLine] list directly. */
+    @JvmName("initFromNoteLineList")
+    internal fun initFromNoteLines(
+        noteLines: List<NoteLine>,
+        preserveCursor: Boolean,
+    ) = initFromNoteLines(
+        noteLines.map { nl -> nl.content to (nl.noteId?.let { listOf(it) } ?: emptyList()) },
+        preserveCursor,
+    )
+
     internal fun initFromNoteLines(
         noteLines: List<Pair<String, List<String>>>,
         preserveCursor: Boolean = false,

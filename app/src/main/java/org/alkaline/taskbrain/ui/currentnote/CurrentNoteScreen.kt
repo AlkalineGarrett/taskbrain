@@ -1,72 +1,60 @@
 package org.alkaline.taskbrain.ui.currentnote
 
 import androidx.compose.foundation.background
-import org.alkaline.taskbrain.data.Alarm
-import org.alkaline.taskbrain.data.AlarmStatus
-import org.alkaline.taskbrain.data.CloseTabResult
-import org.alkaline.taskbrain.data.NoteStore
-import org.alkaline.taskbrain.data.TabState
-import org.alkaline.taskbrain.ui.currentnote.rendering.ButtonCallbacks
-import org.alkaline.taskbrain.ui.currentnote.util.AlarmSymbolUtils
-import org.alkaline.taskbrain.ui.currentnote.util.LocalSymbolOverlaysProvider
-import org.alkaline.taskbrain.ui.currentnote.util.TappableSymbol
-import org.alkaline.taskbrain.ui.currentnote.components.AlarmDialogMode
-import org.alkaline.taskbrain.ui.currentnote.util.ClipboardHtmlConverter
-import org.alkaline.taskbrain.ui.currentnote.util.CompletedLineUtils
-import org.alkaline.taskbrain.ui.currentnote.undo.UndoStatePersistence
-import androidx.compose.ui.res.stringResource
-import org.alkaline.taskbrain.R
-import org.alkaline.taskbrain.ui.currentnote.util.TextLineUtils
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Box
-import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.res.colorResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.tooling.preview.Preview
-import kotlinx.coroutines.delay
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
-import org.alkaline.taskbrain.dsl.runtime.MutationType
-import org.alkaline.taskbrain.dsl.runtime.values.ViewVal
-import org.alkaline.taskbrain.ui.currentnote.undo.UnifiedUndoManager
 import org.alkaline.taskbrain.BuildConfig
-import org.alkaline.taskbrain.ui.currentnote.components.AgentCommandSection
-import org.alkaline.taskbrain.ui.currentnote.components.CommandBar
-import org.alkaline.taskbrain.ui.currentnote.components.NoteTextField
-import org.alkaline.taskbrain.ui.currentnote.components.StatusBar
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.SideEffect
-import android.util.Log
-import androidx.compose.runtime.collectAsState
+import org.alkaline.taskbrain.R
+import org.alkaline.taskbrain.data.CloseTabResult
 import org.alkaline.taskbrain.data.ConnectivityMonitor
-import org.alkaline.taskbrain.dsl.directives.DirectiveFinder
-import org.alkaline.taskbrain.dsl.directives.DirectiveResult
+import org.alkaline.taskbrain.data.NoteStore
+import org.alkaline.taskbrain.data.TabState
+import org.alkaline.taskbrain.dsl.runtime.MutationType
 import org.alkaline.taskbrain.ui.components.OfflineBanner
+import org.alkaline.taskbrain.ui.currentnote.components.AgentCommandSection
+import org.alkaline.taskbrain.ui.currentnote.components.AlarmDialogMode
+import org.alkaline.taskbrain.ui.currentnote.components.CommandBar
+import org.alkaline.taskbrain.ui.currentnote.components.StatusBar
+import org.alkaline.taskbrain.ui.currentnote.undo.UndoStatePersistence
+import org.alkaline.taskbrain.ui.currentnote.undo.UnifiedUndoManager
+import org.alkaline.taskbrain.ui.currentnote.util.AlarmSymbolUtils
+import org.alkaline.taskbrain.ui.currentnote.util.ClipboardHtmlConverter
+import org.alkaline.taskbrain.ui.currentnote.util.SymbolTapInfo
+import org.alkaline.taskbrain.ui.currentnote.util.TappableSymbol
+import org.alkaline.taskbrain.ui.currentnote.util.TextLineUtils
 
 /**
  * Main screen for viewing and editing a note.
@@ -79,7 +67,7 @@ fun CurrentNoteScreen(
     onNavigateBack: () -> Unit = {},
     onNavigateToNote: (String) -> Unit = {},
     currentNoteViewModel: CurrentNoteViewModel = viewModel(),
-    recentTabsViewModel: RecentTabsViewModel = viewModel()
+    recentTabsViewModel: RecentTabsViewModel = viewModel(),
 ) {
     // --- ViewModel state observations ---
     val saveStatus by currentNoteViewModel.saveStatus.observeAsState()
@@ -105,35 +93,18 @@ fun CurrentNoteScreen(
     val buttonErrors by currentNoteViewModel.directiveManager.buttonErrors.observeAsState(emptyMap())
     val recentTabs by recentTabsViewModel.tabs.observeAsState(emptyList())
     val tabsError by recentTabsViewModel.error.observeAsState()
+    val currentNoteId by currentNoteViewModel.currentNoteIdLiveData.observeAsState()
+    val alarmCacheForOverlay by currentNoteViewModel.alarmManager.alarmCache.observeAsState(emptyMap())
+    val recurringAlarmCacheForOverlay by currentNoteViewModel.alarmManager.recurringAlarmCache.observeAsState(emptyMap())
+    val alarmDialogRecurrenceConfig by currentNoteViewModel.alarmManager.recurrenceConfig.observeAsState()
+    val alarmDialogRecurringAlarm by currentNoteViewModel.alarmManager.recurringAlarm.observeAsState()
 
-    // --- Local state ---
-    var displayedNoteId by remember { mutableStateOf(noteId) }
-    LaunchedEffect(noteId) {
-        // Skip null transitions (navigation intermediates) to avoid flashing empty content
-        if (noteId != null && noteId != displayedNoteId) displayedNoteId = noteId
-    }
-
-    // Only use editor cache for dirty notes (unsaved edits); clean notes load from NoteStore
-    val cachedContent = remember(displayedNoteId) {
-        displayedNoteId?.let { recentTabsViewModel.getCachedContent(it) }?.takeIf { it.isDirty }
-    }
-    val storeContent = remember(displayedNoteId) {
-        displayedNoteId?.let { NoteStore.getNoteById(it) }
-    }
-    // Resolve initial NoteLines (text + noteId per line) from the best available source.
-    // We need the structured shape — not just plain text — so the editor can be initialized
-    // via initFromNoteLines and never has to fall back to lossy text matching.
-    val initialNoteLines: List<org.alkaline.taskbrain.data.NoteLine> = remember(displayedNoteId) {
-        cachedContent?.noteLines
-            ?: displayedNoteId?.let { NoteStore.getNoteLinesById(it) }
-            ?: emptyList()
-    }
-    val initialContent = initialNoteLines.joinToString("\n") { it.content }
-    val initialIsDeleted = cachedContent?.isDeleted ?: (storeContent?.state == "deleted")
-    val initialShowCompleted = storeContent?.showCompleted ?: true
-
-    var isNoteDeleted by remember(displayedNoteId) { mutableStateOf(initialIsDeleted) }
-    LaunchedEffect(isNoteDeletedFromVm) { isNoteDeleted = isNoteDeletedFromVm }
+    // --- Tab/note state ---
+    val displayedNoteIdState = rememberDisplayedNoteId(
+        initialNoteId = noteId,
+        currentNoteId = currentNoteId,
+    )
+    var displayedNoteId by displayedNoteIdState
 
     // When a save completes, clear the dirty cache for the just-saved note so
     // future tab returns read from NoteStore (which has the fresh content after
@@ -145,182 +116,64 @@ fun CurrentNoteScreen(
         }
     }
 
-    var showCompleted by remember(displayedNoteId) { mutableStateOf(initialShowCompleted) }
-    LaunchedEffect(showCompletedFromVm) { showCompleted = showCompletedFromVm }
+    // --- Editor state + content ---
+    val editorContent = rememberEditorAndContent(
+        displayedNoteId = displayedNoteId,
+        isNoteDeletedFromVm = isNoteDeletedFromVm,
+        showCompletedFromVm = showCompletedFromVm,
+        onMarkDirty = {
+            currentNoteViewModel.dirty = true
+            currentNoteViewModel.markAsDirty()
+        },
+        getCachedNoteContent = recentTabsViewModel::getCachedContent,
+    )
+    val editorState = editorContent.editorState
+    val controller = editorContent.controller
 
-    var userContent by remember(displayedNoteId) { mutableStateOf(initialContent) }
-    var textFieldValue by remember(displayedNoteId) {
-        mutableStateOf(TextFieldValue(initialContent, TextRange(initialContent.length)))
-    }
-    var isSaved by remember(displayedNoteId) { mutableStateOf(true) }
+    PushPreviousTabContentOnSwitch(
+        displayedNoteId = displayedNoteId,
+        currentContent = editorContent.userContent,
+        onPush = currentNoteViewModel::pushContentToNoteStore,
+    )
+
     var agentCommand by remember { mutableStateOf("") }
     var isAgentSectionExpanded by remember { mutableStateOf(false) }
     @Suppress("KotlinConstantConditions")
     val agentCommandEnabled = BuildConfig.AGENT_COMMAND_ENABLED
 
-    fun updateContent(newContent: String) {
-        userContent = newContent
-        currentNoteViewModel.dirty = true
-        currentNoteViewModel.markAsDirty()
-    }
+    // --- Directives, view notes, inline sessions ---
+    val directiveState = rememberDirectiveResultsAndSessions(
+        userContent = editorContent.userContent,
+        displayedNoteId = displayedNoteId,
+        showCompleted = editorContent.showCompleted,
+        directiveCacheGeneration = directiveCacheGeneration,
+        editorState = editorState,
+        controller = controller,
+        directiveManager = currentNoteViewModel.directiveManager,
+        alarmManager = currentNoteViewModel.alarmManager,
+        onInvalidateCache = recentTabsViewModel::invalidateCache,
+    )
+    val directiveResults = directiveState.directiveResults
+    val viewNotes = directiveState.viewNotes
+    val inlineEditState = directiveState.inlineEditState
 
-    // Push editor content to NoteStore on tab switch only (not every keystroke —
-    // StateFlow emissions reset the cursor). SideEffect captures the latest
-    // content/noteId AFTER each composition. When displayedNoteId changes, the
-    // remember block reads the refs (still holding PREVIOUS values) and pushes.
-    val prevContentRef = remember { mutableStateOf("") }
-    val prevNoteIdRef = remember { mutableStateOf<String?>(null) }
-    SideEffect {
-        prevContentRef.value = userContent
-        prevNoteIdRef.value = displayedNoteId
-    }
-    remember(displayedNoteId) {
-        val prevId = prevNoteIdRef.value
-        val prevContent = prevContentRef.value
-        if (prevId != null && prevId != displayedNoteId && prevContent.isNotEmpty()) {
-            currentNoteViewModel.pushContentToNoteStore(prevId, prevContent)
-        }
-        Unit
-    }
-
-    val mainContentFocusRequester = remember { FocusRequester() }
-    var isMainContentFocused by remember { mutableStateOf(false) }
-
-    val editorState = remember(displayedNoteId) {
-        EditorState().apply {
-            // Initialize from the structured NoteLine list — never via the lossy
-            // updateFromText path. This guarantees that on first composition the editor
-            // already has its parentNoteId and per-line noteIds populated, so even if the
-            // LaunchedEffect on loadStatus later skips the reload (because content matches
-            // userContent), the editor's noteIds are already correct.
-            if (initialNoteLines.isNotEmpty()) {
-                initFromNoteLines(initialNoteLines.map { nl ->
-                    nl.content to (nl.noteId?.let { listOf(it) } ?: emptyList())
-                })
-            }
-        }
-    }
-    val controller = rememberEditorController(editorState)
-
-    // Sync tracker noteIds into editor state, then map directive results using
-    // the editor's effective IDs so key generation matches key lookup in rendering
-    // Keep previous directive results until new ones are ready to avoid flash of raw source
-    // Compute directive results synchronously — no async races.
-    // The CachedDirectiveExecutor's L1 cache makes cache hits instant.
-    // directiveCacheGeneration triggers recomposition after async cache fills (cold start).
-    val lineNoteIds = remember(userContent) {
-        editorState.lines.map { it.noteIds.firstOrNull() }
-    }
-    val directiveResults = remember(userContent, directiveCacheGeneration, displayedNoteId) {
-        currentNoteViewModel.directiveManager.computeDirectiveResults(userContent, displayedNoteId, lineNoteIds)
-    }
-
-    // Load alarm states for notes displayed in view directives so overlays render correctly.
-    // Also eagerly create inline edit sessions for all embedded notes.
-    val viewNotes = remember(directiveResults) {
-        directiveResults.values
-            .mapNotNull { (it.toValue() as? ViewVal)?.notes }
-            .flatten()
-    }
-    LaunchedEffect(viewNotes) {
-        val viewNoteContents = viewNotes.map { it.content }
-        if (viewNoteContents.isNotEmpty()) {
-            currentNoteViewModel.alarmManager.loadAlarmStatesForContent(viewNoteContents)
-        }
-    }
-
-    // Update hidden indices for move system when showCompleted or lines change
-    controller.hiddenIndices = remember(userContent, showCompleted) {
-        CompletedLineUtils.computeHiddenIndices(editorState.lines.map { it.text }, showCompleted)
-    }
-
-    // Inline editing state for view directives
-    val inlineEditState = rememberInlineEditState()
-
-    // Eagerly create edit sessions for all embedded notes so clicking is instant.
-    // Also execute directives for each new session so they render immediately.
-    remember(viewNotes) {
-        val newNoteIds = inlineEditState.ensureSessionsForNotes(viewNotes)
-        val activeNoteIds = viewNotes.map { it.id }.toSet()
-        inlineEditState.removeStaleSessionsExcept(activeNoteIds)
-        // Execute directives eagerly for newly created sessions
-        for (noteId in newNoteIds) {
-            val session = inlineEditState.viewSessions[noteId] ?: continue
-            currentNoteViewModel.directiveManager.executeDirectivesForContent(session.currentContent) { results ->
-                session.updateDirectiveResults(results)
-            }
-        }
-    }
-
-    LaunchedEffect(inlineEditState) {
-        inlineEditState.onExecuteDirectives = { content, onResults ->
-            currentNoteViewModel.directiveManager.executeDirectivesForContent(content, onResults)
-        }
-        inlineEditState.onExecuteSingleDirective = { sourceText, onResult ->
-            currentNoteViewModel.directiveManager.executeSingleDirective(sourceText, onResult)
-        }
-        inlineEditState.onDirectiveEditConfirm = { _, _, _, _ ->
-            inlineEditState.activeSession?.let { session ->
-                currentNoteViewModel.directiveManager.saveInlineEditSession(
-                    session = session,
-                    onSuccess = {
-                        session.markSaved()
-                        recentTabsViewModel.invalidateCache(session.noteId)
-                        currentNoteViewModel.directiveManager.executeDirectivesForContent(session.currentContent) { results ->
-                            session.updateDirectiveResults(results)
-                            currentNoteViewModel.directiveManager.forceRefreshAllDirectives {}
-                        }
-                    }
-                )
-            }
-        }
-    }
-
-    // SelectionCoordinator — single source of truth for focus/selection mutual exclusivity
+    // --- Selection coordinator: mutual exclusivity for focus/selection ---
     val coordinator = remember(editorState, controller) {
         SelectionCoordinator(editorState, controller)
     }
     coordinator.inlineEditState = inlineEditState
     val activeController = coordinator.activeController
-    val context = LocalContext.current
-    val currentNoteId by currentNoteViewModel.currentNoteIdLiveData.observeAsState()
 
-    // Sync displayedNoteId from ViewModel when the screen didn't specify a noteId via
-    // navigation (default CurrentNote route). This allows the ViewModel to redirect to a
-    // different note (e.g., when a stale SharedPreferences noteId causes permission denied
-    // and loadContent falls back to creating a new note for the current user).
-    LaunchedEffect(currentNoteId) {
-        if (noteId == null && currentNoteId != null) displayedNoteId = currentNoteId
-    }
-
-    // Unified undo/redo across main editor + all inline sessions
-    val unifiedUndoManager = remember { UnifiedUndoManager() }
-    DisposableEffect(controller) {
-        unifiedUndoManager.registerEditor("main", controller)
-        onDispose { unifiedUndoManager.unregisterEditor("main") }
-    }
-    // Register inline sessions with unified undo manager
-    DisposableEffect(viewNotes) {
-        for (note in viewNotes) {
-            val session = inlineEditState.viewSessions[note.id]
-            if (session != null) {
-                unifiedUndoManager.registerEditor("inline:${note.id}", session.controller)
-            }
-        }
-        onDispose {
-            for (note in viewNotes) {
-                unifiedUndoManager.unregisterEditor("inline:${note.id}")
-            }
-        }
-    }
-
-    // Undo/redo state observation
-    @Suppress("UNUSED_VARIABLE")
-    val editorStateVersion = editorState.stateVersion
-    @Suppress("UNUSED_VARIABLE")
-    val undoStateVersion = unifiedUndoManager.stateVersion
-    val canUndo = unifiedUndoManager.canUndo
-    val canRedo = unifiedUndoManager.canRedo
+    // --- Unified undo/redo across main editor + all inline sessions ---
+    val undoState = rememberUnifiedUndoState(
+        controller = controller,
+        editorState = editorState,
+        viewNotes = viewNotes,
+        inlineEditState = inlineEditState,
+    )
+    val unifiedUndoManager = undoState.manager
+    val canUndo = undoState.canUndo
+    val canRedo = undoState.canRedo
 
     // Track inline session edits to keep save button in sync.
     // Reading stateVersion subscribes to each session's changes.
@@ -333,104 +186,36 @@ fun CurrentNoteScreen(
         if (anyInlineDirty) currentNoteViewModel.markAsDirty()
     }
 
-    // Alarm dialog state.
-    //
-    // Most fields use rememberSaveable so the dialog re-opens correctly after
-    // Activity recreation (rotation, etc.). The Alarm object and inline session
-    // are not directly persistable, so we store ID surrogates and re-derive
-    // them in a LaunchedEffect below.
-    var showAlarmDialog by rememberSaveable { mutableStateOf(false) }
-    var alarmDialogLineContent by rememberSaveable { mutableStateOf("") }
-    var alarmDialogLineIndex by rememberSaveable { mutableStateOf<Int?>(null) }
-    // Inline session that "owns" this alarm save. Held by reference (not Parcelable),
-    // so we also persist the session's noteId in alarmDialogInlineSessionNoteId and
-    // re-resolve the reference after recreation.
-    var alarmDialogInlineSession by remember { mutableStateOf<InlineEditSession?>(null) }
-    var alarmDialogInlineSessionNoteId by rememberSaveable { mutableStateOf<String?>(null) }
-    val alarmCacheForOverlay by currentNoteViewModel.alarmManager.alarmCache.observeAsState(emptyMap())
-    val recurringAlarmCacheForOverlay by currentNoteViewModel.alarmManager.recurringAlarmCache.observeAsState(emptyMap())
-    // The alarm being viewed/edited in the dialog (set when tapping a directive).
-    // Re-fetched from alarmDialogAlarmIdToRestore / alarmDialogRecurringAlarmIdToRestore
-    // after recreation so the dialog re-opens populated.
-    var alarmDialogAlarm by remember { mutableStateOf<Alarm?>(null) }
-    val alarmDialogExistingAlarm = alarmDialogAlarm
-    var alarmDialogAlarmIdToRestore by rememberSaveable { mutableStateOf<String?>(null) }
-    var alarmDialogRecurringAlarmIdToRestore by rememberSaveable { mutableStateOf<String?>(null) }
-    var alarmDialogInitialMode by rememberSaveable { mutableStateOf(AlarmDialogMode.INSTANCE) }
-    // The directive text that was tapped to open the dialog (for directive switching after save)
-    var tappedDirectiveText by rememberSaveable { mutableStateOf<String?>(null) }
-    val alarmDialogRecurrenceConfig by currentNoteViewModel.alarmManager.recurrenceConfig.observeAsState()
-    val alarmDialogRecurringAlarm by currentNoteViewModel.alarmManager.recurringAlarm.observeAsState()
-
-    // Sibling instances for recurring alarm navigation in the dialog
-    var alarmDialogSiblings by remember { mutableStateOf<List<Alarm>>(emptyList()) }
-    val alarmDialogRecurringId = alarmDialogExistingAlarm?.recurringAlarmId
-    LaunchedEffect(alarmDialogRecurringId, showAlarmDialog) {
-        alarmDialogSiblings = if (showAlarmDialog && alarmDialogRecurringId != null) {
-            currentNoteViewModel.alarmManager.getInstancesForRecurring(alarmDialogRecurringId)
-        } else {
-            emptyList()
-        }
-    }
-
-    // Restore transient alarm-dialog state after Activity recreation. The saveable
-    // fields above persist scalars, but the Alarm object and the inline session
-    // reference are not Parcelable — re-derive them here when the dialog is open
-    // and the transients are missing.
-    LaunchedEffect(
-        showAlarmDialog,
-        alarmDialogAlarmIdToRestore,
-        alarmDialogRecurringAlarmIdToRestore,
-        alarmDialogInlineSessionNoteId,
-    ) {
-        if (!showAlarmDialog) return@LaunchedEffect
-        if (alarmDialogAlarm == null) {
-            val instanceId = alarmDialogAlarmIdToRestore
-            val recurringId = alarmDialogRecurringAlarmIdToRestore
-            when {
-                instanceId != null -> currentNoteViewModel.alarmManager.fetchAlarmById(instanceId) {
-                    alarmDialogAlarm = it
-                }
-                recurringId != null -> currentNoteViewModel.alarmManager.fetchRecurringAlarmInstance(recurringId) {
-                    alarmDialogAlarm = it
-                }
-            }
-        }
-        if (alarmDialogInlineSession == null) {
-            val sessionNoteId = alarmDialogInlineSessionNoteId
-            if (sessionNoteId != null) {
-                alarmDialogInlineSession = inlineEditState.viewSessions[sessionNoteId]
-            }
-        }
-    }
+    // --- Alarm dialog state ---
+    val alarmDialog = rememberAlarmDialogState(
+        inlineEditState = inlineEditState,
+        alarmManager = currentNoteViewModel.alarmManager,
+    )
 
     // --- Effects ---
     LifecycleAutoSaveEffect(
         controller = controller,
         currentNoteViewModel = currentNoteViewModel,
         recentTabsViewModel = recentTabsViewModel,
-        userContent = userContent,
-        isSaved = isSaved,
-        isNoteDeleted = isNoteDeleted,
+        userContent = editorContent.userContent,
+        isSaved = editorContent.isSaved,
+        isNoteDeleted = editorContent.isNoteDeleted,
         currentNoteId = currentNoteId,
-        inlineEditState = inlineEditState
+        inlineEditState = inlineEditState,
     )
 
     DataLoadingEffects(
         displayedNoteId = displayedNoteId,
         loadStatus = loadStatus,
         tabsError = tabsError,
-        userContent = userContent,
-        isSaved = isSaved,
+        userContent = editorContent.userContent,
+        isSaved = editorContent.isSaved,
         editorState = editorState,
         controller = controller,
         currentNoteViewModel = currentNoteViewModel,
         recentTabsViewModel = recentTabsViewModel,
         inlineEditState = inlineEditState,
-        onContentLoaded = { loadedContent ->
-            userContent = loadedContent
-            textFieldValue = TextFieldValue(loadedContent, TextRange(loadedContent.length))
-        }
+        onContentLoaded = { editorContent.applyLoadedContent(it) },
     )
 
     ContentSyncEffects(
@@ -439,29 +224,28 @@ fun CurrentNoteScreen(
         saveStatus = saveStatus,
         contentModified = contentModified,
         alarmCreated = alarmCreated,
-        userContent = userContent,
-        isNoteDeleted = isNoteDeleted,
+        userContent = editorContent.userContent,
+        isNoteDeleted = editorContent.isNoteDeleted,
         editorState = editorState,
         controller = controller,
         inlineEditState = inlineEditState,
         currentNoteViewModel = currentNoteViewModel,
         recentTabsViewModel = recentTabsViewModel,
-        onContentChanged = { updateContent(it) },
-        onSavedChanged = { isSaved = it }
+        onContentChanged = { editorContent.updateContent(it) },
+        onSavedChanged = { editorContent.isSaved = it },
     )
-
 
     DirectiveMutationEffect(
         currentNoteId = currentNoteId,
-        userContent = userContent,
+        userContent = editorContent.userContent,
         editorState = editorState,
         controller = controller,
         currentNoteViewModel = currentNoteViewModel,
         onContentChanged = { content, tfv ->
-            updateContent(content)
-            textFieldValue = tfv
+            editorContent.updateContent(content)
+            editorContent.textFieldValue = tfv
         },
-        onMarkUnsaved = { isSaved = false; currentNoteViewModel.markAsDirty() }
+        onMarkUnsaved = { editorContent.markUnsaved() },
     )
 
     // Switches the directive text in the editor if the directive type changed.
@@ -471,13 +255,13 @@ fun CurrentNoteScreen(
     // the directive are modified — every other line keeps its LineState (and noteIds)
     // untouched. No round-trip through updateFromText.
     fun switchDirectiveIfNeeded(newDirective: String) {
-        val tapped = tappedDirectiveText ?: return
+        val tapped = alarmDialog.tappedDirectiveText ?: return
         if (tapped == newDirective) return
         val before = editorState.text
         editorState.replaceDirectiveText(tapped, newDirective)
         if (editorState.text != before) {
-            updateContent(editorState.text)
-            isSaved = false
+            editorContent.updateContent(editorState.text)
+            editorContent.markUnsaved()
             currentNoteViewModel.saveContent(editorState.toNoteLines())
         }
     }
@@ -502,15 +286,15 @@ fun CurrentNoteScreen(
         onClearNotificationPermissionWarning = { currentNoteViewModel.alarmManager.clearNotificationPermissionWarning() },
         onClearSchedulingWarning = { currentNoteViewModel.alarmManager.clearSchedulingWarning() },
         onClearRedoRollbackWarning = { currentNoteViewModel.alarmManager.clearRedoRollbackWarning() },
-        showAlarmDialog = showAlarmDialog,
-        alarmDialogLineContent = alarmDialogLineContent,
-        alarmDialogExistingAlarm = alarmDialogExistingAlarm,
-        alarmDialogInitialMode = alarmDialogInitialMode,
+        showAlarmDialog = alarmDialog.showDialog,
+        alarmDialogLineContent = alarmDialog.lineContent,
+        alarmDialogExistingAlarm = alarmDialog.alarm,
+        alarmDialogInitialMode = alarmDialog.initialMode,
         alarmDialogRecurrenceConfig = alarmDialogRecurrenceConfig,
         alarmDialogRecurringAlarm = alarmDialogRecurringAlarm,
-        alarmDialogInstanceCount = alarmDialogSiblings.size,
+        alarmDialogInstanceCount = alarmDialog.siblings.size,
         onAlarmSave = { dueTime, stages ->
-            val existing = alarmDialogExistingAlarm
+            val existing = alarmDialog.alarm
             if (existing != null) {
                 currentNoteViewModel.alarmManager.updateAlarm(existing, dueTime, stages)
                 // Non-recurring save: switch [recurringAlarm(...)] → [alarm(...)]
@@ -519,21 +303,21 @@ fun CurrentNoteScreen(
                 // Pre-allocate the alarm ID and embed its directive into the line so
                 // the note save and the alarm doc create ride one batch.
                 val alarmId = currentNoteViewModel.newAlarmId()
-                val targetController = alarmDialogInlineSession?.controller ?: controller
+                val targetController = alarmDialog.inlineSession?.controller ?: controller
                 targetController.insertAtEndOfCurrentLine(AlarmSymbolUtils.alarmDirective(alarmId))
                 currentNoteViewModel.saveAndCreateAlarm(
                     trackedLines = editorState.toNoteLines(),
-                    lineContent = alarmDialogLineContent,
-                    lineIndex = alarmDialogLineIndex,
+                    lineContent = alarmDialog.lineContent,
+                    lineIndex = alarmDialog.lineIndex,
                     alarmId = alarmId,
                     dueTime = dueTime,
                     stages = stages,
-                    inlineSession = alarmDialogInlineSession,
+                    inlineSession = alarmDialog.inlineSession,
                 )
             }
         },
         onAlarmSaveRecurring = { dueTime, stages, recurrenceConfig ->
-            val existing = alarmDialogExistingAlarm
+            val existing = alarmDialog.alarm
             if (existing != null) {
                 currentNoteViewModel.alarmManager.updateRecurringAlarm(existing, dueTime, stages, recurrenceConfig)
                 // Recurring save: switch [alarm(...)] → [recurringAlarm(...)]
@@ -544,18 +328,18 @@ fun CurrentNoteScreen(
             } else {
                 val recurringAlarmId = currentNoteViewModel.newRecurringAlarmId()
                 val alarmId = currentNoteViewModel.newAlarmId()
-                val targetController = alarmDialogInlineSession?.controller ?: controller
+                val targetController = alarmDialog.inlineSession?.controller ?: controller
                 targetController.insertAtEndOfCurrentLine(AlarmSymbolUtils.recurringAlarmDirective(recurringAlarmId))
                 currentNoteViewModel.saveAndCreateRecurringAlarm(
                     trackedLines = editorState.toNoteLines(),
-                    lineContent = alarmDialogLineContent,
-                    lineIndex = alarmDialogLineIndex,
+                    lineContent = alarmDialog.lineContent,
+                    lineIndex = alarmDialog.lineIndex,
                     recurringAlarmId = recurringAlarmId,
                     alarmId = alarmId,
                     dueTime = dueTime,
                     stages = stages,
                     recurrenceConfig = recurrenceConfig,
-                    inlineSession = alarmDialogInlineSession,
+                    inlineSession = alarmDialog.inlineSession,
                 )
             }
         },
@@ -573,33 +357,19 @@ fun CurrentNoteScreen(
                 switchDirectiveIfNeeded(AlarmSymbolUtils.recurringAlarmDirective(recurring.id))
             }
         },
-        onAlarmMarkDone = alarmDialogExistingAlarm?.let { alarm -> { currentNoteViewModel.alarmManager.markAlarmDone(alarm.id) } },
-        onAlarmMarkCancelled = alarmDialogExistingAlarm?.let { alarm -> { currentNoteViewModel.alarmManager.cancelAlarm(alarm.id) } },
-        onAlarmReactivate = alarmDialogExistingAlarm?.let { alarm -> { currentNoteViewModel.alarmManager.reactivateAlarm(alarm.id) } },
-        onAlarmDelete = alarmDialogExistingAlarm?.let { alarm -> { currentNoteViewModel.alarmManager.deleteAlarmPermanently(alarm.id) } },
-        onAlarmNavigatePrevious = if (alarmDialogRecurringId != null) {{
-            val idx = alarmDialogSiblings.indexOfFirst { it.id == alarmDialogExistingAlarm?.id }
-            if (idx > 0) alarmDialogAlarm = alarmDialogSiblings[idx - 1]
-        }} else null,
-        onAlarmNavigateNext = if (alarmDialogRecurringId != null) {{
-            val idx = alarmDialogSiblings.indexOfFirst { it.id == alarmDialogExistingAlarm?.id }
-            if (idx in 0 until alarmDialogSiblings.lastIndex) alarmDialogAlarm = alarmDialogSiblings[idx + 1]
-        }} else null,
-        alarmHasPrevious = alarmDialogSiblings.indexOfFirst { it.id == alarmDialogExistingAlarm?.id } > 0,
-        alarmHasNext = alarmDialogSiblings.indexOfFirst { it.id == alarmDialogExistingAlarm?.id }.let { it in 0 until alarmDialogSiblings.lastIndex },
+        onAlarmMarkDone = alarmDialog.alarm?.let { alarm -> { currentNoteViewModel.alarmManager.markAlarmDone(alarm.id) } },
+        onAlarmMarkCancelled = alarmDialog.alarm?.let { alarm -> { currentNoteViewModel.alarmManager.cancelAlarm(alarm.id) } },
+        onAlarmReactivate = alarmDialog.alarm?.let { alarm -> { currentNoteViewModel.alarmManager.reactivateAlarm(alarm.id) } },
+        onAlarmDelete = alarmDialog.alarm?.let { alarm -> { currentNoteViewModel.alarmManager.deleteAlarmPermanently(alarm.id) } },
+        onAlarmNavigatePrevious = if (alarmDialog.recurringId != null) {{ alarmDialog.navigatePrevious() }} else null,
+        onAlarmNavigateNext = if (alarmDialog.recurringId != null) {{ alarmDialog.navigateNext() }} else null,
+        alarmHasPrevious = alarmDialog.hasPrevious,
+        alarmHasNext = alarmDialog.hasNext,
         onAlarmDismiss = {
-            showAlarmDialog = false
-            alarmDialogLineIndex = null
-            alarmDialogInlineSession = null
-            alarmDialogInlineSessionNoteId = null
-            alarmDialogAlarm = null
-            alarmDialogAlarmIdToRestore = null
-            alarmDialogRecurringAlarmIdToRestore = null
-            alarmDialogInitialMode = AlarmDialogMode.INSTANCE
-            tappedDirectiveText = null
+            alarmDialog.dismiss()
             currentNoteViewModel.alarmManager.fetchRecurrenceConfig(null)
         },
-        onFetchRecurrenceConfig = { currentNoteViewModel.alarmManager.fetchRecurrenceConfig(it) }
+        onFetchRecurrenceConfig = { currentNoteViewModel.alarmManager.fetchRecurrenceConfig(it) },
     )
 
     // Clipboard HTML formatting
@@ -607,11 +377,11 @@ fun CurrentNoteScreen(
 
     // Text field value change handler
     val updateTextFieldValue: (TextFieldValue) -> Unit = { newValue ->
-        val oldText = textFieldValue.text
-        textFieldValue = newValue
-        if (newValue.text != userContent) {
-            updateContent(newValue.text)
-            if (isSaved) isSaved = false
+        val oldText = editorContent.textFieldValue.text
+        editorContent.textFieldValue = newValue
+        if (newValue.text != editorContent.userContent) {
+            editorContent.updateContent(newValue.text)
+            if (editorContent.isSaved) editorContent.isSaved = false
             val oldBracketCount = oldText.count { it == ']' }
             val newBracketCount = newValue.text.count { it == ']' }
             if (newBracketCount > oldBracketCount) {
@@ -627,7 +397,7 @@ fun CurrentNoteScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(if (isNoteDeleted) deletedNoteBackground else Color.White)
+            .background(if (editorContent.isNoteDeleted) deletedNoteBackground else Color.White)
     ) {
         val notesNeedingFix by NoteStore.notesNeedingFix.collectAsState()
         RecentTabsBar(
@@ -635,7 +405,7 @@ fun CurrentNoteScreen(
             currentNoteId = displayedNoteId ?: "",
             notesNeedingFix = notesNeedingFix,
             onTabClick = { targetNoteId ->
-                if (!isSaved && userContent.isNotEmpty()) {
+                if (!editorContent.isSaved && editorContent.userContent.isNotEmpty()) {
                     val dirtySessions = inlineEditState.getAllDirtySessions()
                     val noteLines = editorState.toNoteLines()
                     val currentTabId = displayedNoteId
@@ -647,7 +417,7 @@ fun CurrentNoteScreen(
                         recentTabsViewModel.cacheNoteContent(
                             currentTabId,
                             noteLines,
-                            isDeleted = isNoteDeleted,
+                            isDeleted = editorContent.isNoteDeleted,
                             isDirty = true,
                         )
                     }
@@ -674,18 +444,18 @@ fun CurrentNoteScreen(
             noteNeedsFix = noteNeedsFix,
             canUndo = canUndo && !isAlarmOperationPending,
             canRedo = canRedo && !isAlarmOperationPending,
-            isNoteDeleted = isNoteDeleted,
-            userContent = userContent,
+            isNoteDeleted = editorContent.isNoteDeleted,
+            userContent = editorContent.userContent,
             editorState = editorState,
             controller = controller,
             coordinator = coordinator,
             unifiedUndoManager = unifiedUndoManager,
             currentNoteViewModel = currentNoteViewModel,
             inlineEditState = inlineEditState,
-            onContentChanged = { updateContent(it) },
-            onSyncUserContent = { userContent = it },
-            onMarkUnsaved = { isSaved = false; currentNoteViewModel.markAsDirty() },
-            showCompleted = showCompleted,
+            onContentChanged = { editorContent.updateContent(it) },
+            onSyncUserContent = { editorContent.userContent = it },
+            onMarkUnsaved = { editorContent.markUnsaved() },
+            showCompleted = editorContent.showCompleted,
             onShowCompletedToggle = { currentNoteViewModel.toggleShowCompleted() },
             showOfflineIcon = showOfflineIcon,
             onDeleteNote = {
@@ -707,7 +477,7 @@ fun CurrentNoteScreen(
         )
 
         // Loading indicator
-        val isInitialLoad = loadStatus is LoadStatus.Loading && userContent.isEmpty()
+        val isInitialLoad = loadStatus is LoadStatus.Loading && editorContent.userContent.isEmpty()
         if (isInitialLoad) {
             Box(
                 modifier = Modifier.weight(1f).fillMaxSize(),
@@ -727,85 +497,34 @@ fun CurrentNoteScreen(
 
         // Editor
         if (!isInitialLoad) {
-            val directiveCallbacks = rememberDirectiveCallbacks(
-                editorState = editorState,
-                controller = controller,
+            NoteEditorBody(
+                displayedNoteId = displayedNoteId,
+                editorContent = editorContent,
+                coordinator = coordinator,
+                inlineEditState = inlineEditState,
+                directiveResults = directiveResults,
+                alarmCacheForOverlay = alarmCacheForOverlay,
+                recurringAlarmCacheForOverlay = recurringAlarmCacheForOverlay,
+                buttonExecutionStates = buttonExecutionStates,
+                buttonErrors = buttonErrors,
+                isFingerDownFlow = isFingerDownFlow,
+                deletedNoteTextColor = deletedNoteTextColor,
                 currentNoteViewModel = currentNoteViewModel,
                 recentTabsViewModel = recentTabsViewModel,
-                inlineEditState = inlineEditState,
-                userContent = userContent,
-                onContentChanged = { updateContent(it) },
-                onMarkUnsaved = { isSaved = false; currentNoteViewModel.markAsDirty() }
+                onAlarmSymbolTap = { tapInfo ->
+                    when (tapInfo.symbol) {
+                        TappableSymbol.ALARM -> openAlarmDialogForTappedSymbol(
+                            tapInfo,
+                            editorState,
+                            alarmDialog,
+                            currentNoteViewModel.alarmManager,
+                        )
+                    }
+                },
+                onTextFieldValueChange = updateTextFieldValue,
+                modifier = Modifier.weight(1f),
             )
-            val buttonCallbacks = rememberButtonCallbacks(
-                currentNoteViewModel = currentNoteViewModel,
-                executionStates = buttonExecutionStates,
-                errors = buttonErrors
-            )
-
-            val symbolOverlaysLookup = remember(alarmCacheForOverlay, recurringAlarmCacheForOverlay) {
-                { lineContent: String -> currentNoteViewModel.alarmManager.getSymbolOverlays(lineContent, alarmCacheForOverlay, recurringAlarmCacheForOverlay) }
-            }
-            androidx.compose.runtime.CompositionLocalProvider(
-                LocalSelectionCoordinator provides coordinator,
-                LocalSymbolOverlaysProvider provides symbolOverlaysLookup
-            ) {
-            ProvideInlineEditState(inlineEditState) {
-                key(displayedNoteId) {
-                    NoteTextField(
-                        textFieldValue = textFieldValue,
-                        onTextFieldValueChange = updateTextFieldValue,
-                        focusRequester = mainContentFocusRequester,
-                        onFocusChanged = { isFocused -> isMainContentFocused = isFocused },
-                        editorState = editorState,
-                        controller = controller,
-                        isFingerDownFlow = isFingerDownFlow,
-                        onSymbolTap = { tapInfo ->
-                            when (tapInfo.symbol) {
-                                TappableSymbol.ALARM -> {
-                                    val lineContent = editorState.lines.getOrNull(tapInfo.lineIndex)?.text ?: ""
-                                    alarmDialogLineContent = TextLineUtils.trimLineForAlarm(lineContent)
-                                    alarmDialogLineIndex = tapInfo.lineIndex
-                                    alarmDialogInlineSession = null
-                                    alarmDialogInlineSessionNoteId = null
-
-                                    if (tapInfo.recurringAlarmId != null) {
-                                        tappedDirectiveText = AlarmSymbolUtils.recurringAlarmDirective(tapInfo.recurringAlarmId)
-                                        alarmDialogInitialMode = AlarmDialogMode.RECURRENCE
-                                        alarmDialogAlarmIdToRestore = null
-                                        alarmDialogRecurringAlarmIdToRestore = tapInfo.recurringAlarmId
-                                        currentNoteViewModel.alarmManager.fetchRecurringAlarmInstance(tapInfo.recurringAlarmId) { alarm ->
-                                            alarmDialogAlarm = alarm
-                                            showAlarmDialog = true
-                                        }
-                                    } else if (tapInfo.alarmId != null) {
-                                        tappedDirectiveText = AlarmSymbolUtils.alarmDirective(tapInfo.alarmId)
-                                        alarmDialogInitialMode = AlarmDialogMode.INSTANCE
-                                        alarmDialogAlarmIdToRestore = tapInfo.alarmId
-                                        alarmDialogRecurringAlarmIdToRestore = null
-                                        currentNoteViewModel.alarmManager.fetchAlarmById(tapInfo.alarmId) { alarm ->
-                                            alarmDialogAlarm = alarm
-                                            showAlarmDialog = true
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        textColor = if (isNoteDeleted) deletedNoteTextColor else Color.Black,
-                        directiveResults = directiveResults,
-                        directiveCallbacks = directiveCallbacks,
-                        buttonCallbacks = buttonCallbacks,
-                        showCompleted = showCompleted,
-                        symbolOverlaysProvider = { lineIndex ->
-                            val lineContent = editorState.lines.getOrNull(lineIndex)?.content ?: ""
-                            symbolOverlaysLookup(lineContent)
-                        },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
         }
-        } // CompositionLocalProvider
 
         fun guarded(action: () -> Unit) {
             coordinator.withFocusGuard { action() }
@@ -820,8 +539,8 @@ fun CurrentNoteScreen(
                 guarded {
                     if (activeController.moveUp()) {
                         if (!inlineEditState.isActive) {
-                            updateContent(editorState.text)
-                            isSaved = false
+                            editorContent.updateContent(editorState.text)
+                            editorContent.markUnsaved()
                         }
                     }
                 }
@@ -830,8 +549,8 @@ fun CurrentNoteScreen(
                 guarded {
                     if (activeController.moveDown()) {
                         if (!inlineEditState.isActive) {
-                            updateContent(editorState.text)
-                            isSaved = false
+                            editorContent.updateContent(editorState.text)
+                            editorContent.markUnsaved()
                         }
                     }
                 }
@@ -839,25 +558,19 @@ fun CurrentNoteScreen(
             moveUpState = activeController.getMoveUpState(),
             moveDownState = activeController.getMoveDownState(),
             onPaste = { clipText, html -> guarded { activeController.paste(clipText, html) } },
-            isPasteEnabled = (isMainContentFocused || inlineEditState.isActive) &&
+            isPasteEnabled = (editorContent.isMainContentFocused || inlineEditState.isActive) &&
                 !(inlineEditState.activeSession?.editorState?.hasSelection ?: editorState.hasSelection),
             onAddAlarm = {
                 val activeState = coordinator.activeState
                 activeController.commitUndoState(continueEditing = true)
-                val lineContent = activeState.currentLine?.text ?: ""
-                alarmDialogLineContent = TextLineUtils.trimLineForAlarm(lineContent)
-                alarmDialogLineIndex = activeState.focusedLineIndex
-                alarmDialogInlineSession = coordinator.activeSession
-                alarmDialogInlineSessionNoteId = coordinator.activeSession?.noteId
-                alarmDialogAlarm = null
-                alarmDialogAlarmIdToRestore = null
-                alarmDialogRecurringAlarmIdToRestore = null
-                alarmDialogInitialMode = AlarmDialogMode.INSTANCE
-                tappedDirectiveText = null
-                showAlarmDialog = true
+                alarmDialog.openForNewAlarm(
+                    lineContent = TextLineUtils.trimLineForAlarm(activeState.currentLine?.text ?: ""),
+                    lineIndex = activeState.focusedLineIndex,
+                    inlineSession = coordinator.activeSession,
+                )
             },
-            isAlarmEnabled = (isMainContentFocused || inlineEditState.isActive) &&
-                !coordinator.activeState.hasSelection
+            isAlarmEnabled = (editorContent.isMainContentFocused || inlineEditState.isActive) &&
+                !coordinator.activeState.hasSelection,
         )
 
         if (agentCommandEnabled) {
@@ -868,12 +581,55 @@ fun CurrentNoteScreen(
                 onAgentCommandChange = { agentCommand = it },
                 isProcessing = isAgentProcessing,
                 onSendCommand = {
-                    currentNoteViewModel.processAgentCommand(userContent, agentCommand)
+                    currentNoteViewModel.processAgentCommand(editorContent.userContent, agentCommand)
                     agentCommand = ""
                 },
-                mainContentFocusRequester = mainContentFocusRequester,
-                enabled = isOnline
+                mainContentFocusRequester = editorContent.mainContentFocusRequester,
+                enabled = isOnline,
             )
+        }
+    }
+}
+
+/**
+ * Splits cleanly between recurring and single-instance directives based on the
+ * IDs in [tapInfo]. The async fetch arms `alarmDialog.alarm` and flips
+ * `showDialog` only after the alarm record returns, so a missing alarm doesn't
+ * leave the dialog open with no contents.
+ */
+private fun openAlarmDialogForTappedSymbol(
+    tapInfo: SymbolTapInfo,
+    editorState: EditorState,
+    alarmDialog: AlarmDialogState,
+    alarmManager: NoteAlarmManager,
+) {
+    val lineContent = TextLineUtils.trimLineForAlarm(
+        editorState.lines.getOrNull(tapInfo.lineIndex)?.text ?: ""
+    )
+    when {
+        tapInfo.recurringAlarmId != null -> {
+            alarmDialog.beginOpenForTappedRecurring(
+                lineContent = lineContent,
+                lineIndex = tapInfo.lineIndex,
+                recurringId = tapInfo.recurringAlarmId,
+                directiveText = AlarmSymbolUtils.recurringAlarmDirective(tapInfo.recurringAlarmId),
+            )
+            alarmManager.fetchRecurringAlarmInstance(tapInfo.recurringAlarmId) { alarm ->
+                alarmDialog.alarm = alarm
+                alarmDialog.showDialog = true
+            }
+        }
+        tapInfo.alarmId != null -> {
+            alarmDialog.beginOpenForTappedAlarm(
+                lineContent = lineContent,
+                lineIndex = tapInfo.lineIndex,
+                alarmId = tapInfo.alarmId,
+                directiveText = AlarmSymbolUtils.alarmDirective(tapInfo.alarmId),
+            )
+            alarmManager.fetchAlarmById(tapInfo.alarmId) { alarm ->
+                alarmDialog.alarm = alarm
+                alarmDialog.showDialog = true
+            }
         }
     }
 }
@@ -1029,15 +785,11 @@ private fun DataLoadingEffects(
                 // Without this line, editorState is empty when baseline is captured,
                 // which means undo can restore to empty state and LOSE USER DATA.
                 //
-                // Always go through initFromNoteLines — never updateFromText. The latter
-                // is lossy and can wipe noteIds when previousLines is empty/stale, which
-                // is the root of the content-drop bug. LoadStatus.Success now always
-                // carries the structured NoteLine list directly.
-                val noteLines = loadStatus.lines.map { nl ->
-                    nl.content to (nl.noteId?.let { listOf(it) } ?: emptyList())
-                }
                 // Preserve cursor on external reloads (editor already has content)
-                editorState.initFromNoteLines(noteLines, preserveCursor = editorState.lines.isNotEmpty())
+                editorState.initFromNoteLines(
+                    loadStatus.lines,
+                    preserveCursor = editorState.lines.isNotEmpty(),
+                )
             }
 
             // Always set up undo state (needed even for cached content on initial load)
@@ -1229,12 +981,12 @@ private fun NoteStatusBar(
     onDeleteNote: () -> Unit,
     showOfflineIcon: Boolean,
 ) {
-    val activeContextId = coordinator.activeSession?.let { "inline:${it.noteId}" } ?: "main"
+    val activeContextId = coordinator.activeSession?.let { inlineContextId(it.noteId) } ?: MAIN_CONTEXT_ID
     val activateEditorByContextId: (String) -> Unit = { contextId ->
-        if (contextId == "main") {
+        if (contextId == MAIN_CONTEXT_ID) {
             coordinator.activate(EditorId.Parent)
         } else {
-            coordinator.activate(EditorId.View(contextId.removePrefix("inline:")))
+            coordinator.activate(EditorId.View(noteIdFromInlineContextId(contextId)))
         }
     }
 

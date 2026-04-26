@@ -966,9 +966,7 @@ private fun EditableViewNoteSection(
         // touch the lossy updateFromText path.
         val s = EditorState()
         val storeLines = NoteStore.getNoteLinesByIdOrSynthesize(note.id, editContent)
-        s.initFromNoteLines(
-            storeLines.map { nl -> nl.content to (nl.noteId?.let { listOf(it) } ?: emptyList()) }
-        )
+        s.initFromNoteLines(storeLines, preserveCursor = false)
         InlineEditSession(
             noteId = note.id,
             originalContent = editContent,
@@ -982,10 +980,7 @@ private fun EditableViewNoteSection(
     if (editContent != session.originalContent && !session.isDirty) {
         val storeLines = NoteStore.getNoteLinesById(note.id)
         if (storeLines != null) {
-            session.editorState.initFromNoteLines(
-                storeLines.map { nl -> nl.content to (nl.noteId?.let { listOf(it) } ?: emptyList()) },
-                preserveCursor = true,
-            )
+            session.editorState.initFromNoteLines(storeLines, preserveCursor = true)
             session.syncOriginalContent(editContent)
             session.editorState.requestFocusUpdate()
         } else {
