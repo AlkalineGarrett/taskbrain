@@ -1,6 +1,7 @@
 export { TokenType, type Token } from './Token'
 export { Lexer, LexerException } from './Lexer'
-export { Parser, ParseException } from './Parser'
+export { Parser } from './Parser'
+export { ParseException } from './ParseException'
 export type {
   Expression,
   Directive,

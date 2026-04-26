@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { Lexer } from '../../../dsl/language/Lexer'
-import { Parser, ParseException } from '../../../dsl/language/Parser'
+import { Parser } from '../../../dsl/language/Parser'
+import { ParseException } from '../../../dsl/language/ParseException'
 import type { Directive } from '../../../dsl/language/Expression'
 import type { Expression } from '../../../dsl/language/Expression'
 

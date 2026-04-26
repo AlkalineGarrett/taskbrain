@@ -33,11 +33,18 @@ Master list of code-quality issues identified in the codebase audit (2026-04-26)
 
 ## Lower severity
 
-- [ ] **8. `EditorState` (Android 850 / web 523 lines) — 40+ mutator helpers; invariants hard to track.**
-  Push toward immutable `LineOperation` results; make `EditorState` more of a query object.
+- [~] **8. `EditorState` (Android 850 / web 523 lines) — 40+ mutator helpers; invariants hard to track.** _(cancelled 2026-04-26)_
+  Audit found the proposed direction ("push toward immutable `LineOperation` results; make `EditorState` more of a query object") is incompatible with the documented stable-reference invariant in CLAUDE.md. The React side relies on `editorState.lines` being a stable reference and `LineState` mutating in place; wrapping mutations in returned operations would either be boilerplate-without-behavior-benefit, or require rebuilding `lines` on every edit (which would defeat the invariant). The mutators are already orchestrated coherently through `EditorController` with proper undo boundaries. No concrete pain is driving this; deferred indefinitely.
 
-- [ ] **9. `Parser.kt` (718) / `Parser.ts` (511) — monolithic with 20+ private helpers, no phase separation.**
-  Split into `TokenStream` → `ExpressionParser` → `StatementParser`.
+- [x] **9. `Parser.kt` (718) / `Parser.ts` (511) — monolithic with 20+ private helpers, no phase separation.** _(done; main Parser body Android 718 → 385, web 511 → 377)_
+  Split into three sibling files per platform: `TokenStream` (cursor mgmt), `PatternParser` (pattern grammar), and `ParseException` (extracted from Parser). `Parser` retains directive/statement/expression/primary plus the special-form helpers and now holds a `TokenStream` and a `PatternParser`.
+  - Android: `dsl/language/{TokenStream.kt 56, PatternParser.kt 136, ParseException.kt 9}` (Parser.kt 385).
+  - Web: `dsl/language/{TokenStream.ts 66, PatternParser.ts 116, ParseException.ts 8}` (Parser.ts 377).
+  - Diverged from the original "TokenStream → ExpressionParser → StatementParser" sketch: statement and expression parsing recurse through each other (statements parse expressions; deferred-block expressions like `[stmt; stmt]` parse statements), so a hard class boundary between them would have created circular references with no clarity gain. Pattern grammar is genuinely self-contained and split cleanly.
+  - TokenStream API is `match/check/checkNext/advance/peek/previous/consume/isAtEnd` plus a single `peekAt(offset)` lookahead helper (replaces a leakier `cursor`/`tokenAt`/`length` trio surfaced during the simplify pass). `MULTI_ARG_LAMBDA_MAX_LOOKAHEAD = 20` is now a named constant on each platform.
+  - Web `Parser` no longer re-exports `ParseException`; web `index.ts` and `Parser.test.ts` import `ParseException` from `./ParseException` directly. Android has no module-index file; importers reach `ParseException.kt` by package.
+  - Existing divergence preserved: web has `parseFlatArgCall` (for `string(...)`); Android does not.
+  - All Android tests pass; all 1596 web tests pass.
 
 - [x] **10. `DirectiveAwareLineInput.kt:145-166` — hardcoded `2.dp`, `16.dp`, `24.dp`, `32.dp`, stroke multipliers.** _(obsoleted by #3)_
   Item #3 split the file into 6 sibling files; the once-inline magic numbers now live as named `internal`/`private val` constants in `DirectiveStyles.kt` (`CursorWidth`, `ViewEditButtonSize`, `ViewEditIconSize`), `ButtonDirective.kt` (`ButtonMinHeight`, `ButtonCornerRadius`, `ButtonIconSize`), and `DirectiveOverlayText.kt` (`DirectiveBoxStyle.{strokeWidth, dashLength, gapLength, cornerRadius, padding}`, `EmptyDirectiveTapWidth`). Moving these to `Dimens.kt` (which scopes app-chrome dimensions like top-bar/status-bar) would lose the per-component grouping; remaining inline paddings (`4.dp`, `6.dp`, `8.dp`) are typical Compose layout values not worth abstracting.
