@@ -10,7 +10,6 @@ data class Note(
     val content: String = "",
     val createdAt: Timestamp? = null,
     val updatedAt: Timestamp? = null,
-    val lastAccessedAt: Timestamp? = null,
     val tags: List<String> = emptyList(),
     val containedNotes: List<String> = emptyList(),
     val state: String? = null,

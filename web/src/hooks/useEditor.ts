@@ -4,14 +4,19 @@ import { EditorController } from '@/editor/EditorController'
 import { UndoManager, type UndoManagerState } from '@/editor/UndoManager'
 import type { NoteLine } from '@/data/Note'
 import { NoteRepository } from '@/data/NoteRepository'
+import { NoteStatsRepository } from '@/data/NoteStatsRepository'
 import { noteStore } from '@/data/NoteStore'
 import { resolveNoteIds } from '@/editor/resolveNoteIds'
 import { db, auth } from '@/firebase/config'
 import { ERROR_LOAD, ERROR_SAVE, SAVE_ERROR_BANNER } from '@/strings'
 
 const PENDING_SAVE_ERROR_KEY = 'pendingSaveError'
+const VIEW_DWELL_MS = 1500
+const VIEW_COOLDOWN_MS = 5 * 60 * 1000
+const lastViewWriteMs = new Map<string, number>()
 
 const repo = new NoteRepository(db, auth)
+const statsRepo = new NoteStatsRepository(db, auth)
 
 /**
  * Editor-specific state cache for instant tab switching.
@@ -160,11 +165,27 @@ export function useEditor(noteId: string | undefined) {
     const cached = editorStateCache.get(noteId)
     editorStateCache.delete(noteId)
 
+    let recordViewTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleRecordView = () => {
+      const last = lastViewWriteMs.get(noteId)
+      if (last !== undefined && Date.now() - last < VIEW_COOLDOWN_MS) return
+      recordViewTimer = setTimeout(() => {
+        if (cancelled) return
+        statsRepo.recordView(noteId)
+          .then(() => { lastViewWriteMs.set(noteId, Date.now()) })
+          .catch((e) => { console.error('recordView failed', e) })
+      }, VIEW_DWELL_MS)
+    }
+    const cleanup = () => {
+      cancelled = true
+      if (recordViewTimer) clearTimeout(recordViewTimer)
+    }
+
     if (cached?.dirty) {
       // Restore unsaved edits immediately for instant display
       populateEditor(cached.trackedLines, true, true, cached.editorTexts)
       setShowLoading(false)
-      void repo.updateLastAccessed(noteId)
+      scheduleRecordView()
 
       // Refresh tracked line IDs from Firestore (the fire-and-forget save
       // may have created new child notes with IDs we don't have yet)
@@ -181,7 +202,7 @@ export function useEditor(noteId: string | undefined) {
         }
       }).catch(() => { /* editor state is still usable */ })
 
-      return () => { cancelled = true }
+      return cleanup
     }
 
     // Load from Firestore — canonical path for clean notes
@@ -197,8 +218,7 @@ export function useEditor(noteId: string | undefined) {
         populateEditor(lines, false, false)
         setShowLoading(false)
 
-        // Update last accessed
-        void repo.updateLastAccessed(noteId)
+        scheduleRecordView()
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : ERROR_LOAD)
@@ -209,7 +229,7 @@ export function useEditor(noteId: string | undefined) {
     }
 
     void loadNote()
-    return () => { cancelled = true }
+    return cleanup
   }, [noteId, editorState, controller, undoManager])
 
   // Detect external changes via NoteStore's changedNoteIds subscription.
@@ -245,7 +265,6 @@ export function useEditor(noteId: string | undefined) {
       setShowCompleted(storeNote.showCompleted ?? true)
       setDirty(false)
       setRenderVersion((v) => v + 1)
-      void repo.updateLastAccessed(noteId)
     })
   }, [noteId, editorState])
 

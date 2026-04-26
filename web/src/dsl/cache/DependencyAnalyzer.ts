@@ -9,7 +9,6 @@ export interface DirectiveAnalysis {
   dependsOnPath: boolean
   dependsOnModified: boolean
   dependsOnCreated: boolean
-  dependsOnViewed: boolean
   dependsOnNoteExistence: boolean
   dependsOnAllNames: boolean
   accessesFirstLine: boolean
@@ -22,7 +21,6 @@ export const EMPTY_ANALYSIS: DirectiveAnalysis = {
   dependsOnPath: false,
   dependsOnModified: false,
   dependsOnCreated: false,
-  dependsOnViewed: false,
   dependsOnNoteExistence: false,
   dependsOnAllNames: false,
   accessesFirstLine: false,
@@ -37,7 +35,6 @@ export function analysisToPartialDependencies(analysis: DirectiveAnalysis): Dire
     dependsOnPath: analysis.dependsOnPath,
     dependsOnModified: analysis.dependsOnModified,
     dependsOnCreated: analysis.dependsOnCreated,
-    dependsOnViewed: analysis.dependsOnViewed,
     dependsOnNoteExistence: analysis.dependsOnNoteExistence,
     dependsOnAllNames: analysis.dependsOnAllNames,
   }
@@ -49,7 +46,6 @@ interface AnalysisContext {
   dependsOnPath: boolean
   dependsOnModified: boolean
   dependsOnCreated: boolean
-  dependsOnViewed: boolean
   dependsOnNoteExistence: boolean
   dependsOnAllNames: boolean
   accessesFirstLine: boolean
@@ -63,7 +59,6 @@ function newContext(): AnalysisContext {
     dependsOnPath: false,
     dependsOnModified: false,
     dependsOnCreated: false,
-    dependsOnViewed: false,
     dependsOnNoteExistence: false,
     dependsOnAllNames: false,
     accessesFirstLine: false,
@@ -157,10 +152,6 @@ function analyzePropertyAccess(expr: Expression & { kind: 'PropertyAccess' }, ct
     case 'created':
       ctx.dependsOnCreated = true
       if (targetInfo.isHierarchy) ctx.hierarchyAccesses.push({ path: targetInfo.hierarchyPath!, field: NoteField.CREATED })
-      break
-    case 'viewed':
-      ctx.dependsOnViewed = true
-      if (targetInfo.isHierarchy) ctx.hierarchyAccesses.push({ path: targetInfo.hierarchyPath!, field: NoteField.VIEWED })
       break
     case 'name':
       ctx.accessesFirstLine = true

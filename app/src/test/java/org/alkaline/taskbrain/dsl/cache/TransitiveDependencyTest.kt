@@ -385,7 +385,6 @@ class TransitiveDependencyTest {
         assertNotNull(hashes.modifiedHash)
         assertNotNull(hashes.existenceHash)
         assertNull(hashes.createdHash)
-        assertNull(hashes.viewedHash)
     }
 
     @Test

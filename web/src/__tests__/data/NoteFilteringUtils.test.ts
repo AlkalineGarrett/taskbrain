@@ -13,7 +13,6 @@ function note(overrides: Partial<Note> & { id: string }): Note {
     content: '',
     createdAt: null,
     updatedAt: null,
-    lastAccessedAt: null,
     tags: [],
     containedNotes: [],
     state: null,

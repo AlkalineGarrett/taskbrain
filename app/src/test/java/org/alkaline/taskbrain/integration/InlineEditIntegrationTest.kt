@@ -209,7 +209,6 @@ Poofgttt,,, and!! Works? Editing a line
             ))
         }
         coEvery { mockRepository.isNoteDeleted(any()) } returns Result.success(false)
-        coEvery { mockRepository.updateLastAccessed(any()) } returns Result.success(Unit)
 
         // Create ViewModel with mocked dependencies
         viewModel = CurrentNoteViewModel(

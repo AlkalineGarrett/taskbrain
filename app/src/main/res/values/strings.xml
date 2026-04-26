@@ -8,6 +8,11 @@
 
     <string name="action_add_note">Add note</string>
 
+    <!-- Note list sort modes -->
+    <string name="sort_recent">Recent</string>
+    <string name="sort_frequent">Frequent</string>
+    <string name="sort_consistent">Consistent</string>
+
     <!-- Google Sign In Strings -->
     <string name="signed_out">Signed Out</string>
     <string name="sign_in_google">Sign in with Google</string>

@@ -52,11 +52,6 @@ describe('DependencyAnalyzer', () => {
       expect(result.dependsOnCreated).toBe(true)
     })
 
-    it('detects viewed dependency', () => {
-      const result = analyze(prop(selfRef(), 'viewed'))
-      expect(result.dependsOnViewed).toBe(true)
-    })
-
     it('detects name access (first line)', () => {
       const result = analyze(prop(selfRef(), 'name'))
       expect(result.accessesFirstLine).toBe(true)
@@ -192,9 +187,9 @@ describe('DependencyAnalyzer', () => {
 
   describe('lambda analysis', () => {
     it('analyzes lambda body for dependencies', () => {
-      const expr = lambda(['x'], prop(selfRef(), 'viewed'))
+      const expr = lambda(['x'], prop(selfRef(), 'modified'))
       const result = analyze(expr)
-      expect(result.dependsOnViewed).toBe(true)
+      expect(result.dependsOnModified).toBe(true)
     })
   })
 })

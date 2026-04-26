@@ -836,15 +836,6 @@ class NoteRepository(
         }
     }.onFailure { Log.e(TAG, "Error updating showCompleted", it) }
 
-    suspend fun updateLastAccessed(noteId: String): Result<Unit> = runCatching {
-        withContext(Dispatchers.IO) {
-            requireUserId()
-            noteRef(noteId).update("lastAccessedAt", FieldValue.serverTimestamp()).await()
-            Log.d(TAG, "Updated lastAccessedAt for note: $noteId")
-            Unit
-        }
-    }.onFailure { Log.e(TAG, "Error updating lastAccessedAt", it) }
-
     /**
      * Builds tracked lines from existing lines + new content via the shared
      * [reconcileLineNoteIds] / [enforceParentNoteId] helpers.

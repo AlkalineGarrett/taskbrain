@@ -11,9 +11,8 @@ class NoteSearchUtilsTest {
         id: String,
         content: String = "",
         state: String? = null,
-        lastAccessedAt: Timestamp? = null,
         updatedAt: Timestamp? = Timestamp(Date()),
-    ) = Note(id = id, content = content, state = state, lastAccessedAt = lastAccessedAt, updatedAt = updatedAt)
+    ) = Note(id = id, content = content, state = state, updatedAt = updatedAt)
 
     // ── searchNotes: basic matching ──
 
@@ -105,11 +104,11 @@ class NoteSearchUtilsTest {
     // ── searchNotes: ordering ──
 
     @Test
-    fun `active results sorted by lastAccessedAt descending`() {
+    fun `active results sorted by updatedAt descending`() {
         val now = Date()
         val notes = listOf(
-            note("old", content = "Find", lastAccessedAt = Timestamp(Date(now.time - 10000))),
-            note("new", content = "Find", lastAccessedAt = Timestamp(now)),
+            note("old", content = "Find", updatedAt = Timestamp(Date(now.time - 10000))),
+            note("new", content = "Find", updatedAt = Timestamp(now)),
         )
         val (active, _) = NoteSearchUtils.searchNotes(notes, "Find", true, false)
         assertEquals(listOf("new", "old"), active.map { it.note.id })

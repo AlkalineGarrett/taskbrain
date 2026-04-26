@@ -581,14 +581,6 @@ export class NoteRepository {
     })
   }
 
-  async updateLastAccessed(noteId: string): Promise<void> {
-    return this.logged('updateLastAccessed', async () => {
-      this.requireUserId()
-      await updateDoc(this.noteRef(noteId), {
-        lastAccessedAt: serverTimestamp(),
-      })
-    })
-  }
 }
 
 

@@ -61,7 +61,6 @@ class NotePropertiesTest {
         content = "My Note Title\nSecond line\nThird line",
         createdAt = Timestamp(Date(1737820800000)), // 2026-01-25T12:00:00Z
         updatedAt = Timestamp(Date(1737907200000)), // 2026-01-26T12:00:00Z
-        lastAccessedAt = Timestamp(Date(1737993600000)) // 2026-01-27T12:00:00Z
     )
 
     private val noteWithoutDates = Note(
@@ -257,16 +256,6 @@ class NotePropertiesTest {
     }
 
     @Test
-    fun `dot viewed returns last accessed datetime`() {
-        val result = execute("[.viewed]", currentNote = testNote)
-
-        assertTrue(result is DateTimeVal)
-        val expectedDateTime = testNote.lastAccessedAt!!.toDate().toInstant()
-            .atZone(ZoneId.systemDefault()).toLocalDateTime()
-        assertEquals(expectedDateTime, (result as DateTimeVal).value)
-    }
-
-    @Test
     fun `dot created throws when no created date`() {
         val exception = assertThrows(ExecutionException::class.java) {
             execute("[.created]", currentNote = noteWithoutDates)
@@ -280,14 +269,6 @@ class NotePropertiesTest {
             execute("[.modified]", currentNote = noteWithoutDates)
         }
         assertTrue(exception.message!!.contains("no modified date"))
-    }
-
-    @Test
-    fun `dot viewed throws when no viewed date`() {
-        val exception = assertThrows(ExecutionException::class.java) {
-            execute("[.viewed]", currentNote = noteWithoutDates)
-        }
-        assertTrue(exception.message!!.contains("no viewed date"))
     }
 
     // endregion

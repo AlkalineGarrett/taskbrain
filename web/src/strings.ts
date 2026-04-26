@@ -39,6 +39,11 @@ export const REFRESH = 'Refresh'
 
 // Note list (Android: action_add_note, action_delete_note, action_restore_note, etc.)
 export const ADD_NOTE = 'Add note'
+
+// Note list sort modes (Android: sort_recent, sort_frequent, sort_consistent)
+export const SORT_RECENT = 'Recent'
+export const SORT_FREQUENT = 'Frequent'
+export const SORT_CONSISTENT = 'Consistent'
 export const DELETE_NOTE = 'Delete note'
 export const RESTORE_NOTE = 'Restore note'
 export const SHOW_DELETED = 'Show deleted'

@@ -41,9 +41,6 @@ export function isStale(
   if (deps.dependsOnCreated) {
     if (cachedHashes.createdHash !== MetadataHasher.computeCreatedHash(currentNotes)) return true
   }
-  if (deps.dependsOnViewed) {
-    if (cachedHashes.viewedHash !== MetadataHasher.computeViewedHash(currentNotes)) return true
-  }
   if (deps.dependsOnAllNames) {
     if (cachedHashes.allNamesHash !== MetadataHasher.computeAllNamesHash(currentNotes)) return true
   }

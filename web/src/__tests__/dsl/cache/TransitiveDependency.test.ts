@@ -61,7 +61,6 @@ describe('TransitiveDependency', () => {
       const b: DirectiveDependencies = {
         ...EMPTY_DEPENDENCIES,
         dependsOnModified: true,
-        dependsOnViewed: true,
         dependsOnAllNames: true,
         nonFirstLineNotes: new Set(['n2']),
       }
@@ -70,7 +69,6 @@ describe('TransitiveDependency', () => {
       expect(result.dependsOnPath).toBe(true)
       expect(result.dependsOnModified).toBe(true)
       expect(result.dependsOnCreated).toBe(true)
-      expect(result.dependsOnViewed).toBe(true)
       expect(result.dependsOnNoteExistence).toBe(true)
       expect(result.dependsOnAllNames).toBe(true)
       expect(result.firstLineNotes).toEqual(new Set(['n1']))

@@ -93,13 +93,6 @@ object StalenessChecker {
             }
         }
 
-        if (deps.dependsOnViewed) {
-            val currentHash = MetadataHasher.computeViewedHash(currentNotes)
-            if (cachedHashes.viewedHash != currentHash) {
-                return true
-            }
-        }
-
         if (deps.dependsOnAllNames) {
             val currentHash = MetadataHasher.computeAllNamesHash(currentNotes)
             if (cachedHashes.allNamesHash != currentHash) {

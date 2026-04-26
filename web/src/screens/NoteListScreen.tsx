@@ -13,7 +13,9 @@ import {
   SEARCH, SEARCH_HINT, SEARCH_FILTER_NAME, SEARCH_FILTER_CONTENT,
   SEARCH_GO, SEARCH_NO_RESULTS, SEARCH_HISTORY_BUTTON,
   CLEAR_DELETED, CLEAR_DELETED_CONFIRM_TITLE, CLEAR_DELETED_CONFIRM_MESSAGE, clearedDeletedCount,
+  SORT_RECENT, SORT_FREQUENT, SORT_CONSISTENT,
 } from '@/strings'
+import type { NoteSortMode } from '@/data/NoteFilteringUtils'
 import styles from './NoteListScreen.module.css'
 
 export function NoteListScreen() {
@@ -22,8 +24,11 @@ export function NoteListScreen() {
   const {
     activeNotes,
     deletedNotes,
+    stats,
     loading,
     error,
+    sortMode,
+    setSortMode,
     createNote,
     deleteNote,
     undeleteNote,
@@ -85,6 +90,10 @@ export function NoteListScreen() {
         </div>
       </div>
 
+      {!searchState.isSearchOpen && (
+        <SortModeRow selected={sortMode} onSelect={setSortMode} />
+      )}
+
       {searchState.isSearchOpen && (
         <SearchPanel
           query={searchState.query}
@@ -128,7 +137,7 @@ export function NoteListScreen() {
                       {note.content || EMPTY_NOTE}
                     </span>
                     <span className={styles.noteDate}>
-                      {formatDate(note.lastAccessedAt ?? note.updatedAt)}
+                      {formatDate(stats.get(note.id)?.lastAccessedAt ?? note.updatedAt)}
                     </span>
                   </button>
                   <NoteItemMenu
@@ -193,6 +202,33 @@ export function NoteListScreen() {
         onConfirm={() => void handleClearDeleted()}
         onCancel={() => setClearConfirmOpen(false)}
       />
+    </div>
+  )
+}
+
+function SortModeRow({
+  selected,
+  onSelect,
+}: {
+  selected: NoteSortMode
+  onSelect: (mode: NoteSortMode) => void
+}) {
+  const modes: { mode: NoteSortMode; label: string }[] = [
+    { mode: 'recent', label: SORT_RECENT },
+    { mode: 'frequent', label: SORT_FREQUENT },
+    { mode: 'consistent', label: SORT_CONSISTENT },
+  ]
+  return (
+    <div className={styles.sortRow}>
+      {modes.map(({ mode, label }) => (
+        <button
+          key={mode}
+          className={`${styles.sortButton} ${selected === mode ? styles.sortButtonActive : ''}`}
+          onClick={() => onSelect(mode)}
+        >
+          {label}
+        </button>
+      ))}
     </div>
   )
 }
@@ -397,7 +433,7 @@ function SearchResultItem({
             />
           </span>
           <span className={styles.noteDate}>
-            {formatDate(result.note.lastAccessedAt ?? result.note.updatedAt)}
+            {formatDate(result.note.updatedAt)}
           </span>
         </button>
         {result.contentSnippets.map((snippet, i) => (

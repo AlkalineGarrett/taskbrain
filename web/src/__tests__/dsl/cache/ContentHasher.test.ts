@@ -12,7 +12,6 @@ function makeNote(overrides: Partial<Note> = {}): Note {
     content: 'First line\nSecond line\nThird line',
     createdAt: Timestamp.fromMillis(1000000),
     updatedAt: Timestamp.fromMillis(2000000),
-    lastAccessedAt: Timestamp.fromMillis(3000000),
     tags: [],
     containedNotes: [],
     state: null,
@@ -113,18 +112,11 @@ describe('ContentHasher', () => {
       expect(hash).toMatch(/^[0-9a-f]{8}$/)
     })
 
-    it('hashes VIEWED field', () => {
-      const note = makeNote({ lastAccessedAt: Timestamp.fromMillis(9000000) })
-      const hash = hashField(note, NoteField.VIEWED)
-      expect(hash).toMatch(/^[0-9a-f]{8}$/)
-    })
-
     it('handles null timestamps', () => {
-      const note = makeNote({ updatedAt: null, createdAt: null, lastAccessedAt: null })
+      const note = makeNote({ updatedAt: null, createdAt: null })
       // Should not throw
       expect(hashField(note, NoteField.MODIFIED)).toMatch(/^[0-9a-f]{8}$/)
       expect(hashField(note, NoteField.CREATED)).toMatch(/^[0-9a-f]{8}$/)
-      expect(hashField(note, NoteField.VIEWED)).toMatch(/^[0-9a-f]{8}$/)
     })
   })
 

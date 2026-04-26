@@ -58,7 +58,7 @@ object NoteSearchUtils {
         }
 
         return Pair(
-            NoteFilteringUtils.sortByLastAccessedAtDescending(activeResults.map { it.note })
+            NoteFilteringUtils.sortByUpdatedAtDescending(activeResults.map { it.note })
                 .map { sorted -> activeResults.first { it.note.id == sorted.id } },
             NoteFilteringUtils.sortByUpdatedAtDescending(deletedResults.map { it.note })
                 .map { sorted -> deletedResults.first { it.note.id == sorted.id } },

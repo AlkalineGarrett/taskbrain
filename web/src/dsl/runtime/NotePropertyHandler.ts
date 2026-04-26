@@ -22,10 +22,6 @@ export function getProperty(nv: NoteVal, property: string, env: Environment): Ds
       if (!note.updatedAt) throw new ExecutionException('Note has no modified date')
       return dateTimeVal(note.updatedAt.toDate().toISOString().slice(0, 19))
     }
-    case 'viewed': {
-      if (!note.lastAccessedAt) throw new ExecutionException('Note has no viewed date')
-      return dateTimeVal(note.lastAccessedAt.toDate().toISOString().slice(0, 19))
-    }
     case 'up': return getUp(note, 1, env)
     case 'root': return getRoot(nv, env)
     default: throw new ExecutionException(`Unknown property '${property}' on note`)
@@ -57,7 +53,6 @@ export async function setProperty(nv: NoteVal, property: string, value: DslValue
     case 'id':
     case 'created':
     case 'modified':
-    case 'viewed':
       throw new ExecutionException(`Cannot set read-only property '${property}' on note`)
     default:
       throw new ExecutionException(`Unknown property '${property}' on note`)

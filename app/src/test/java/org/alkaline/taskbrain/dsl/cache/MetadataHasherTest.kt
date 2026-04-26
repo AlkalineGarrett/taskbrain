@@ -131,7 +131,6 @@ class MetadataHasherTest {
         assertNotNull(hashesPathOnly.pathHash)
         assertNull(hashesPathOnly.modifiedHash)
         assertNull(hashesPathOnly.createdHash)
-        assertNull(hashesPathOnly.viewedHash)
         assertNull(hashesPathOnly.existenceHash)
     }
 
@@ -160,7 +159,6 @@ class MetadataHasherTest {
         assertNull(hashes.pathHash)
         assertNull(hashes.modifiedHash)
         assertNull(hashes.createdHash)
-        assertNull(hashes.viewedHash)
         assertNull(hashes.existenceHash)
     }
 

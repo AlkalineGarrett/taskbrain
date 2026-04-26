@@ -32,7 +32,6 @@ function makeNote(overrides: Partial<Note> & { id: string }): Note {
     content: overrides.content ?? '',
     createdAt: overrides.createdAt ?? null,
     updatedAt: overrides.updatedAt ?? null,
-    lastAccessedAt: overrides.lastAccessedAt ?? null,
     tags: [],
     containedNotes: [],
     state: null,

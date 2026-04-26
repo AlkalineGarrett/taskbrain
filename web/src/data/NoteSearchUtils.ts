@@ -1,6 +1,5 @@
 import type { Note } from './Note'
 import {
-  sortByLastAccessedAtDescending,
   sortByUpdatedAtDescending,
 } from './NoteFilteringUtils'
 
@@ -60,7 +59,7 @@ export function searchNotes(
     }
   }
 
-  const sortedActive = sortByLastAccessedAtDescending(activeResults.map((r) => r.note))
+  const sortedActive = sortByUpdatedAtDescending(activeResults.map((r) => r.note))
   const sortedDeleted = sortByUpdatedAtDescending(deletedResults.map((r) => r.note))
 
   return {

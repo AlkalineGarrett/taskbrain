@@ -36,7 +36,6 @@ data class NoteVal(val note: Note) : DslValue() {
         "content" to note.content,
         "createdAt" to note.createdAt?.toDate()?.time,
         "updatedAt" to note.updatedAt?.toDate()?.time,
-        "lastAccessedAt" to note.lastAccessedAt?.toDate()?.time
     )
 
     /**
@@ -71,7 +70,6 @@ data class NoteVal(val note: Note) : DslValue() {
         fun deserialize(map: Map<String, Any?>): NoteVal {
             val createdAtMillis = map["createdAt"] as? Long
             val updatedAtMillis = map["updatedAt"] as? Long
-            val lastAccessedAtMillis = map["lastAccessedAt"] as? Long
 
             val note = Note(
                 id = map["id"] as? String ?: "",
@@ -80,7 +78,6 @@ data class NoteVal(val note: Note) : DslValue() {
                 content = map["content"] as? String ?: "",
                 createdAt = createdAtMillis?.let { Timestamp(java.util.Date(it)) },
                 updatedAt = updatedAtMillis?.let { Timestamp(java.util.Date(it)) },
-                lastAccessedAt = lastAccessedAtMillis?.let { Timestamp(java.util.Date(it)) }
             )
             return NoteVal(note)
         }

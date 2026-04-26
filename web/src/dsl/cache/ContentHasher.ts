@@ -50,9 +50,6 @@ export function hashField(note: Note, field: NoteField): string {
     case NoteField.CREATED:
       value = note.createdAt?.toDate()?.getTime()?.toString() ?? ''
       break
-    case NoteField.VIEWED:
-      value = note.lastAccessedAt?.toDate()?.getTime()?.toString() ?? ''
-      break
   }
   return simpleHash(value)
 }

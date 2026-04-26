@@ -13,8 +13,6 @@ export interface DirectiveDependencies {
   dependsOnModified: boolean
   /** Depends on created timestamps */
   dependsOnCreated: boolean
-  /** Depends on viewed/accessed timestamps */
-  dependsOnViewed: boolean
   /** Depends on note existence (find() was used) */
   dependsOnNoteExistence: boolean
   /** Depends on all note names/first lines */
@@ -30,7 +28,6 @@ export const EMPTY_DEPENDENCIES: DirectiveDependencies = {
   dependsOnPath: false,
   dependsOnModified: false,
   dependsOnCreated: false,
-  dependsOnViewed: false,
   dependsOnNoteExistence: false,
   dependsOnAllNames: false,
   hierarchyDeps: [],
@@ -43,7 +40,6 @@ export function mergeDependencies(a: DirectiveDependencies, b: DirectiveDependen
     dependsOnPath: a.dependsOnPath || b.dependsOnPath,
     dependsOnModified: a.dependsOnModified || b.dependsOnModified,
     dependsOnCreated: a.dependsOnCreated || b.dependsOnCreated,
-    dependsOnViewed: a.dependsOnViewed || b.dependsOnViewed,
     dependsOnNoteExistence: a.dependsOnNoteExistence || b.dependsOnNoteExistence,
     dependsOnAllNames: a.dependsOnAllNames || b.dependsOnAllNames,
     hierarchyDeps: [...a.hierarchyDeps, ...b.hierarchyDeps],
@@ -57,7 +53,6 @@ export function isDependenciesEmpty(deps: DirectiveDependencies): boolean {
     !deps.dependsOnPath &&
     !deps.dependsOnModified &&
     !deps.dependsOnCreated &&
-    !deps.dependsOnViewed &&
     !deps.dependsOnNoteExistence &&
     !deps.dependsOnAllNames &&
     deps.hierarchyDeps.length === 0
@@ -76,7 +71,6 @@ export enum NoteField {
   PATH = 'PATH',
   MODIFIED = 'MODIFIED',
   CREATED = 'CREATED',
-  VIEWED = 'VIEWED',
 }
 
 export interface HierarchyDependency {

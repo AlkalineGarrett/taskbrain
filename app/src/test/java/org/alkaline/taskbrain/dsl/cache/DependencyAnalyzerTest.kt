@@ -59,16 +59,6 @@ class DependencyAnalyzerTest {
 
     // endregion
 
-    // region Field access detection - viewed
-
-    @Test
-    fun `detects viewed dependency from property access`() {
-        val analysis = analyze("[.viewed]")
-        assertTrue(analysis.dependsOnViewed)
-    }
-
-    // endregion
-
     // region Content access detection - name
 
     @Test
@@ -291,7 +281,6 @@ class DependencyAnalyzerTest {
         assertFalse(empty.dependsOnPath)
         assertFalse(empty.dependsOnModified)
         assertFalse(empty.dependsOnCreated)
-        assertFalse(empty.dependsOnViewed)
         assertFalse(empty.dependsOnNoteExistence)
         assertFalse(empty.accessesFirstLine)
         assertFalse(empty.accessesNonFirstLine)

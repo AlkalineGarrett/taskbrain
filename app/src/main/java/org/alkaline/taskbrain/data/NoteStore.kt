@@ -474,7 +474,6 @@ object NoteStore {
                 content = data["content"] as? String ?: "",
                 createdAt = data["createdAt"] as? com.google.firebase.Timestamp,
                 updatedAt = data["updatedAt"] as? com.google.firebase.Timestamp,
-                lastAccessedAt = data["lastAccessedAt"] as? com.google.firebase.Timestamp,
                 tags = data["tags"] as? List<String> ?: emptyList(),
                 containedNotes = data["containedNotes"] as? List<String> ?: emptyList(),
                 state = data["state"] as? String,

@@ -48,7 +48,6 @@ object DependencyAnalyzer {
         var dependsOnPath: Boolean = false
         var dependsOnModified: Boolean = false
         var dependsOnCreated: Boolean = false
-        var dependsOnViewed: Boolean = false
         var dependsOnNoteExistence: Boolean = false
         var dependsOnAllNames: Boolean = false
         var accessesFirstLine: Boolean = false
@@ -61,7 +60,6 @@ object DependencyAnalyzer {
                 dependsOnPath = dependsOnPath,
                 dependsOnModified = dependsOnModified,
                 dependsOnCreated = dependsOnCreated,
-                dependsOnViewed = dependsOnViewed,
                 dependsOnNoteExistence = dependsOnNoteExistence,
                 dependsOnAllNames = dependsOnAllNames,
                 accessesFirstLine = accessesFirstLine,
@@ -161,14 +159,6 @@ object DependencyAnalyzer {
                 if (targetInfo.isHierarchy) {
                     ctx.hierarchyAccesses.add(
                         HierarchyAccessPattern(targetInfo.hierarchyPath!!, NoteField.CREATED)
-                    )
-                }
-            }
-            "viewed" -> {
-                ctx.dependsOnViewed = true
-                if (targetInfo.isHierarchy) {
-                    ctx.hierarchyAccesses.add(
-                        HierarchyAccessPattern(targetInfo.hierarchyPath!!, NoteField.VIEWED)
                     )
                 }
             }
@@ -425,9 +415,6 @@ data class DirectiveAnalysis(
     /** Depends on created timestamps */
     val dependsOnCreated: Boolean,
 
-    /** Depends on viewed timestamps */
-    val dependsOnViewed: Boolean,
-
     /** Whether find() is used (implies note existence dependency) */
     val dependsOnNoteExistence: Boolean,
 
@@ -456,7 +443,6 @@ data class DirectiveAnalysis(
         dependsOnPath = dependsOnPath,
         dependsOnModified = dependsOnModified,
         dependsOnCreated = dependsOnCreated,
-        dependsOnViewed = dependsOnViewed,
         dependsOnNoteExistence = dependsOnNoteExistence,
         dependsOnAllNames = dependsOnAllNames,
         hierarchyDeps = emptyList()       // Filled at runtime with resolved IDs
@@ -468,7 +454,6 @@ data class DirectiveAnalysis(
             dependsOnPath = false,
             dependsOnModified = false,
             dependsOnCreated = false,
-            dependsOnViewed = false,
             dependsOnNoteExistence = false,
             dependsOnAllNames = false,
             accessesFirstLine = false,

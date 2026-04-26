@@ -47,7 +47,6 @@ data class ViewVal(
                 "content" to note.content,
                 "createdAt" to note.createdAt?.toDate()?.time,
                 "updatedAt" to note.updatedAt?.toDate()?.time,
-                "lastAccessedAt" to note.lastAccessedAt?.toDate()?.time
             )
         },
         "renderedContents" to renderedContents
@@ -72,7 +71,6 @@ data class ViewVal(
             val notes = notesData.map { noteMap ->
                 val createdAtMillis = noteMap["createdAt"] as? Long
                 val updatedAtMillis = noteMap["updatedAt"] as? Long
-                val lastAccessedAtMillis = noteMap["lastAccessedAt"] as? Long
 
                 Note(
                     id = noteMap["id"] as? String ?: "",
@@ -81,7 +79,6 @@ data class ViewVal(
                     content = noteMap["content"] as? String ?: "",
                     createdAt = createdAtMillis?.let { Timestamp(java.util.Date(it)) },
                     updatedAt = updatedAtMillis?.let { Timestamp(java.util.Date(it)) },
-                    lastAccessedAt = lastAccessedAtMillis?.let { Timestamp(java.util.Date(it)) }
                 )
             }
             val renderedContents = map["renderedContents"] as? List<String>

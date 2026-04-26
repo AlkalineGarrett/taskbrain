@@ -133,14 +133,6 @@ class ContentHasherTest {
         assertEquals(Sha256Hasher.hash("1234567890000"), hash)
     }
 
-    @Test
-    fun `hashField VIEWED hashes lastAccessedAt timestamp`() {
-        val timestamp = Timestamp(Date(1234567890000L))
-        val note = createNote(lastAccessedAt = timestamp)
-        val hash = ContentHasher.hashField(note, NoteField.VIEWED)
-
-        assertEquals(Sha256Hasher.hash("1234567890000"), hash)
-    }
 
     @Test
     fun `hashField handles null timestamps`() {
@@ -205,13 +197,11 @@ class ContentHasherTest {
         content: String = "Content",
         createdAt: Timestamp? = null,
         updatedAt: Timestamp? = null,
-        lastAccessedAt: Timestamp? = null
     ) = Note(
         id = id,
         path = path,
         content = content,
         createdAt = createdAt,
         updatedAt = updatedAt,
-        lastAccessedAt = lastAccessedAt
     )
 }

@@ -17,7 +17,6 @@ function makeNote(id: string, content = 'Note content', path = `path/${id}`): No
     content,
     createdAt: Timestamp.fromMillis(1000),
     updatedAt: Timestamp.fromMillis(2000),
-    lastAccessedAt: Timestamp.fromMillis(3000),
     tags: [],
     containedNotes: [],
     state: null,

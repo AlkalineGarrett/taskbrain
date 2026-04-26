@@ -4,7 +4,6 @@ import {
   computePathHash,
   computeModifiedHash,
   computeCreatedHash,
-  computeViewedHash,
   computeExistenceHash,
   computeAllNamesHash,
   EMPTY_METADATA_HASHES,
@@ -21,7 +20,6 @@ function makeNote(id: string, overrides: Partial<Note> = {}): Note {
     content: `Note ${id}\nBody`,
     createdAt: Timestamp.fromMillis(1000),
     updatedAt: Timestamp.fromMillis(2000),
-    lastAccessedAt: Timestamp.fromMillis(3000),
     tags: [],
     containedNotes: [],
     state: null,
@@ -74,13 +72,6 @@ describe('MetadataHasher', () => {
     it('changes when created timestamp changes', () => {
       const modified = [makeNote('a', { createdAt: Timestamp.fromMillis(99999) }), makeNote('b'), makeNote('c')]
       expect(computeCreatedHash(modified)).not.toBe(computeCreatedHash(notes))
-    })
-  })
-
-  describe('computeViewedHash', () => {
-    it('changes when viewed timestamp changes', () => {
-      const modified = [makeNote('a', { lastAccessedAt: Timestamp.fromMillis(99999) }), makeNote('b'), makeNote('c')]
-      expect(computeViewedHash(modified)).not.toBe(computeViewedHash(notes))
     })
   })
 
@@ -137,12 +128,6 @@ describe('MetadataHasher', () => {
       const deps = { ...EMPTY_DEPENDENCIES, dependsOnCreated: true }
       const hashes = computeMetadataHashes(notes, deps)
       expect(hashes.createdHash).not.toBeNull()
-    })
-
-    it('computes viewed hash when dependsOnViewed', () => {
-      const deps = { ...EMPTY_DEPENDENCIES, dependsOnViewed: true }
-      const hashes = computeMetadataHashes(notes, deps)
-      expect(hashes.viewedHash).not.toBeNull()
     })
 
     it('computes existence hash when dependsOnNoteExistence', () => {

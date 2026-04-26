@@ -323,7 +323,7 @@ function directiveSegment(sourceText: string, result: DirectiveResult | null): D
 
 const dummyNote: Note = {
   id: 'n1', userId: 'u1', parentNoteId: null, content: 'test',
-  createdAt: null, updatedAt: null, lastAccessedAt: null,
+  createdAt: null, updatedAt: null,
   tags: [], containedNotes: [], state: null, path: '/test',
   rootNoteId: null, showCompleted: true, onceCache: {},
 }

@@ -8,6 +8,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -27,6 +29,7 @@ import org.alkaline.taskbrain.service.RecurrenceTemplateManager
 import org.alkaline.taskbrain.ui.currentnote.components.RecurrenceConfig
 import org.alkaline.taskbrain.data.NoteLine
 import org.alkaline.taskbrain.data.NoteRepository
+import org.alkaline.taskbrain.data.NoteStatsRepository
 import org.alkaline.taskbrain.data.NoteStore
 import org.alkaline.taskbrain.data.PrompterAgent
 import org.alkaline.taskbrain.dsl.cache.MetadataHasher
@@ -38,6 +41,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     application: Application,
     // External dependencies - injectable for testing, default to real implementations
     private val repository: NoteRepository = NoteRepository(),
+    private val statsRepository: NoteStatsRepository = NoteStatsRepository(),
     private val alarmRepository: AlarmRepository = AlarmRepository(),
     private val alarmScheduler: AlarmScheduler = AlarmScheduler(application),
     private val alarmStateManager: AlarmStateManager = AlarmStateManager(application),
@@ -282,10 +286,25 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         val content = lines.joinToString("\n") { it.content }
         _loadStatus.value = LoadStatus.Success(noteId, lines)
         viewModelScope.launch {
-            repository.updateLastAccessed(noteId)
             directiveManager.loadDirectiveResults(content, noteId)
         }
         alarmManager.loadAlarmStates()
+    }
+
+    private var recordViewJob: Job? = null
+
+    /** Called only from primary-open code paths, never from the external-change handler. */
+    private fun scheduleRecordView(noteId: String) {
+        val lastMs = lastViewWriteMs[noteId]
+        if (lastMs != null && System.currentTimeMillis() - lastMs < VIEW_COOLDOWN_MS) return
+
+        recordViewJob?.cancel()
+        recordViewJob = viewModelScope.launch {
+            delay(VIEW_DWELL_MS)
+            statsRepository.recordView(noteId).onSuccess {
+                lastViewWriteMs[noteId] = System.currentTimeMillis()
+            }
+        }
     }
 
     /** Returns per-line noteIds for directive key generation. */
@@ -374,6 +393,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 isDeleted = cached.isDeleted,
                 showCompleted = NoteStore.getNoteById(noteId)?.showCompleted ?: true,
             )
+            scheduleRecordView(noteId)
 
             // Background refresh for proper noteId mappings (the fire-and-forget save
             // may have created new child notes with IDs we don't have yet)
@@ -408,6 +428,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 isDeleted = storeNote.state == "deleted",
                 showCompleted = storeNote.showCompleted,
             )
+            scheduleRecordView(noteId)
             return
         }
 
@@ -422,6 +443,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             result.fold(
                 onSuccess = { (loadedLines, isDeleted, showCompleted) ->
                     applyNoteContent(noteId, loadedLines, isDeleted, showCompleted)
+                    scheduleRecordView(noteId)
                 },
                 onFailure = { e ->
                     if (isPermissionDenied(e)) {
@@ -744,6 +766,9 @@ class CurrentNoteViewModel @JvmOverloads constructor(
 
     companion object {
         private const val TAG = "CurrentNoteViewModel"
+        private const val VIEW_DWELL_MS = 1500L
+        private const val VIEW_COOLDOWN_MS = 5L * 60L * 1000L
+        private val lastViewWriteMs = mutableMapOf<String, Long>()
     }
 
     fun markAsSaved() {

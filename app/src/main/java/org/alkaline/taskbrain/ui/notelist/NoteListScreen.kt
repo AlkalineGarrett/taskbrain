@@ -26,12 +26,16 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -64,6 +68,7 @@ import org.alkaline.taskbrain.R
 import org.alkaline.taskbrain.data.ContentSnippet
 import org.alkaline.taskbrain.data.Note
 import org.alkaline.taskbrain.data.NoteSearchResult
+import org.alkaline.taskbrain.data.NoteSortMode
 import org.alkaline.taskbrain.data.SearchHistoryEntry
 import org.alkaline.taskbrain.data.SearchMatch
 import org.alkaline.taskbrain.ui.components.ActionButton
@@ -82,6 +87,8 @@ fun NoteListScreen(
     val deletedNotes by noteListViewModel.deletedNotes.observeAsState(emptyList())
     val loadStatus by noteListViewModel.loadStatus.observeAsState()
     val createNoteStatus by noteListViewModel.createNoteStatus.observeAsState()
+    val sortMode by noteListViewModel.sortMode.observeAsState(NoteSortMode.RECENT)
+    val noteStats by noteListViewModel.noteStatsLive.observeAsState(emptyMap())
     val searchState by noteListViewModel.searchState.collectAsState()
     val activeSearchResults by noteListViewModel.activeSearchResults.observeAsState(emptyList())
     val deletedSearchResults by noteListViewModel.deletedSearchResults.observeAsState(emptyList())
@@ -128,6 +135,12 @@ fun NoteListScreen(
                     onRefreshClick = { noteListViewModel.loadNotes() },
                     onSearchClick = { noteListViewModel.toggleSearch() },
                 )
+                if (!searchState.isSearchOpen) {
+                    SortModeRow(
+                        selected = sortMode,
+                        onModeSelected = { noteListViewModel.setSortMode(it) },
+                    )
+                }
                 if (searchState.isSearchOpen) {
                     SearchPanel(
                         searchState = searchState,
@@ -181,6 +194,7 @@ fun NoteListScreen(
                             items(notes) { note ->
                                 NoteItem(
                                     note = note,
+                                    lastViewed = noteStats[note.id]?.lastAccessedAt,
                                     onClick = { onNoteClick(note.id) },
                                     onDelete = { noteListViewModel.softDeleteNote(note.id) }
                                 )
@@ -194,6 +208,7 @@ fun NoteListScreen(
                                 items(deletedNotes) { note ->
                                     NoteItem(
                                         note = note,
+                                        lastViewed = noteStats[note.id]?.lastAccessedAt,
                                         onClick = { onNoteClick(note.id) },
                                         isDeleted = true,
                                         onRestore = { noteListViewModel.undeleteNote(note.id) }
@@ -209,6 +224,34 @@ fun NoteListScreen(
             // Show loading overlay when creating a note
             if (createNoteStatus is CreateNoteStatus.Loading) {
                  CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SortModeRow(
+    selected: NoteSortMode,
+    onModeSelected: (NoteSortMode) -> Unit,
+) {
+    val modes = listOf(
+        NoteSortMode.RECENT to R.string.sort_recent,
+        NoteSortMode.FREQUENT to R.string.sort_frequent,
+        NoteSortMode.CONSISTENT to R.string.sort_consistent,
+    )
+    SingleChoiceSegmentedButtonRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        modes.forEachIndexed { index, (mode, labelRes) ->
+            SegmentedButton(
+                selected = selected == mode,
+                onClick = { onModeSelected(mode) },
+                shape = SegmentedButtonDefaults.itemShape(index, modes.size),
+            ) {
+                Text(stringResource(labelRes))
             }
         }
     }
@@ -415,7 +458,7 @@ fun SearchResultItem(
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val firstLine = result.note.content.lines().firstOrNull() ?: ""
-    val timestamp = result.note.lastAccessedAt ?: result.note.updatedAt
+    val timestamp = result.note.updatedAt
 
     Column(
         modifier = Modifier
@@ -551,6 +594,7 @@ private fun highlightMatches(
 @Composable
 fun NoteItem(
     note: Note,
+    lastViewed: Timestamp? = null,
     onClick: () -> Unit,
     isDeleted: Boolean = false,
     onDelete: (() -> Unit)? = null,
@@ -559,7 +603,7 @@ fun NoteItem(
     var showMenu by remember { mutableStateOf(false) }
     val firstLine = note.content.lines().firstOrNull() ?: ""
 
-    val timestamp = note.lastAccessedAt ?: note.updatedAt
+    val timestamp = lastViewed ?: note.updatedAt
 
     Row(
         verticalAlignment = Alignment.CenterVertically,

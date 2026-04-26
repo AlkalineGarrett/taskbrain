@@ -24,8 +24,6 @@ data class DirectiveDependencies(
     val dependsOnModified: Boolean = false,
     /** Depends on created timestamps (find with created filter) */
     val dependsOnCreated: Boolean = false,
-    /** Depends on viewed/accessed timestamps */
-    val dependsOnViewed: Boolean = false,
     /** Depends on note existence (any find() was used) */
     val dependsOnNoteExistence: Boolean = false,
     /** Depends on all note names/first lines (find(name: ...) was used) */
@@ -45,7 +43,6 @@ data class DirectiveDependencies(
         dependsOnPath = dependsOnPath || other.dependsOnPath,
         dependsOnModified = dependsOnModified || other.dependsOnModified,
         dependsOnCreated = dependsOnCreated || other.dependsOnCreated,
-        dependsOnViewed = dependsOnViewed || other.dependsOnViewed,
         dependsOnNoteExistence = dependsOnNoteExistence || other.dependsOnNoteExistence,
         dependsOnAllNames = dependsOnAllNames || other.dependsOnAllNames,
         hierarchyDeps = hierarchyDeps + other.hierarchyDeps
@@ -60,7 +57,6 @@ data class DirectiveDependencies(
             !dependsOnPath &&
             !dependsOnModified &&
             !dependsOnCreated &&
-            !dependsOnViewed &&
             !dependsOnNoteExistence &&
             !dependsOnAllNames &&
             hierarchyDeps.isEmpty()
@@ -114,6 +110,4 @@ enum class NoteField {
     MODIFIED,
     /** Created timestamp */
     CREATED,
-    /** Last viewed/accessed timestamp */
-    VIEWED
 }

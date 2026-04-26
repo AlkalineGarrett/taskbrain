@@ -7,6 +7,7 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -16,6 +17,9 @@ import org.alkaline.taskbrain.data.NoteFilteringUtils
 import org.alkaline.taskbrain.data.NoteRepository
 import org.alkaline.taskbrain.data.NoteSearchUtils
 import org.alkaline.taskbrain.data.NoteSearchResult
+import org.alkaline.taskbrain.data.NoteSortMode
+import org.alkaline.taskbrain.data.NoteStats
+import org.alkaline.taskbrain.data.NoteStatsRepository
 import org.alkaline.taskbrain.data.NoteStore
 import org.alkaline.taskbrain.data.SearchHistoryEntry
 import org.alkaline.taskbrain.data.SearchHistoryRepository
@@ -30,6 +34,7 @@ data class SearchState(
 class NoteListViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = NoteRepository()
+    private val statsRepository = NoteStatsRepository()
     private val searchHistoryRepository = SearchHistoryRepository(application)
 
     private val _notes = MutableLiveData<List<Note>>()
@@ -56,10 +61,21 @@ class NoteListViewModel(application: Application) : AndroidViewModel(application
     private val _searchHistory = MutableLiveData<List<SearchHistoryEntry>>(emptyList())
     val searchHistory: LiveData<List<SearchHistoryEntry>> = _searchHistory
 
+    private val _sortMode = MutableLiveData(NoteSortMode.RECENT)
+    val sortMode: LiveData<NoteSortMode> = _sortMode
+
+    private val _noteStats = MutableLiveData<Map<String, NoteStats>>(emptyMap())
+    val noteStatsLive: LiveData<Map<String, NoteStats>> = _noteStats
+
     private var searchDebounceJob: Job? = null
 
+    fun setSortMode(mode: NoteSortMode) {
+        if (_sortMode.value == mode) return
+        _sortMode.value = mode
+        refreshNotes()
+    }
+
     init {
-        // Observe NoteStore for real-time updates to the note list
         viewModelScope.launch {
             NoteStore.notes.collect { storeNotes ->
                 if (storeNotes.isNotEmpty()) {
@@ -77,9 +93,13 @@ class NoteListViewModel(application: Application) : AndroidViewModel(application
 
         viewModelScope.launch {
             try {
+                val statsDeferred = async { statsRepository.loadAllNoteStats() }
                 NoteStore.ensureLoaded()
-                // ensureLoaded() resolved — if the collector hasn't already
-                // set Success (e.g. user has zero notes), do it now.
+                statsDeferred.await().onSuccess { stats ->
+                    _noteStats.value = stats
+                    val storeNotes = NoteStore.notes.value
+                    if (storeNotes.isNotEmpty()) applyFilters(storeNotes)
+                }
                 if (_loadStatus.value == LoadStatus.Loading) {
                     _loadStatus.value = LoadStatus.Success
                 }
@@ -90,11 +110,6 @@ class NoteListViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    /**
-     * Refreshes the notes list without showing loading indicator.
-     * The NoteStore's collection listener keeps data fresh, so this
-     * is essentially a no-op — the collector above handles updates.
-     */
     fun refreshNotes() {
         val storeNotes = NoteStore.notes.value
         if (storeNotes.isNotEmpty()) {
@@ -103,7 +118,11 @@ class NoteListViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun applyFilters(storeNotes: List<Note>) {
-        _notes.value = NoteFilteringUtils.filterAndSortNotesByLastAccessed(storeNotes)
+        val mode = _sortMode.value ?: NoteSortMode.RECENT
+        val stats = _noteStats.value ?: emptyMap()
+        _notes.value = NoteFilteringUtils.filterAndSortNotesByMode(
+            storeNotes, stats, mode, System.currentTimeMillis()
+        )
         _deletedNotes.value = NoteFilteringUtils.filterAndSortDeletedNotes(storeNotes)
     }
 

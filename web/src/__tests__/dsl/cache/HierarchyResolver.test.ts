@@ -11,7 +11,6 @@ function makeNote(id: string, path: string): Note {
     content: `Note ${id}`,
     createdAt: null,
     updatedAt: null,
-    lastAccessedAt: null,
     tags: [],
     containedNotes: [],
     state: null,

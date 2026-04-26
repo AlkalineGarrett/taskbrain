@@ -302,7 +302,6 @@ function serializeInner(val: DslValue): unknown {
       content: val.note.content,
       createdAt: val.note.createdAt?.toDate().getTime() ?? null,
       updatedAt: val.note.updatedAt?.toDate().getTime() ?? null,
-      lastAccessedAt: val.note.lastAccessedAt?.toDate().getTime() ?? null,
     }
     case 'ListVal': return val.items.map(serializeValue)
     case 'ViewVal': return {
@@ -313,7 +312,6 @@ function serializeInner(val: DslValue): unknown {
         content: note.content,
         createdAt: note.createdAt?.toDate().getTime() ?? null,
         updatedAt: note.updatedAt?.toDate().getTime() ?? null,
-        lastAccessedAt: note.lastAccessedAt?.toDate().getTime() ?? null,
       })),
       renderedContents: val.renderedContents,
     }
@@ -363,7 +361,6 @@ function deserializeNoteVal(map: Record<string, unknown>): NoteVal {
     content: (map.content as string) ?? '',
     createdAt: map.createdAt != null ? Timestamp.fromMillis(map.createdAt as number) : null,
     updatedAt: map.updatedAt != null ? Timestamp.fromMillis(map.updatedAt as number) : null,
-    lastAccessedAt: map.lastAccessedAt != null ? Timestamp.fromMillis(map.lastAccessedAt as number) : null,
     tags: [],
     containedNotes: [],
     state: null,
@@ -385,7 +382,6 @@ function deserializeViewVal(map: Record<string, unknown>): ViewVal {
     content: (noteMap.content as string) ?? '',
     createdAt: noteMap.createdAt != null ? Timestamp.fromMillis(noteMap.createdAt as number) : null,
     updatedAt: noteMap.updatedAt != null ? Timestamp.fromMillis(noteMap.updatedAt as number) : null,
-    lastAccessedAt: noteMap.lastAccessedAt != null ? Timestamp.fromMillis(noteMap.lastAccessedAt as number) : null,
     tags: [] as string[],
     containedNotes: [] as string[],
     state: null,

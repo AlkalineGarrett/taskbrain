@@ -336,8 +336,6 @@ class CachedResultBuilder(
                 MetadataHasher.computeModifiedHash(allNotes) else null,
             createdHash = if (dependencies.dependsOnCreated)
                 MetadataHasher.computeCreatedHash(allNotes) else null,
-            viewedHash = if (dependencies.dependsOnViewed)
-                MetadataHasher.computeViewedHash(allNotes) else null,
             existenceHash = if (dependencies.dependsOnNoteExistence)
                 MetadataHasher.computeExistenceHash(allNotes) else null,
             allNamesHash = allNamesHash

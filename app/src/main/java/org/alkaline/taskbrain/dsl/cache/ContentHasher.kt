@@ -39,7 +39,6 @@ object ContentHasher {
             NoteField.PATH -> note.path
             NoteField.MODIFIED -> note.updatedAt?.toDate()?.time?.toString() ?: ""
             NoteField.CREATED -> note.createdAt?.toDate()?.time?.toString() ?: ""
-            NoteField.VIEWED -> note.lastAccessedAt?.toDate()?.time?.toString() ?: ""
         }
         return Sha256Hasher.hash(value)
     }

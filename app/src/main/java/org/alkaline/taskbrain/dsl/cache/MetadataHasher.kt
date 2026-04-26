@@ -10,7 +10,6 @@ enum class MetadataHashType {
     PATH,
     MODIFIED,
     CREATED,
-    VIEWED,
     EXISTENCE,
     ALL_NAMES
 }
@@ -120,17 +119,6 @@ object MetadataHasher {
     }
 
     /**
-     * Compute hash of all viewed/accessed timestamps.
-     */
-    fun computeViewedHash(notes: List<Note>): String = computeWithCache(notes, MetadataHashType.VIEWED) {
-        val values = notes.sortedBy { it.id }.map { note ->
-            val timestamp = note.lastAccessedAt?.toDate()?.time ?: 0L
-            "${note.id}:$timestamp"
-        }
-        Sha256Hasher.hash(values.joinToString("\n"))
-    }
-
-    /**
      * Compute hash of note IDs (for existence check).
      * Used to detect note creation/deletion.
      */
@@ -161,7 +149,6 @@ object MetadataHasher {
             pathHash = if (deps.dependsOnPath) computePathHash(notes) else null,
             modifiedHash = if (deps.dependsOnModified) computeModifiedHash(notes) else null,
             createdHash = if (deps.dependsOnCreated) computeCreatedHash(notes) else null,
-            viewedHash = if (deps.dependsOnViewed) computeViewedHash(notes) else null,
             existenceHash = if (deps.dependsOnNoteExistence) computeExistenceHash(notes) else null,
             allNamesHash = if (deps.dependsOnAllNames) computeAllNamesHash(notes) else null
         )

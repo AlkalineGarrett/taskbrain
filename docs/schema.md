@@ -13,7 +13,6 @@ Path: `/notes/{noteId}`
   "content": "String: The main text content.",
   "createdAt": "Timestamp: Server timestamp of creation",
   "updatedAt": "Timestamp: Server timestamp of last update",
-  "lastAccessedAt": "Timestamp [optional]: Server timestamp of last access (for recent tabs)",
   "tags": [
     "String",
     "String"
@@ -61,6 +60,30 @@ Path: `/notes/{noteId}`
 
 ### Explanations
 - **resources**: Array of objects for external media. `caption` is omitted as it lives in `content`.
+
+## Collection: `noteStats` (per user)
+Path: `/users/{userId}/noteStats/{noteId}`
+
+### Document Structure
+**IMPORTANT** Keep in sync with NoteStats.kt (Android) and NoteStats.ts (web)
+```json
+{
+  "lastAccessedAt": "Timestamp: Server timestamp of last primary-view open. Used for Recents ordering.",
+  "viewCount": "Number: Lifetime count of times the note has been opened as the primary view.",
+  "viewedDays": {
+    "<YYYY-MM-DD>": "Boolean: true. One entry per distinct local-timezone day the note was opened."
+  }
+}
+```
+
+### Field Explanations
+- These fields live in a per-user subcollection (not on the note doc) so view tracking writes don't echo through the notes collection listener and don't trigger any directive cache invalidation. Embedded `[view ...]` directive renders do NOT count as views — only top-level note opens (after a 1.5s dwell) do.
+- **`recordView` is a single non-transactional merge-write** (no read needed). The map write `viewedDays.{today}: true` is idempotent — multiple opens on the same day collapse to one entry. `daysViewed`, `firstViewedAt`, and the recency-decayed score are all derived at read time:
+  - `daysViewed = Object.keys(viewedDays).length`
+  - `firstViewedAt = min(viewedDays.keys())` (lexicographic min on `YYYY-MM-DD`)
+  - `decayedScore = Σ exp(-(now - dayMs) / τ)` over each day in the map (τ = 14 days)
+- The day key uses the device's local timezone so a note crossing midnight reads as the calendar day the user perceives.
+- A 5-minute per-note cooldown on the client suppresses duplicate writes from rapid tab-switching.
 
 ## Collection: `openTabs` (per user)
 Path: `/users/{userId}/openTabs/{noteId}`

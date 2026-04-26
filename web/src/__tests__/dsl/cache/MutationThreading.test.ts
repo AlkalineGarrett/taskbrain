@@ -27,7 +27,6 @@ function makeNote(id: string, content = 'Content', path = `path/${id}`): Note {
     content,
     createdAt: Timestamp.fromMillis(1000),
     updatedAt: Timestamp.fromMillis(2000),
-    lastAccessedAt: Timestamp.fromMillis(3000),
     tags: [],
     containedNotes: [],
     state: null,

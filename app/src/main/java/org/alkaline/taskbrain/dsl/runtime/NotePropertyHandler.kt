@@ -17,7 +17,6 @@ import java.time.ZoneId
  * - `name`: String - First line of content
  * - `created`: DateTime - Creation timestamp
  * - `modified`: DateTime - Last modification timestamp
- * - `viewed`: DateTime - Last viewed timestamp
  * - `up`: Note - Parent note (1 level up)
  * - `root`: Note - Root ancestor (top-level note with no parent)
  *
@@ -42,9 +41,6 @@ object NotePropertyHandler {
             "modified" -> note.updatedAt?.let {
                 DateTimeVal(it.toDate().toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime())
             } ?: throw ExecutionException("Note has no modified date")
-            "viewed" -> note.lastAccessedAt?.let {
-                DateTimeVal(it.toDate().toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime())
-            } ?: throw ExecutionException("Note has no viewed date")
             "up" -> getUp(note, 1, env)
             "root" -> getRoot(noteVal, env)
             else -> throw ExecutionException("Unknown property '$property' on note")
@@ -89,7 +85,7 @@ object NotePropertyHandler {
                 }
                 env.registerMutation(NoteMutation(note.id, updatedNote, MutationType.CONTENT_CHANGED))
             }
-            "id", "created", "modified", "viewed" -> {
+            "id", "created", "modified" -> {
                 throw ExecutionException("Cannot set read-only property '$property' on note")
             }
             else -> throw ExecutionException("Unknown property '$property' on note")

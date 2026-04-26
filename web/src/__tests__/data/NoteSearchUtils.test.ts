@@ -9,7 +9,6 @@ function note(overrides: Partial<Note> & { id: string }): Note {
     content: '',
     createdAt: null,
     updatedAt: null,
-    lastAccessedAt: null,
     tags: [],
     containedNotes: [],
     state: null,
@@ -103,10 +102,10 @@ describe('searchNotes', () => {
 
   // ── ordering ──
 
-  it('sorts active results by lastAccessedAt descending', () => {
+  it('sorts active results by updatedAt descending', () => {
     const notes = [
-      note({ id: 'old', content: 'Find', lastAccessedAt: ts(1000) }),
-      note({ id: 'new', content: 'Find', lastAccessedAt: ts(2000) }),
+      note({ id: 'old', content: 'Find', updatedAt: ts(1000) }),
+      note({ id: 'new', content: 'Find', updatedAt: ts(2000) }),
     ]
     const { active } = searchNotes(notes, 'Find', true, false)
     expect(active.map((r) => r.note.id)).toEqual(['new', 'old'])

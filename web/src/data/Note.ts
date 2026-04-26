@@ -8,7 +8,6 @@ export interface Note {
   content: string
   createdAt: Timestamp | null
   updatedAt: Timestamp | null
-  lastAccessedAt: Timestamp | null
   tags: string[]
   containedNotes: string[]
   state: string | null
@@ -35,7 +34,6 @@ export function noteFromFirestore(id: string, data: Record<string, unknown>): No
     content: (data.content as string) ?? '',
     createdAt: (data.createdAt as Timestamp) ?? null,
     updatedAt: (data.updatedAt as Timestamp) ?? null,
-    lastAccessedAt: (data.lastAccessedAt as Timestamp) ?? null,
     tags: (data.tags as string[]) ?? [],
     containedNotes: (data.containedNotes as string[]) ?? [],
     state: (data.state as string) ?? null,

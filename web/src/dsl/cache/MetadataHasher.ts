@@ -8,7 +8,6 @@ export interface MetadataHashes {
   pathHash: string | null
   modifiedHash: string | null
   createdHash: string | null
-  viewedHash: string | null
   existenceHash: string | null
   allNamesHash: string | null
 }
@@ -17,7 +16,6 @@ export const EMPTY_METADATA_HASHES: MetadataHashes = {
   pathHash: null,
   modifiedHash: null,
   createdHash: null,
-  viewedHash: null,
   existenceHash: null,
   allNamesHash: null,
 }
@@ -56,14 +54,6 @@ export function computeCreatedHash(notes: Note[]): string {
   return simpleHash(values.join('\n'))
 }
 
-export function computeViewedHash(notes: Note[]): string {
-  const values = sortedNotes(notes).map((n) => {
-    const ts = n.lastAccessedAt?.toDate()?.getTime() ?? 0
-    return `${n.id}:${ts}`
-  })
-  return simpleHash(values.join('\n'))
-}
-
 export function computeExistenceHash(notes: Note[]): string {
   const sortedIds = notes.map((n) => n.id).sort()
   return simpleHash(sortedIds.join('\n'))
@@ -82,7 +72,6 @@ export function computeMetadataHashes(notes: Note[], deps: DirectiveDependencies
     pathHash: deps.dependsOnPath ? computePathHash(notes) : null,
     modifiedHash: deps.dependsOnModified ? computeModifiedHash(notes) : null,
     createdHash: deps.dependsOnCreated ? computeCreatedHash(notes) : null,
-    viewedHash: deps.dependsOnViewed ? computeViewedHash(notes) : null,
     existenceHash: deps.dependsOnNoteExistence ? computeExistenceHash(notes) : null,
     allNamesHash: deps.dependsOnAllNames ? computeAllNamesHash(notes) : null,
   }

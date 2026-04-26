@@ -109,8 +109,6 @@ data class MetadataHashes(
     val modifiedHash: String? = null,
     /** Hash of all created timestamps */
     val createdHash: String? = null,
-    /** Hash of all viewed timestamps */
-    val viewedHash: String? = null,
     /** Hash of sorted note IDs (for existence check) */
     val existenceHash: String? = null,
     /** Hash of all note names/first lines (for find(name: ...) queries) */
