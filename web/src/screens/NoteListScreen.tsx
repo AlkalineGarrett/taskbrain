@@ -134,7 +134,7 @@ export function NoteListScreen() {
                     onClick={() => navigate(`/note/${note.id}`)}
                   >
                     <span className={styles.noteContent}>
-                      {note.content || EMPTY_NOTE}
+                      {firstLineOf(note.content) || EMPTY_NOTE}
                     </span>
                     <span className={styles.noteDate}>
                       {formatDate(stats.get(note.id)?.lastAccessedAt ?? note.updatedAt)}
@@ -161,7 +161,7 @@ export function NoteListScreen() {
                         onClick={() => navigate(`/note/${note.id}`)}
                       >
                         <span className={styles.noteContent}>
-                          {note.content || EMPTY_NOTE}
+                          {firstLineOf(note.content) || EMPTY_NOTE}
                         </span>
                         <span className={styles.noteDate}>
                           {formatDate(note.updatedAt)}
@@ -420,7 +420,7 @@ function SearchResultItem({
   isDeleted?: boolean
   isDanger?: boolean
 }) {
-  const firstLine = result.note.content.split('\n')[0] ?? ''
+  const firstLine = firstLineOf(result.note.content)
 
   return (
     <li className={`${styles.noteItem} ${isDeleted ? styles.deletedItem : ''}`}>
@@ -538,6 +538,10 @@ function NoteItemMenu({
       )}
     </div>
   )
+}
+
+function firstLineOf(content: string): string {
+  return content.split('\n', 1)[0] ?? ''
 }
 
 function formatDate(ts: { toDate(): Date } | null): string {
