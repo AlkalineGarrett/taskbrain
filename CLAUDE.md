@@ -59,6 +59,15 @@ Run a single test class:
 - Empty content string is a real, persisted, addressable line
 - Whitespace-only content ("   ") is also content — same as any other line
 
+**EditorState is mutable in place (web):**
+- `editorState.lines` is a stable array reference; individual `LineState` objects mutate in place when the user edits
+- React `useMemo` / `useEffect` deps cannot use `editorState.lines` (or anything keyed by its reference) as a trigger — the reference never changes. Key memos on a derived value, e.g. `lines.map(l => l.text).join('\n')`, with `// eslint-disable-next-line react-hooks/exhaustive-deps`
+- This is intentional, not a bug. Don't "fix" it by wrapping `lines.map(...)` in a `useMemo` keyed on `editorState.lines` — the memo would never invalidate
+
+**Active-editor state and ref both exist on purpose (`useActiveEditorSession`):**
+- The `activeSession` state drives renders and derived values; the `activeSessionRef` gives event handlers (keyboard, gutter) a stale-closure-free read at fire time
+- Don't collapse them — removing the ref forces handlers to re-register on every activation; removing the state breaks downstream re-renders
+
 ## Testing
 
 Tests use MockK for mocking and `runTest` for coroutines. Key test files:
@@ -173,6 +182,8 @@ Both platforms sync note changes in real time via Firestore snapshot listeners. 
 
 ### Refactoring
 
+- The end-to-end workflow (audit → plan → extract → test → simplify → document) lives in `docs/refactoring-workflow.md`. Read it before starting a backlog item.
+- The backlog of identified items lives in `docs/refactoring-backlog.md`.
 - Do the following when refactoring:
   - Look to make the code and design "elegant"
   - Consolidate repetition of code

@@ -5,7 +5,6 @@ import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
 import { hasCheckbox } from '@/editor/LinePrefixes'
 import { hasDirectives, segmentLine, isViewSegment } from '@/dsl/directives/DirectiveSegmenter'
 import { directiveResultToValue } from '@/dsl/directives/DirectiveResult'
-import type { ViewNoteSaveHandler } from './ViewDirectiveRenderer'
 import { DirectiveLineContent } from './DirectiveLineContent'
 import { getCharOffsetFromPoint, getCharOffsetHidingTextarea, getWordBoundsAt, isOnFirstVisualRow, isOnLastVisualRow, mapDisplayOffsetToSource, mapSourceOffsetToDisplay } from '@/editor/TextMeasure'
 import { computeFocusHighlight } from '@/editor/FocusHighlight'
@@ -29,7 +28,6 @@ interface EditorLineProps {
   onDirectiveEdit?: (key: string, newSourceText: string) => void
   onDirectiveRefresh?: (key: string, sourceText: string) => void
   onButtonClick?: (key: string) => void
-  onViewNoteSave?: ViewNoteSaveHandler
   onDragStart?: (anchorGlobalOffset: number) => void
   onGutterDragStart?: (lineIndex: number, clientY?: number) => void
   onGutterDragUpdate?: (lineIndex: number, clientY?: number) => void
@@ -55,7 +53,6 @@ export function EditorLine({
   onDirectiveEdit,
   onDirectiveRefresh,
   onButtonClick,
-  onViewNoteSave,
   onDragStart,
   onGutterDragStart,
   onGutterDragUpdate,
@@ -638,7 +635,6 @@ export function EditorLine({
             onDirectiveEdit={onDirectiveEdit}
             onDirectiveRefresh={onDirectiveRefresh}
             onButtonClick={onButtonClick}
-            onViewNoteSave={onViewNoteSave}
           />
         </div>
       ) : (

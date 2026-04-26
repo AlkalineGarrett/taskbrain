@@ -5,24 +5,7 @@ import {
   filterAndSortNotes,
 } from '../../data/NoteFilteringUtils'
 import type { Note } from '../../data/Note'
-
-function note(overrides: Partial<Note> & { id: string }): Note {
-  return {
-    userId: '',
-    parentNoteId: null,
-    content: '',
-    createdAt: null,
-    updatedAt: null,
-    tags: [],
-    containedNotes: [],
-    state: null,
-    path: '',
-    rootNoteId: null,
-    showCompleted: true,
-    onceCache: {},
-    ...overrides,
-  }
-}
+import { note } from '../factories'
 
 function ts(millis: number) {
   return { toMillis: () => millis } as Note['updatedAt']

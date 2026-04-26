@@ -1,24 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NoteStore } from '../../data/NoteStore'
-import type { Note } from '../../data/Note'
-
-function note(overrides: Partial<Note> & { id: string }): Note {
-  return {
-    userId: '',
-    parentNoteId: null,
-    content: '',
-    createdAt: null,
-    updatedAt: null,
-    tags: [],
-    containedNotes: [],
-    state: null,
-    path: '',
-    rootNoteId: null,
-    showCompleted: true,
-    onceCache: {},
-    ...overrides,
-  }
-}
+import { note } from '../factories'
 
 describe('NoteStore error subscription', () => {
   let store: NoteStore

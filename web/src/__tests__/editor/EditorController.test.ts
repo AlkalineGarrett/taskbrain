@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { EditorState } from '../../editor/EditorState'
 import { EditorController } from '../../editor/EditorController'
 import { LineState } from '../../editor/LineState'
-import { BULLET, CHECKBOX_UNCHECKED, CHECKBOX_CHECKED } from '../../editor/LinePrefixes'
+import { BULLET, CHECKBOX_UNCHECKED } from '../../editor/LinePrefixes'
 
 // Mock navigator.clipboard for cut/copy tests
 const mockClipboard = { writeText: vi.fn().mockResolvedValue(undefined) }

@@ -1,24 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { searchNotes } from '../../data/NoteSearchUtils'
 import type { Note } from '../../data/Note'
-
-function note(overrides: Partial<Note> & { id: string }): Note {
-  return {
-    userId: '',
-    parentNoteId: null,
-    content: '',
-    createdAt: null,
-    updatedAt: null,
-    tags: [],
-    containedNotes: [],
-    state: null,
-    path: '',
-    rootNoteId: null,
-    showCompleted: true,
-    onceCache: {},
-    ...overrides,
-  }
-}
+import { searchNotes } from '../../data/NoteSearchUtils'
+import { note } from '../factories'
 
 function ts(millis: number) {
   return { toMillis: () => millis } as Note['updatedAt']

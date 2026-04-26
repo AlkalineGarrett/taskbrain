@@ -7,24 +7,7 @@ import {
   reconstructNoteLines,
   indexChildrenByParent,
 } from '../../data/NoteReconstruction'
-
-function note(overrides: Partial<Note> & { id: string }): Note {
-  return {
-    userId: '',
-    parentNoteId: null,
-    content: '',
-    createdAt: null,
-    updatedAt: null,
-    tags: [],
-    containedNotes: [],
-    state: null,
-    path: '',
-    rootNoteId: null,
-    showCompleted: true,
-    onceCache: {},
-    ...overrides,
-  }
-}
+import { note } from '../factories'
 
 function toMap(notes: Note[]): Map<string, Note> {
   const map = new Map<string, Note>()

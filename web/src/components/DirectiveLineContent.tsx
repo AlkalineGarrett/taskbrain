@@ -1,5 +1,4 @@
 import { useState, useCallback } from 'react'
-import type { ViewNoteSaveHandler } from './ViewDirectiveRenderer'
 import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
 import { segmentLine, isViewSegment } from '@/dsl/directives/DirectiveSegmenter'
 import { DirectiveChip } from './DirectiveChip'
@@ -14,7 +13,6 @@ interface DirectiveLineContentProps {
   onDirectiveEdit?: (oldSourceText: string, newSourceText: string) => void
   onDirectiveRefresh?: (key: string, sourceText: string) => void
   onButtonClick?: (key: string) => void
-  onViewNoteSave?: ViewNoteSaveHandler
 }
 
 /**
@@ -29,7 +27,6 @@ export function DirectiveLineContent({
   onDirectiveEdit,
   onDirectiveRefresh,
   onButtonClick,
-  onViewNoteSave,
 }: DirectiveLineContentProps) {
   const [editingKey, setEditingKey] = useState<string | null>(null)
 
@@ -93,7 +90,6 @@ export function DirectiveLineContent({
               result={segment.result}
               onClick={() => handleChipClick(segment.key)}
               onButtonClick={onButtonClick ? () => onButtonClick(segment.key) : undefined}
-              onViewNoteSave={onViewNoteSave}
               onEditDirective={() => handleChipClick(segment.key)}
             />
           )

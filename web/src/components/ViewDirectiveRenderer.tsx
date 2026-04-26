@@ -1,5 +1,5 @@
 import { useState, useCallback, useContext, useRef, useEffect, useMemo } from 'react'
-import type { Note, NoteLine } from '@/data/Note'
+import type { Note } from '@/data/Note'
 import type { ViewVal } from '@/dsl/runtime/DslValue'
 import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
 import { findDirectives, directiveHash } from '@/dsl/directives/DirectiveFinder'
@@ -15,12 +15,8 @@ import { CompletedPlaceholderRow } from './CompletedPlaceholderRow'
 import { EMPTY_VIEW, SAVE_ERROR_BANNER, SAVE_ERROR_DISMISS } from '@/strings'
 import styles from './ViewDirectiveRenderer.module.css'
 
-export type ViewNoteSaveHandler = (noteId: string, trackedLines: NoteLine[]) => Promise<Map<number, string>>
-
 interface ViewDirectiveRendererProps {
   viewVal: ViewVal
-  /** Called to save edited note content; returns created noteId map for new lines */
-  onNoteSave?: ViewNoteSaveHandler
   /** Called when the gear icon is clicked to switch to directive editing mode */
   onEditDirective?: () => void
 }
@@ -32,7 +28,6 @@ interface ViewDirectiveRendererProps {
  */
 export function ViewDirectiveRenderer({
   viewVal,
-  onNoteSave,
   onEditDirective,
 }: ViewDirectiveRendererProps) {
   const { notes } = viewVal
@@ -96,7 +91,6 @@ export function ViewDirectiveRenderer({
             note={note}
             session={sessionManager.getSession(note.id)!}
             directiveResults={viewedNoteDirectiveResults.get(note.id)}
-            onSave={onNoteSave ? (trackedLines) => onNoteSave(note.id, trackedLines) : undefined}
           />
         </div>
       ))}
@@ -109,7 +103,6 @@ interface ViewNoteSectionProps {
   note: Note
   session: InlineEditSession
   directiveResults?: Map<string, DirectiveResult>
-  onSave?: (trackedLines: NoteLine[]) => Promise<Map<number, string>>
 }
 
 const PENDING_VIEW_SAVE_ERROR_KEY = 'pendingViewSaveError'
@@ -118,7 +111,6 @@ function ViewNoteSection({
   note,
   session: preCreatedSession,
   directiveResults: viewDirectiveResults,
-  onSave,
 }: ViewNoteSectionProps) {
   const { activateSession, deactivateSession, activeSession, notifyActiveChange, sessionManager } = useActiveEditor()
   const parentShowCompleted = useContext(ParentShowCompletedContext)
