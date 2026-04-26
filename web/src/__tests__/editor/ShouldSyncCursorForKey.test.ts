@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { shouldSyncCursorForKey } from '../../components/EditorLine'
+import { shouldSyncCursorForKey } from '../../hooks/useEditorLineKeyboard'
 
 describe('shouldSyncCursorForKey', () => {
   describe('typing characters should NOT trigger sync', () => {

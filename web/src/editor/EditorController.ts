@@ -44,6 +44,22 @@ export class EditorController {
     this.undoManager = undoManager ?? new UndoManager()
   }
 
+  /**
+   * Walks from `fromIndex` in `direction` (-1 = up, 1 = down), skipping any
+   * lines in [hiddenIndices]. Returns the first visible line index, or null
+   * if the walk runs off the edge. Callers typically pass `lineIndex ± 1` to
+   * find the visible neighbor of a given line.
+   */
+  findVisibleNeighbor(fromIndex: number, direction: -1 | 1): number | null {
+    const max = this.state.lines.length
+    let target = fromIndex
+    while (target >= 0 && target < max) {
+      if (!this.hiddenIndices.has(target)) return target
+      target += direction
+    }
+    return null
+  }
+
   // --- Undo/Redo ---
 
   get canUndo(): boolean { return this.undoManager.canUndo }
@@ -477,10 +493,8 @@ export class EditorController {
 
     if (cursor <= line.prefix.length) {
       if (lineIndex <= 0) return
-      // Skip hidden lines when merging backward
-      let target = lineIndex - 1
-      while (target >= 0 && this.hiddenIndices.has(target)) target--
-      if (target < 0) return
+      const target = this.findVisibleNeighbor(lineIndex - 1, -1)
+      if (target === null) return
       const previousLine = this.state.lines[target]
       if (!previousLine) return
 
@@ -519,10 +533,8 @@ export class EditorController {
     const cursor = line.cursorPosition
 
     if (cursor >= line.text.length) {
-      // Skip hidden lines when merging forward
-      let target = lineIndex + 1
-      while (target < this.state.lines.length && this.hiddenIndices.has(target)) target++
-      if (target >= this.state.lines.length) return
+      const target = this.findVisibleNeighbor(lineIndex + 1, 1)
+      if (target === null) return
       const nextLine = this.state.lines[target]
       if (!nextLine) return
 
