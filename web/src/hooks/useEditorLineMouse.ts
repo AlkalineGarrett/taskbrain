@@ -4,12 +4,7 @@ import type { EditorState } from '@/editor/EditorState'
 import type { LineState } from '@/editor/LineState'
 import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
 import { segmentLine } from '@/dsl/directives/DirectiveSegmenter'
-import {
-  getCharOffsetFromPoint,
-  getCharOffsetHidingTextarea,
-  getWordBoundsAt,
-  mapDisplayOffsetToSource,
-} from '@/editor/TextMeasure'
+import { getSourceCharOffsetInLine, getWordBoundsAt } from '@/editor/TextMeasure'
 
 interface UseEditorLineMouseOptions {
   controller: EditorController
@@ -55,24 +50,14 @@ export function useEditorLineMouse({
   onDragStart,
   onMoveStart,
 }: UseEditorLineMouseOptions): EditorLineMouseHandlers {
-  /** Compute the source-space char index from a mouse event, using whichever element is rendered. */
   const getSourceCharIndex = useCallback(
     (e: MouseEvent): number => {
-      const overlay = overlayRef.current
-      const textarea = inputRef.current
-      if (overlay && textarea) {
-        const offset = getCharOffsetHidingTextarea(overlay, textarea, e.clientX, e.clientY)
-        if (offset != null) return offset
-      }
-      const directiveEl = directiveContentRef.current
-      if (directiveEl) {
-        const displayOffset = getCharOffsetFromPoint(directiveEl, e.clientX, e.clientY)
-        if (displayOffset != null) {
-          const segments = segmentLine(content, line.effectiveId, directiveResults ?? new Map(), line.noteIds[0])
-          return mapDisplayOffsetToSource(displayOffset, segments)
-        }
-      }
-      return content.length
+      const resolveSegments = () =>
+        segmentLine(content, line.effectiveId, directiveResults ?? new Map(), line.noteIds[0])
+      return getSourceCharOffsetInLine(
+        overlayRef.current, directiveContentRef.current, inputRef.current,
+        resolveSegments, content.length, e.clientX, e.clientY,
+      )
     },
     [content, line, directiveResults, inputRef, overlayRef, directiveContentRef],
   )

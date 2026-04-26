@@ -161,6 +161,40 @@ export function getCharOffsetFromPoint(
 }
 
 /**
+ * Resolves a click point to a source-space character offset within a single
+ * editor line. Prefers the overlay element (which mirrors the line's source
+ * text); falls back to the directive-content element, in which case
+ * `resolveSegments` (if given) is invoked lazily to map the display offset
+ * back to source space.
+ *
+ * Returns `fallbackOffset` when no element resolves a hit.
+ */
+export function getSourceCharOffsetInLine(
+  overlayEl: HTMLElement | null,
+  directiveEl: HTMLElement | null,
+  textareaEl: HTMLElement | null,
+  resolveSegments: (() => DirectiveSegment[] | null) | null,
+  fallbackOffset: number,
+  clientX: number,
+  clientY: number,
+): number {
+  if (overlayEl) {
+    const offset = textareaEl
+      ? getCharOffsetHidingTextarea(overlayEl, textareaEl, clientX, clientY)
+      : getCharOffsetFromPoint(overlayEl, clientX, clientY)
+    if (offset != null) return offset
+  }
+  if (directiveEl) {
+    const displayOffset = getCharOffsetFromPoint(directiveEl, clientX, clientY)
+    if (displayOffset != null) {
+      const segments = resolveSegments?.() ?? null
+      return segments ? mapDisplayOffsetToSource(displayOffset, segments) : displayOffset
+    }
+  }
+  return fallbackOffset
+}
+
+/**
  * Gets the character offset within an overlay element, temporarily hiding all sibling
  * elements (textarea, highlight layers, etc.) so that caretRangeFromPoint only hits
  * the overlay's text nodes.
@@ -293,6 +327,8 @@ export interface LineHitResult {
  * @param lines       The EditorState lines array
  * @param getLineStartOffset  Function to get the global character offset of a line
  * @param lineAttr    The data attribute on each line row element (e.g. 'data-line-index')
+ * @param getSegments Optional resolver returning directive segments for a line — when
+ *                    provided, chip-line clicks are mapped back to source-space offsets
  */
 export function hitTestLineFromPoint(
   containerEl: Element,
@@ -301,6 +337,7 @@ export function hitTestLineFromPoint(
   clientX: number,
   clientY: number,
   lineAttr = 'data-line-index',
+  getSegments: ((lineIndex: number) => DirectiveSegment[] | null) | null = null,
 ): LineHitResult | null {
   const lineElements = containerEl.querySelectorAll(`[${lineAttr}]`)
   let targetLineIndex = -1
@@ -348,9 +385,10 @@ export function hitTestLineFromPoint(
   }
 
   const textareaEl = lineEl?.querySelector('textarea') as HTMLElement | null
-  const charIdx = textareaEl
-    ? getCharOffsetHidingTextarea(contentEl, textareaEl, clientX, clientY) ?? line.content.length
-    : getCharOffsetFromPoint(contentEl, clientX, clientY) ?? line.content.length
+  const resolveSegments = getSegments ? () => getSegments(targetLineIndex) : null
+  const charIdx = getSourceCharOffsetInLine(
+    overlayEl, directiveEl, textareaEl, resolveSegments, line.content.length, clientX, clientY,
+  )
   const globalOffset = getLineStartOffset(targetLineIndex) + line.prefix.length + charIdx
   return { globalOffset, lineIndex: targetLineIndex, charIndex: charIdx, inputEl: contentEl, lineEl }
 }
@@ -367,8 +405,9 @@ export function positionDropCursorFromPoint(
   clientX: number,
   clientY: number,
   lineAttr = 'data-line-index',
+  getSegments: ((lineIndex: number) => DirectiveSegment[] | null) | null = null,
 ): void {
-  const hit = hitTestLineFromPoint(containerEl, lines, getLineStartOffset, clientX, clientY, lineAttr)
+  const hit = hitTestLineFromPoint(containerEl, lines, getLineStartOffset, clientX, clientY, lineAttr, getSegments)
   if (!hit?.inputEl) {
     cursor.style.display = 'none'
     return

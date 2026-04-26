@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
+import type { DirectiveSegment } from '@/dsl/directives/DirectiveSegmenter'
 import type { EditorState } from './EditorState'
 import type { EditorController } from './EditorController'
 import { hitTestLineFromPoint, positionDropCursorFromPoint } from './TextMeasure'
@@ -8,6 +9,10 @@ import { hitTestLineFromPoint, positionDropCursorFromPoint } from './TextMeasure
  * Provides drag selection, move drag, and gutter selection — all parameterized
  * by a container ref, a way to get the current EditorState/EditorController,
  * and an optional line-element data attribute.
+ *
+ * `getSegments`, when provided, lets the hit-tester map clicks on chip lines
+ * back to source-space offsets — pass it for editors that render directive
+ * chips so drag-selection lands on the right characters.
  */
 export function useEditorInteractions(
   containerRef: React.RefObject<HTMLElement | null>,
@@ -15,6 +20,7 @@ export function useEditorInteractions(
   getState: () => EditorState | null,
   getController: () => EditorController | null,
   lineAttr = 'data-line-index',
+  getSegments: ((lineIndex: number) => DirectiveSegment[] | null) | null = null,
 ) {
   const isDraggingRef = useRef(false)
   const isMoveDraggingRef = useRef(false)
@@ -28,9 +34,9 @@ export function useEditorInteractions(
     if (!el || !state) return null
     return hitTestLineFromPoint(
       el, state.lines, (i) => state.getLineStartOffset(i),
-      clientX, clientY, lineAttr,
+      clientX, clientY, lineAttr, getSegments,
     )?.globalOffset ?? null
-  }, [containerRef, getState, lineAttr])
+  }, [containerRef, getState, lineAttr, getSegments])
 
   // --- Gutter selection ---
 
@@ -87,7 +93,7 @@ export function useEditorInteractions(
         positionDropCursorFromPoint(
           cursor, el, state.lines,
           (i) => state.getLineStartOffset(i),
-          e.clientX, e.clientY, lineAttr,
+          e.clientX, e.clientY, lineAttr, getSegments,
         )
       }
     }
@@ -111,7 +117,7 @@ export function useEditorInteractions(
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [containerRef, dropCursorRef, getState, getController, getGlobalOffset, lineAttr])
+  }, [containerRef, dropCursorRef, getState, getController, getGlobalOffset, lineAttr, getSegments])
 
   return {
     handleDragStart,
