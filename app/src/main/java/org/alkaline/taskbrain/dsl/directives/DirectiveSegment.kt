@@ -295,6 +295,28 @@ fun mapSourceToDisplayOffset(
 }
 
 /**
+ * Maps a display text offset back to the corresponding source text offset.
+ * Inverse of [mapSourceToDisplayOffset]. A display offset that lands inside a
+ * directive's rendered value resolves to the end of the directive's source range.
+ */
+fun mapDisplayToSourceOffset(displayOffset: Int, displayResult: DisplayTextResult): Int {
+    if (displayResult.directiveDisplayRanges.isEmpty()) return displayOffset
+
+    var sourceOffset = displayOffset
+    for (range in displayResult.directiveDisplayRanges) {
+        if (displayOffset <= range.displayRange.first) break
+        val sourceLength = range.sourceRange.last - range.sourceRange.first + 1
+        val displayLength = range.displayRange.last - range.displayRange.first + 1
+        if (displayOffset > range.displayRange.last) {
+            sourceOffset += sourceLength - displayLength
+        } else {
+            return range.sourceRange.last + 1
+        }
+    }
+    return sourceOffset.coerceAtLeast(0)
+}
+
+/**
  * Tracks where a directive appears in both source and display text.
  *
  * Added hasWarning for no-effect warnings.

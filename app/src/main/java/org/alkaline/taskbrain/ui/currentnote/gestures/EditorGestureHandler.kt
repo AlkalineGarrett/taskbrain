@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 import org.alkaline.taskbrain.dsl.directives.DirectiveResult
 import org.alkaline.taskbrain.dsl.directives.DirectiveSegmenter
 import org.alkaline.taskbrain.dsl.directives.DisplayTextResult
+import org.alkaline.taskbrain.dsl.directives.mapDisplayToSourceOffset
 import org.alkaline.taskbrain.dsl.directives.mapSourceToDisplayOffset
 import org.alkaline.taskbrain.ui.currentnote.EditorConfig
 import org.alkaline.taskbrain.ui.currentnote.EditorState
@@ -128,34 +129,6 @@ internal fun positionToGlobalOffset(
     val sourceOffset = mapDisplayToSourceOffset(displayOffset, displayResult)
 
     return state.getLineStartOffset(lineIndex) + lineState.prefix.length + sourceOffset
-}
-
-/**
- * Maps a cursor position from display text to source text.
- */
-private fun mapDisplayToSourceOffset(displayOffset: Int, displayResult: DisplayTextResult): Int {
-    if (displayResult.directiveDisplayRanges.isEmpty()) {
-        return displayOffset
-    }
-
-    var sourceOffset = displayOffset
-
-    for (range in displayResult.directiveDisplayRanges) {
-        if (displayOffset <= range.displayRange.first) {
-            // Offset is before this directive - no adjustment needed
-            break
-        } else if (displayOffset > range.displayRange.last) {
-            // Offset is after this directive - adjust for the length difference
-            val sourceLength = range.sourceRange.last - range.sourceRange.first + 1
-            val displayLength = range.displayRange.last - range.displayRange.first + 1
-            sourceOffset += sourceLength - displayLength
-        } else {
-            // Offset is inside the directive display - map to end of source directive
-            return range.sourceRange.last + 1
-        }
-    }
-
-    return sourceOffset.coerceAtLeast(0)
 }
 
 /**
