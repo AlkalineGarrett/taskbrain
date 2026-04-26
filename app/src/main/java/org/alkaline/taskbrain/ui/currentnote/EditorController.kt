@@ -976,79 +976,75 @@ class EditorController(
     fun updateLineContent(lineIndex: Int, newContent: String, contentCursor: Int) {
         val line = state.lines.getOrNull(lineIndex) ?: return
 
-        // Check if this is a newline insertion
         if (newContent.contains('\n')) {
-            // Prepare for structural change - commits prior typing, captures pre-split state
-            undoManager.prepareForStructuralChange(state)
-
-            state.clearSelection()
-            val newlineIndex = newContent.indexOf('\n')
-            val beforeNewline = newContent.substring(0, newlineIndex)
-            val afterNewline = newContent.substring(newlineIndex + 1)
-
-            val noteIds = line.noteIds
-            val (currentNoteIds, newNoteIds) = org.alkaline.taskbrain.data.splitNoteIds(
-                noteIds, beforeNewline.length, afterNewline.length,
-                beforeNewline.isNotEmpty(), afterNewline.isNotEmpty(), line.noteIdContentLengths
-            )
-
-            // Update current line with content before newline
-            line.updateContent(beforeNewline, beforeNewline.length)
-            line.noteIds = currentNoteIds
-
-            // Create new line with prefix continuation.
-            // Preserve checked state when content follows the split point.
-            val preserveChecked = afterNewline.isNotEmpty()
-            createNewLineWithPrefix(lineIndex, afterNewline, line.prefix, newNoteIds, preserveChecked)
-
-            // Continue pending state on new line (groups Enter + subsequent typing)
-            undoManager.continueAfterStructuralChange(state.focusedLineIndex)
+            splitLineOnNewline(lineIndex, line, newContent)
             return
         }
 
-        // Check if content actually changed before updating
+        // Don't clear selection on no-op IME syncs (finishComposingText) — that would
+        // wipe gutter selections. Old "diff and replace" logic also produced corruption
+        // bugs (e.g. "Jg" → "Hg") by mis-extracting the inserted text.
         val contentChanged = line.content != newContent
-
-        // Only clear selection if content actually changed
-        // This prevents IME sync (finishComposingText) from clearing gutter selections
-        // The old selection-replacement logic was causing bugs (like "Jg" → "Hg")
-        // because it tried to extract inserted text and could corrupt content
         if (contentChanged) {
             state.clearSelection()
         }
 
-        // Convert source prefixes to display prefixes (e.g. "* " → "• ")
-        // Only when the line doesn't already have a bullet/checkbox prefix
+        applyContent(line, newContent, contentCursor)
+        stampNoteIdSentinelIfNeeded(lineIndex, line)
+
+        state.notifyChange()
+
+        // Skip markContentChanged on no-op IME sync after undo — would clobber redo.
+        if (contentChanged) {
+            undoManager.markContentChanged()
+        }
+    }
+
+    private fun splitLineOnNewline(lineIndex: Int, line: LineState, newContent: String) {
+        // prepareForStructuralChange commits prior typing and captures pre-split state.
+        undoManager.prepareForStructuralChange(state)
+        state.clearSelection()
+
+        val newlineIndex = newContent.indexOf('\n')
+        val beforeNewline = newContent.substring(0, newlineIndex)
+        val afterNewline = newContent.substring(newlineIndex + 1)
+
+        val (currentNoteIds, newNoteIds) = org.alkaline.taskbrain.data.splitNoteIds(
+            line.noteIds, beforeNewline.length, afterNewline.length,
+            beforeNewline.isNotEmpty(), afterNewline.isNotEmpty(), line.noteIdContentLengths
+        )
+
+        line.updateContent(beforeNewline, beforeNewline.length)
+        line.noteIds = currentNoteIds
+
+        val preserveChecked = afterNewline.isNotEmpty()
+        createNewLineWithPrefix(lineIndex, afterNewline, line.prefix, newNoteIds, preserveChecked)
+
+        // Continue pending state on new line so Enter + subsequent typing group as one undo.
+        undoManager.continueAfterStructuralChange(state.focusedLineIndex)
+    }
+
+    private fun applyContent(line: LineState, newContent: String, contentCursor: Int) {
         val converted = convertSourcePrefix(newContent, line.prefix)
         if (converted != null) {
-            // Use updateFull to avoid double-read of the prefix getter in updateContent
-            // (the converted content starts with a display prefix, which would be counted
-            // twice: once as existing prefix, once as part of new text)
+            // updateFull avoids double-counting the prefix: convertSourcePrefix returns
+            // text starting with a display prefix, which updateContent would treat as
+            // additional content on top of the existing prefix.
             val newText = line.prefix + converted.text
             val newCursor = line.prefix.length + converted.cursor
             line.updateFull(newText, newCursor)
         } else {
             line.updateContent(newContent, contentCursor)
         }
+    }
 
-        // Stamp a TYPED sentinel as soon as a non-root line gets non-empty content
-        // and has no id yet. Without this, a save fired before the user presses
-        // Enter (e.g. Activity ON_STOP from rotation) would carry a bare null id
-        // — the upstream-bug shape that the recovery path warns about.
-        // Line 0 (root) is intentionally excluded: its id is enforced from
-        // parentNoteId in toNoteLines, and an empty list there means "fresh
-        // root doc to be allocated" for brand-new notes.
+    // Without this, a save fired before Enter (e.g. Activity ON_STOP from rotation) would
+    // carry a bare null id — the upstream-bug shape the recovery path warns about. Line 0
+    // is excluded: its id is enforced from parentNoteId in toNoteLines, and an empty list
+    // there means "fresh root doc to be allocated" for brand-new notes.
+    private fun stampNoteIdSentinelIfNeeded(lineIndex: Int, line: LineState) {
         if (lineIndex > 0 && line.noteIds.isEmpty() && line.content.isNotEmpty()) {
             line.noteIds = listOf(NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED))
-        }
-
-        state.notifyChange()
-
-        // Only mark content changed if it actually changed
-        // This prevents false positives after undo (IME sync sends same content)
-        // which would incorrectly set hasUncommittedChanges and clear redo stack
-        if (contentChanged) {
-            undoManager.markContentChanged()
         }
     }
 

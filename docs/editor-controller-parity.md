@@ -46,7 +46,7 @@ class-private vs TS module-level functions) but their inputs and outputs match.
 | `setContentCursor(lineIndex, contentPosition)` | **android-only** | Convenience wrapper used by Android IME/touch plumbing; web callers compute the offset inline. |
 | `isContentOffsetInSelection(lineIndex, contentPosition)` | **android-only** | Tap hit-test for selection; web does this in mouse-handler hooks. |
 | `setCursorFromGlobalOffset(globalOffset)` | mirrored | |
-| `updateLineContent(lineIndex, newContent, contentCursor)` | mirrored | Used by IME/onChange path. |
+| `updateLineContent(lineIndex, newContent, contentCursor)` | mirrored | Used by IME/onChange path. Body decomposed into private helpers `splitLineOnNewline`, `applyContent`, and (Android-only) `stampNoteIdSentinelIfNeeded`. |
 | `focusLine(lineIndex)` | mirrored | |
 | `hasSelection()` | mirrored | Method on Android, getter on web. |
 | `setSelection(start, end)` | mirrored | |
@@ -96,6 +96,12 @@ in sync only as platform conventions evolve.
    scoping. Kotlin: `private fun` on the class. TypeScript: module-level
    `function` in the same file. The bodies must mirror — both handle
    sentinel-vs-real-id collapsing identically.
+
+7. **`stampNoteIdSentinelIfNeeded`.** Android-only private helper called from
+   `updateLineContent`. Stamps a TYPED sentinel on a non-root line that has
+   non-empty content but no id yet — defends against an Activity ON_STOP
+   (rotation) firing a save before the user presses Enter. Web has no
+   equivalent lifecycle event, so the helper does not exist there.
 
 ## Where shared logic actually lives
 

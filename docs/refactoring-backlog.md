@@ -24,8 +24,12 @@ Master list of code-quality issues identified in the codebase audit (2026-04-26)
 - [x] **6. `web/src/components/EditorLine.tsx` — 683 lines; selection-rect math, ResizeObserver, DOM queries, and drag handlers entangled.** _(done; 679 → 245 lines)_
   Extracted 4 hooks under `web/src/hooks/`: `useSelectionRects` (111), `useTextareaAutoResize` (30), `useEditorLineKeyboard` (301), `useEditorLineMouse` (125). Simplify pass also added a `findVisibleNeighbor(fromIndex, direction)` method to `EditorController` and replaced 8 inline `while (target ≥ 0 && hiddenIndices.has(target)) target--/++` walks (6 in the new keyboard hook, 2 pre-existing in `deleteBackward`/`deleteForward`); moved `composingRef` into the keyboard hook; updated the test to import `shouldSyncCursorForKey` from `@/hooks/useEditorLineKeyboard` and dropped the EditorLine.tsx re-export. All 1596 web tests pass.
 
-- [ ] **7. `EditorController.kt` `updateLineContent` — ~77-line method with deep conditional state updates.**
-  Candidate for decomposition. Was originally linked to #4's `EditOperation` plan; that approach was rejected in #4. Consider as a standalone Extract-Method pass on each platform independently (the bodies already mirror — see `docs/editor-controller-parity.md`).
+- [x] **7. `EditorController.kt` `updateLineContent` — ~77-line method with deep conditional state updates.** _(done; Android 77 → 25-line public body, web 52 → 19-line public body)_
+  Extract-method pass on both platforms, kept signature-compatible. Three new private helpers per `docs/editor-controller-parity.md`:
+  - `splitLineOnNewline(lineIndex, line, newContent)` — entire newline-insertion branch (prepareForStructuralChange → splitNoteIds → updateContent → createNewLineWithPrefix → continueAfterStructuralChange).
+  - `applyContent(line, newContent, contentCursor)` — prefix-conversion-or-plain update; the `updateFull` vs `updateContent` choice based on `convertSourcePrefix`.
+  - `stampNoteIdSentinelIfNeeded(lineIndex, line)` — Android-only TYPED sentinel stamp for the rotation/ON_STOP-before-Enter case; web has no equivalent lifecycle event so the helper is absent there. Documented as divergence #7 in the parity doc.
+  Behavior is line-for-line preserved; the existing public-API tests (Android `EditorControllerTest`/`NoteIdPropagationTest`/`InlineEditSessionTest` and the 12 `convertSourcePrefix`-shaped cases in `web/src/__tests__/editor/EditorController.test.ts`) cover all three branches and pass on both platforms. Simplify pass surfaced no actionable findings; two pre-existing observations were filed as items #14 and #15 below.
 
 ## Lower severity
 
@@ -43,6 +47,12 @@ Master list of code-quality issues identified in the codebase audit (2026-04-26)
 
 - [x] **13. Source-space char-index resolver duplication (web).** _(done)_ Surfaced during item #6 simplify pass.
   Extracted `getSourceCharOffsetInLine(overlay, directive, textarea, resolveSegments, fallback, x, y)` in `web/src/editor/TextMeasure.ts` — both `useEditorLineMouse.getSourceCharIndex` (per-line) and `hitTestLineFromPoint` (across-lines) now route through it. `getCharOffsetHidingTextarea`/`getCharOffsetFromPoint` are no longer called outside `TextMeasure.ts`. The chip-line path uses a lazy `resolveSegments` thunk so segments are only computed when the directive content is actually hit. `hitTestLineFromPoint` and `positionDropCursorFromPoint` accept an optional `getSegments(lineIndex) => DirectiveSegment[] | null` resolver, and `useEditorInteractions` threads it through — opens the door for view editors / main editor to opt into source-space drag-selection on chip lines (correctness work tracked separately, requires plumbing directive results into the hook callers). All 1596 web tests pass.
+
+- [ ] **14. `splitLineOnNewline` ↔ `splitLine` scaffolding duplication (both platforms).** Surfaced during item #7 simplify pass.
+  Both methods share the same shape: `prepareForStructuralChange` → `clearSelection` → compute before/after halves → `splitNoteIds` → `updateContent` first half → `createNewLineWithPrefix` → `continueAfterStructuralChange`. They diverge only in (a) where the split point comes from (newline index vs cursor position), and (b) `splitLine` has additional checked-state-clearing logic for the at-prefix-boundary case. A unified private helper taking `(beforeText, afterText, prefix, beforeNoteIds, afterNoteIds, lengths, preserveChecked)` could absorb the scaffolding while leaving the differences in the callers. Pre-existing — not introduced by item #7.
+
+- [ ] **15. `convertSourcePrefix` runs on no-op IME syncs (both platforms).** Surfaced during item #7 simplify pass.
+  In the non-newline branch of `updateLineContent`, `convertSourcePrefix(newContent, line.prefix)` is invoked on every keystroke even when `contentChanged === false` (e.g. `finishComposingText` syncing the same text back). The cost is small (a few `startsWith` checks) but not zero, and the call is on the per-keystroke hot path. Guarding the call behind `contentChanged` would skip it on no-op syncs. Pre-existing — not introduced by item #7.
 
 - [ ] **12. Time-picker dialog + time formatting duplication.** Surfaced during item #5 simplify pass.
   - `AlarmStageRow.StageTimePicker` is structurally near-identical to the time-picker dialog inside `ui/components/DateTimePicker.kt` (same `Surface`/`TimePicker`/cancel-OK shape). Extract a shared `TimePickerDialog(initialHour, initialMinute, is24Hour, onConfirm, onDismiss)`.

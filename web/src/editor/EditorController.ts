@@ -743,27 +743,7 @@ export class EditorController {
     if (!line) return
 
     if (newContent.includes('\n')) {
-      this.undoManager.prepareForStructuralChange(this.state.lines, this.state.focusedLineIndex)
-      this.state.clearSelection()
-      const nlIndex = newContent.indexOf('\n')
-      const beforeNewline = newContent.substring(0, nlIndex)
-      const afterNewline = newContent.substring(nlIndex + 1)
-
-      const noteIds = line.noteIds
-      const [currentNoteIds, newNoteIds] = splitNoteIds(
-        noteIds,
-        beforeNewline.length,
-        afterNewline.length,
-        beforeNewline.length > 0,
-        afterNewline.length > 0,
-        line.noteIdContentLengths,
-      )
-
-      line.updateContent(beforeNewline, beforeNewline.length)
-      line.noteIds = currentNoteIds
-      const preserveChecked = afterNewline.length > 0
-      this.createNewLineWithPrefix(lineIndex, afterNewline, line.prefix, newNoteIds, preserveChecked)
-      this.undoManager.continueAfterStructuralChange(this.state.focusedLineIndex)
+      this.splitLineOnNewline(lineIndex, line, newContent)
       return
     }
 
@@ -772,23 +752,52 @@ export class EditorController {
       this.state.clearSelection()
     }
 
-    // Convert source prefixes to display prefixes (e.g. "* " → "• ")
-    // Only when the line doesn't already have a bullet/checkbox prefix
+    this.applyContent(line, newContent, contentCursor)
+    this.state.notifyChange()
+
+    if (contentChanged) {
+      this.undoManager.markContentChanged()
+    }
+  }
+
+  private splitLineOnNewline(lineIndex: number, line: LineState, newContent: string): void {
+    this.undoManager.prepareForStructuralChange(this.state.lines, this.state.focusedLineIndex)
+    this.state.clearSelection()
+
+    const nlIndex = newContent.indexOf('\n')
+    const beforeNewline = newContent.substring(0, nlIndex)
+    const afterNewline = newContent.substring(nlIndex + 1)
+
+    const [currentNoteIds, newNoteIds] = splitNoteIds(
+      line.noteIds,
+      beforeNewline.length,
+      afterNewline.length,
+      beforeNewline.length > 0,
+      afterNewline.length > 0,
+      line.noteIdContentLengths,
+    )
+
+    line.updateContent(beforeNewline, beforeNewline.length)
+    line.noteIds = currentNoteIds
+
+    const preserveChecked = afterNewline.length > 0
+    this.createNewLineWithPrefix(lineIndex, afterNewline, line.prefix, newNoteIds, preserveChecked)
+
+    // Continue pending state on new line so Enter + subsequent typing group as one undo.
+    this.undoManager.continueAfterStructuralChange(this.state.focusedLineIndex)
+  }
+
+  private applyContent(line: LineState, newContent: string, contentCursor: number): void {
     const converted = convertSourcePrefix(newContent, line.prefix)
     if (converted) {
-      // Use updateFull to avoid double-read of the prefix getter in updateContent
-      // (the converted content starts with a display prefix, which would be counted
-      // twice: once as existing prefix, once as part of new text)
+      // updateFull avoids double-counting the prefix: convertSourcePrefix returns
+      // text starting with a display prefix, which updateContent would treat as
+      // additional content on top of the existing prefix.
       const newText = line.prefix + converted.text
       const newCursor = line.prefix.length + converted.cursor
       line.updateFull(newText, newCursor)
     } else {
       line.updateContent(newContent, contentCursor)
-    }
-    this.state.notifyChange()
-
-    if (contentChanged) {
-      this.undoManager.markContentChanged()
     }
   }
 
