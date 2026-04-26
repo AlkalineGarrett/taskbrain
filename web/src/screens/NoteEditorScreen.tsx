@@ -188,14 +188,14 @@ export function NoteEditorScreen() {
 
       {saveError && (
         <div className={styles.saveErrorBanner}>
-          <span>{SAVE_ERROR_BANNER}</span>
+          <span>{SAVE_ERROR_BANNER}: {saveError}</span>
           <button className={styles.saveErrorDismiss} onClick={clearSaveError}>{SAVE_ERROR_DISMISS}</button>
         </div>
       )}
 
       {syncError && (
         <div className={styles.saveErrorBanner}>
-          <span>{SYNC_ERROR_BANNER}</span>
+          <span>{SYNC_ERROR_BANNER}: {syncError}</span>
           <button className={styles.saveErrorDismiss} onClick={() => noteStore.clearError()}>{SAVE_ERROR_DISMISS}</button>
         </div>
       )}

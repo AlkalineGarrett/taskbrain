@@ -15,7 +15,7 @@ import {
 import type { Auth } from 'firebase/auth'
 import { noteFromFirestore, type Note, type NoteLine } from './Note'
 import { reconstructNoteContent, reconstructNoteLines } from './NoteReconstruction'
-import { noteStore } from './NoteStore'
+import { noteStore, NoteStoreNotLoadedError } from './NoteStore'
 import { isSentinelNoteId, isRealNoteId } from './NoteIdSentinel'
 import { performSimilarityMatching } from '@/editor/ContentSimilarity'
 
@@ -228,6 +228,8 @@ export class NoteRepository {
   ): Promise<Map<number, string>> {
     return this.logged('saveNoteWithChildren', async () => {
       if (trackedLines.length === 0) return new Map()
+      this.assertNoteStoreLoaded('saveNoteWithChildren', noteId)
+      this.warnIfDescendantsLikelyStale('saveNoteWithChildren', noteId)
 
       const userId = this.requireUserId()
       const parentRef = this.noteRef(noteId)
@@ -280,16 +282,29 @@ export class NoteRepository {
         }
       }
 
-      // Fetch existing descendants for deletion tracking
-      const existingDescendantIds = await this.fetchExistingDescendantIds(noteId)
+      // Pull existing descendants from in-memory NoteStore — the listener
+      // already mirrors Firestore truth, so the save no longer pays a
+      // descendant-collection read on every commit.
+      const existingDescendantIds = noteStore.getDescendantIds(noteId)
+
+      // Compute surviving IDs upfront so the content-drop guard can run
+      // before any transaction work; matches the Android save path.
+      const survivingIds = new Set<string>()
+      for (let i = 1; i < linesToSave.length; i++) {
+        survivingIds.add(effectiveId(i))
+      }
+      const toDelete = new Set<string>()
+      for (const id of existingDescendantIds) {
+        if (!survivingIds.has(id)) toDelete.add(id)
+      }
+
+      this.assertNotContentDrop(noteId, trackedLines, linesToSave, existingDescendantIds, survivingIds, toDelete)
 
       // Fix parent cycles: if this note's parent chain loops back
       // to itself, clear parentNoteId/rootNoteId to make it a root note.
       const hasCycle = this.hasParentCycle(noteId)
 
       return runTransaction(this.db, async (transaction) => {
-        const survivingIds = new Set<string>()
-
         // Update root
         const rootData: Record<string, unknown> = {
           ...this.baseNoteData(userId, rootContent),
@@ -307,7 +322,6 @@ export class NoteRepository {
 
           const id = effectiveId(i)
           const parentId = effectiveId(parentOfLine[i]!)
-          survivingIds.add(id)
 
           if (isRealNoteId(linesToSave[i]!.noteId)) {
             transaction.set(
@@ -336,15 +350,13 @@ export class NoteRepository {
         }
 
         // Soft-delete removed notes and clear parent refs to prevent orphan cycles
-        for (const id of existingDescendantIds) {
-          if (!survivingIds.has(id)) {
-            transaction.update(this.noteRef(id), {
-              state: 'deleted',
-              parentNoteId: null,
-              rootNoteId: null,
-              updatedAt: serverTimestamp(),
-            })
-          }
+        for (const id of toDelete) {
+          transaction.update(this.noteRef(id), {
+            state: 'deleted',
+            parentNoteId: null,
+            rootNoteId: null,
+            updatedAt: serverTimestamp(),
+          })
         }
 
         const createdIds = new Map<number, string>()
@@ -356,15 +368,107 @@ export class NoteRepository {
     })
   }
 
-  private async fetchExistingDescendantIds(noteId: string): Promise<Set<string>> {
-    const userId = this.requireUserId()
-    const descendantQuery = query(this.notesRef, where('rootNoteId', '==', noteId), where('userId', '==', userId))
-    const descendantSnap = await getDocs(descendantQuery)
+  /**
+   * Hard guard for ops that read descendants from NoteStore. Throws a
+   * `NoteStoreNotLoadedError` (with auto-captured stack) when violated; the
+   * `logged()` wrapper prints message+stack to the console and the message
+   * propagates to the caller's error UI (saveError banner / list error row).
+   */
+  private assertNoteStoreLoaded(operation: string, noteId: string): void {
+    if (noteStore.isLoaded()) return
+    throw new NoteStoreNotLoadedError(operation, noteId)
+  }
 
-    return new Set(
-      descendantSnap.docs
-        .filter((d) => d.data().state !== 'deleted')
-        .map((d) => d.id),
+  /**
+   * Content-drop guard: aborts the save if it would soft-delete more than
+   * half of the note's directly-declared `containedNotes` children. Mirrors
+   * the Android guard. Defends against an editor bug or partial-sync window
+   * dropping line identities and accidentally wiping the user's content.
+   *
+   * Compares against `containedNotes ∩ existingDescendants`, ignoring orphan
+   * refs (declared but not in rawNotes) so a save of an auto-healed note
+   * doesn't false-trip.
+   */
+  private assertNotContentDrop(
+    noteId: string,
+    originalTrackedLines: NoteLine[],
+    linesToSave: NoteLine[],
+    existingDescendantIds: Set<string>,
+    survivingIds: Set<string>,
+    toDelete: Set<string>,
+  ): void {
+    const storeNote = noteStore.getNoteById(noteId)
+    const declaredContainedNotes = new Set(storeNote?.containedNotes ?? [])
+    const realContainedNotes = new Set<string>()
+    for (const id of declaredContainedNotes) {
+      if (existingDescendantIds.has(id)) realContainedNotes.add(id)
+    }
+    const orphanRefs: string[] = []
+    for (const id of declaredContainedNotes) {
+      if (!existingDescendantIds.has(id)) orphanRefs.push(id)
+    }
+    if (orphanRefs.length > 0) {
+      console.warn(
+        `saveNoteWithChildren(${noteId}): ignoring ${orphanRefs.length} orphan ` +
+        `containedNotes refs for content-drop guard (no live child): ` +
+        `[${orphanRefs.join(', ')}]`,
+      )
+    }
+    const directToDelete = new Set<string>()
+    for (const id of realContainedNotes) {
+      if (!survivingIds.has(id)) directToDelete.add(id)
+    }
+    if (realContainedNotes.size < 3) return
+    if (directToDelete.size <= realContainedNotes.size / 2) return
+
+    const diagnostics = buildContentDropDiagnostics(
+      noteId, originalTrackedLines, linesToSave, existingDescendantIds, survivingIds, toDelete, storeNote,
+    )
+    console.error(diagnostics)
+    throw new ContentDropAbortError(
+      `Save aborted: would delete ${toDelete.size} of ` +
+      `${existingDescendantIds.size} child notes ` +
+      `(saving ${linesToSave.length} lines). ` +
+      `This was blocked to prevent data loss. ` +
+      `Your note content is still safe — please save again. ` +
+      `Open devtools console for full diagnostics.`,
+    )
+  }
+
+  /**
+   * Soft guard: detect the brief race window where a note's `containedNotes`
+   * declares children whose docs haven't arrived in the listener's snapshot
+   * yet. Save would proceed with an incomplete descendant set, so we warn the
+   * user (banner via `noteStore.raiseWarning`) and log a full diagnostic with
+   * stack to the console for debugging.
+   */
+  private warnIfDescendantsLikelyStale(operation: string, noteId: string): void {
+    const rawNote = noteStore.getRawNoteById(noteId)
+    if (!rawNote) return
+    const declared = rawNote.containedNotes ?? []
+    if (declared.length === 0) return
+
+    const missing: string[] = []
+    for (const id of declared) {
+      if (!noteStore.getRawNoteById(id)) missing.push(id)
+    }
+    if (missing.length === 0) return
+
+    const stack = new Error().stack ?? '(stack unavailable)'
+    const sampleIds = missing.slice(0, 5).join(', ')
+    const ellipsis = missing.length > 5 ? `, ... (+${missing.length - 5} more)` : ''
+    console.warn(
+      `[NoteStore stale] ${operation}(noteId=${noteId}): ${rawNote.id} declares ` +
+      `${declared.length} child note(s) but ${missing.length} are not in the ` +
+      `local store yet: [${sampleIds}${ellipsis}]. The descendant set used ` +
+      `for soft-delete tracking may be incomplete; if any of these were ` +
+      `removed in this save, their old docs will remain active until the ` +
+      `next save after the listener catches up.\n\nStack:\n${stack}`,
+    )
+    noteStore.raiseWarning(
+      `Note has ${missing.length} child note(s) not yet visible in the local ` +
+      `store; recent edits may not be fully synced. ` +
+      `Open devtools console for full diagnostic.`,
     )
   }
 
@@ -390,8 +494,14 @@ export class NoteRepository {
   ): Promise<Map<number, string>> {
     return this.logged('saveNoteWithFullContent', async () => {
       this.requireUserId()
+      this.assertNoteStoreLoaded('saveNoteWithFullContent', noteId)
+      this.warnIfDescendantsLikelyStale('saveNoteWithFullContent', noteId)
 
-      const { lines: existingLines } = await this.loadNoteWithChildren(noteId)
+      // Prefer NoteStore in-memory lines; fall back to Firestore only when
+      // the store doesn't have this specific note yet (e.g., immediately
+      // after createNote, before the listener echo). Mirrors Android.
+      const existingLines = noteStore.getNoteLinesById(noteId)
+        ?? (await this.loadNoteWithChildren(noteId)).lines
 
       const newLinesContent = newContent.split('\n')
       const trackedLines = matchLinesToIds(noteId, existingLines, newLinesContent, editorNoteIds)
@@ -492,14 +602,10 @@ export class NoteRepository {
    */
   async softDeleteNote(noteId: string): Promise<void> {
     return this.logged('softDeleteNote', async () => {
-      const userId = this.requireUserId()
-      const idsToDelete = new Set([noteId])
-
-      const descendantQuery = query(this.notesRef, where('rootNoteId', '==', noteId), where('userId', '==', userId))
-      const descendantSnap = await getDocs(descendantQuery)
-      for (const d of descendantSnap.docs) {
-        idsToDelete.add(d.id)
-      }
+      this.requireUserId()
+      this.assertNoteStoreLoaded('softDeleteNote', noteId)
+      this.warnIfDescendantsLikelyStale('softDeleteNote', noteId)
+      const idsToDelete = new Set([noteId, ...noteStore.getDescendantIds(noteId)])
 
       const batch = writeBatch(this.db)
       for (const id of idsToDelete) {
@@ -548,15 +654,13 @@ export class NoteRepository {
    */
   async undeleteNote(noteId: string): Promise<void> {
     return this.logged('undeleteNote', async () => {
-      const userId = this.requireUserId()
-
-      const idsToRestore = new Set([noteId])
-
-      const descendantQuery = query(this.notesRef, where('rootNoteId', '==', noteId), where('userId', '==', userId))
-      const descendantSnap = await getDocs(descendantQuery)
-      for (const d of descendantSnap.docs) {
-        idsToRestore.add(d.id)
-      }
+      this.requireUserId()
+      this.assertNoteStoreLoaded('undeleteNote', noteId)
+      // Use getAllDescendantIds (includes soft-deleted) since restoring a tree
+      // should bring back its soft-deleted descendants too. Skip the
+      // stale-descendants warning: a deleted note's containedNotes only lists
+      // active children, so it can't detect missing soft-deleted descendants.
+      const idsToRestore = new Set([noteId, ...noteStore.getAllDescendantIds(noteId)])
 
       const batch = writeBatch(this.db)
       for (const id of idsToRestore) {
@@ -581,6 +685,74 @@ export class NoteRepository {
     })
   }
 
+}
+
+
+/**
+ * Thrown when [NoteRepository.saveNoteWithChildren] aborts because the save
+ * would soft-delete an unreasonable number of declared child notes,
+ * indicating either an editor bug that wiped line identities or a partial-
+ * sync race. Mirrors the Android `ContentDropAbortException`.
+ */
+export class ContentDropAbortError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ContentDropAbortError'
+  }
+}
+
+function buildContentDropDiagnostics(
+  noteId: string,
+  originalTrackedLines: NoteLine[],
+  linesToSave: NoteLine[],
+  existingDescendantIds: Set<string>,
+  survivingIds: Set<string>,
+  toDelete: Set<string>,
+  storeNote: Note | undefined,
+): string {
+  const lines: string[] = []
+  lines.push('=== CONTENT DROP GUARD TRIGGERED ===')
+  lines.push(`noteId: ${noteId}`)
+  lines.push(`originalTrackedLines: ${originalTrackedLines.length}`)
+  lines.push(`linesToSave: ${linesToSave.length}`)
+  lines.push(`existingDescendants (rootNoteId in NoteStore): ${existingDescendantIds.size} ${[...existingDescendantIds].join(', ')}`)
+  lines.push(`survivingIds: ${survivingIds.size} ${[...survivingIds].join(', ')}`)
+  lines.push(`toDelete: ${toDelete.size} ${[...toDelete].join(', ')}`)
+
+  lines.push('--- containedNotes guard ---')
+  const containedNotes = storeNote?.containedNotes ?? []
+  lines.push(`  containedNotes: ${containedNotes.length} [${containedNotes.join(', ')}]`)
+  const directToDelete: string[] = []
+  for (const id of containedNotes) {
+    if (!survivingIds.has(id)) directToDelete.push(id)
+  }
+  lines.push(`  directToDelete (containedNotes − surviving): ${directToDelete.length} [${directToDelete.join(', ')}]`)
+
+  lines.push('--- trackedLines detail ---')
+  for (let i = 0; i < originalTrackedLines.length; i++) {
+    const line = originalTrackedLines[i]!
+    const preview = line.content.slice(0, 60).replace(/\n/g, '\\n')
+    lines.push(`  [${i}] noteId=${line.noteId ?? 'null'} content='${preview}'`)
+  }
+
+  lines.push('--- NoteStore state ---')
+  if (storeNote) {
+    lines.push(`  parentNoteId: ${storeNote.parentNoteId ?? 'null'}`)
+    lines.push(`  rootNoteId: ${storeNote.rootNoteId ?? 'null'}`)
+    lines.push(`  state: ${storeNote.state ?? 'active'}`)
+    const storeLines = storeNote.content.split('\n')
+    lines.push(`  content lines: ${storeLines.length}`)
+    for (let i = 0; i < storeLines.length; i++) {
+      lines.push(`  [${i}] '${storeLines[i]!.slice(0, 60)}'`)
+    }
+  } else {
+    lines.push(`  NoteStore has NO entry for ${noteId}`)
+  }
+
+  lines.push('--- Stack trace ---')
+  lines.push(new Error().stack?.split('\n').slice(2, 17).join('\n') ?? '(unavailable)')
+  lines.push('=== END CONTENT DROP GUARD ===')
+  return lines.join('\n')
 }
 
 

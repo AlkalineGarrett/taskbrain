@@ -164,6 +164,9 @@ object NoteStore {
         deferred.await()
     }
 
+    /** Whether the first Firestore snapshot has arrived. */
+    fun isLoaded(): Boolean = loaded
+
     /** Stop listening and clear all data (e.g., on logout). */
     fun clear() {
         listenerRegistration?.remove()
@@ -462,6 +465,27 @@ object NoteStore {
     }
 
     // --- Parsing ---
+
+    /**
+     * Thrown when a code path that depends on a fully-loaded NoteStore runs
+     * before the live listener has received its first snapshot. Save/delete
+     * operations read the descendant set from NoteStore — running them before
+     * the snapshot has arrived would silently miss soft-deleting removed
+     * descendants, leaving orphaned documents in Firestore.
+     *
+     * The Throwable superclass auto-captures the stack, so [Log.e] on the
+     * caller side prints the full call chain.
+     */
+    class NoteStoreNotLoadedException(
+        val operation: String,
+        val noteId: String,
+    ) : IllegalStateException(
+        "[NoteStore not loaded] $operation(noteId=$noteId) ran before the " +
+            "live note listener received its first snapshot. " +
+            "Save/delete operations read descendants from the in-memory NoteStore; " +
+            "running them now would silently miss soft-deleting removed descendants, " +
+            "leaving orphaned documents. Try again after the note list has loaded."
+    )
 
     @Suppress("UNCHECKED_CAST")
     private fun parseNote(id: String, data: Map<String, Any>?): Note? {

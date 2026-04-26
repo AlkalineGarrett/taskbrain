@@ -187,37 +187,68 @@ export function useEditor(noteId: string | undefined) {
       setShowLoading(false)
       scheduleRecordView()
 
-      // Refresh tracked line IDs from Firestore (the fire-and-forget save
-      // may have created new child notes with IDs we don't have yet)
-      void repo.loadNoteWithChildren(noteId).then(({ lines: freshLines }) => {
+      // Refresh tracked line IDs from NoteStore once any inflight save echoes
+      // through (the fire-and-forget switch-away save may have created new
+      // child notes with IDs we don't have yet). If NoteStore is stale, we
+      // skip silently — the next save's reconcile path recovers IDs.
+      void (async () => {
+        await noteStore.awaitPendingSave(noteId)
         if (cancelled) return
-        const freshContent = freshLines.map((l) => l.content).join('\n')
+        const storeLines = noteStore.getNoteLinesById(noteId)
+        if (!storeLines) {
+          // We have cached unsaved edits for this note, so we expected
+          // NoteStore to know about it. Anomalous; log so a future bug
+          // surface can be traced. Not user-facing — the next save's
+          // reconcile path recovers IDs regardless.
+          if (noteStore.isLoaded()) {
+            console.warn(
+              `[useEditor] cached-dirty refresh: note ${noteId} missing from ` +
+              `loaded NoteStore. Tracked line IDs will be stale until next save.\n` +
+              `Stack:\n${new Error().stack ?? '(unavailable)'}`,
+            )
+          }
+          return
+        }
+        const freshContent = storeLines.map((l) => l.content).join('\n')
         const currentContent = editorState.lines.map((l) => l.text).join('\n')
         if (freshContent === currentContent) {
-          trackedLinesRef.current = freshLines
+          trackedLinesRef.current = storeLines
           editorState.updateNoteIds(
-            freshLines.map((l) => (l.noteId ? [l.noteId] : [])),
+            storeLines.map((l) => (l.noteId ? [l.noteId] : [])),
           )
           setDirty(false)
         }
-      }).catch(() => { /* editor state is still usable */ })
+      })()
 
       return cleanup
     }
 
-    // Load from Firestore — canonical path for clean notes
+    // Canonical clean-load path: prefer the live NoteStore snapshot; fall back
+    // to Firestore only when the store hasn't loaded yet or doesn't have the
+    // note (e.g., immediately after createNote, before the listener echo).
     setLoading(true)
     const loadNote = async () => {
       try {
         setError(null)
-        // Await any pending inline-edit saves for this note to avoid reading stale data
         await noteStore.awaitPendingSave(noteId)
-        const { lines, showCompleted } = await repo.loadNoteWithChildren(noteId)
+        if (cancelled) return
 
+        if (noteStore.isLoaded()) {
+          const rawNote = noteStore.getRawNoteById(noteId)
+          const storeLines = rawNote ? noteStore.getNoteLinesById(noteId) : undefined
+          if (rawNote && storeLines) {
+            setShowCompleted(rawNote.showCompleted ?? true)
+            populateEditor(storeLines, false, false)
+            setShowLoading(false)
+            scheduleRecordView()
+            return
+          }
+        }
+
+        const { lines, showCompleted } = await repo.loadNoteWithChildren(noteId)
         setShowCompleted(showCompleted)
         populateEditor(lines, false, false)
         setShowLoading(false)
-
         scheduleRecordView()
       } catch (e) {
         if (!cancelled) {

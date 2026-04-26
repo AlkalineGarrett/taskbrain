@@ -45,6 +45,53 @@ class NoteRepository(
 
     private fun newNoteRef(): DocumentReference = notesCollection.document()
 
+    /**
+     * Hard guard for ops that read descendants from NoteStore. Throws a
+     * [NoteStore.NoteStoreNotLoadedException] (Throwable auto-captures the
+     * stack) when violated; [ioLogged] then logs the failure with `Log.e` and
+     * the message propagates to the caller via [Result.failure] — the
+     * ViewModel's [UnifiedSaveStatus.PartialError] / [LoadStatus.Error] paths
+     * surface it to the user.
+     */
+    private fun assertNoteStoreLoaded(operation: String, noteId: String) {
+        if (NoteStore.isLoaded()) return
+        throw NoteStore.NoteStoreNotLoadedException(operation, noteId)
+    }
+
+    /**
+     * Soft guard: detect the brief race window where a note's [containedNotes]
+     * declares children whose docs haven't arrived in the listener's snapshot
+     * yet. Save would proceed with an incomplete descendant set, so we warn the
+     * user (banner via [NoteStore.raiseWarning]) and log a full diagnostic with
+     * stack to logcat for debugging.
+     */
+    private fun warnIfDescendantsLikelyStale(operation: String, noteId: String) {
+        val rawNote = NoteStore.getRawNoteById(noteId) ?: return
+        val declared = rawNote.containedNotes
+        if (declared.isEmpty()) return
+
+        val missing = declared.filter { NoteStore.getRawNoteById(it) == null }
+        if (missing.isEmpty()) return
+
+        val sample = missing.take(5).joinToString(", ")
+        val ellipsis = if (missing.size > 5) ", ... (+${missing.size - 5} more)" else ""
+        val stack = Throwable("warnIfDescendantsLikelyStale callsite").stackTraceToString()
+        Log.w(
+            TAG,
+            "[NoteStore stale] $operation(noteId=$noteId): note declares " +
+                "${declared.size} child note(s) but ${missing.size} are not in " +
+                "the local store yet: [$sample$ellipsis]. The descendant set used " +
+                "for soft-delete tracking may be incomplete; if any of these were " +
+                "removed in this save, their old docs will remain active until " +
+                "the next save after the listener catches up.\n$stack"
+        )
+        NoteStore.raiseWarning(
+            "Note has ${missing.size} child note(s) not yet visible in the local " +
+                "store; recent edits may not be fully synced. " +
+                "Check logcat tag '$TAG' for full diagnostic."
+        )
+    }
+
     private fun baseNoteData(userId: String, content: String) = hashMapOf(
         "userId" to userId,
         "content" to content,
@@ -236,6 +283,8 @@ class NoteRepository(
         extraOpsBuilder: ExtraOpsBuilder?,
     ): Result<Map<Int, String>> = ioLogged("saveNoteWithChildren") body@{
         if (trackedLines.isEmpty()) return@body emptyMap()
+        assertNoteStoreLoaded("saveNoteWithChildren", noteId)
+        warnIfDescendantsLikelyStale("saveNoteWithChildren", noteId)
 
         // One pass: categorize each descendant line as real-id, sentinel
         // (with origin), or null (upstream-bug signal). Sentinels are an
@@ -681,6 +730,8 @@ class NoteRepository(
      */
     suspend fun saveNoteWithFullContent(noteId: String, newContent: String): Result<Unit> = ioLogged("saveNoteWithFullContent") {
         requireUserId()
+        assertNoteStoreLoaded("saveNoteWithFullContent", noteId)
+        warnIfDescendantsLikelyStale("saveNoteWithFullContent", noteId)
 
         // Prefer NoteStore in-memory data (works offline) with Firestore fallback.
         val existingLines = NoteStore.getNoteLinesById(noteId)
@@ -783,6 +834,8 @@ class NoteRepository(
      */
     suspend fun softDeleteNote(noteId: String): Result<Unit> = ioLogged("softDeleteNote") {
         requireUserId()
+        assertNoteStoreLoaded("softDeleteNote", noteId)
+        warnIfDescendantsLikelyStale("softDeleteNote", noteId)
         val idsToDelete = NoteStore.getDescendantIds(noteId) + noteId
         val deleteData = mapOf("state" to "deleted", "updatedAt" to FieldValue.serverTimestamp())
         commitInBatches(idsToDelete.map { BatchOp(noteRef(it), deleteData, merge = true) })
@@ -793,9 +846,10 @@ class NoteRepository(
      */
     suspend fun undeleteNote(noteId: String): Result<Unit> = ioLogged("undeleteNote") {
         requireUserId()
-        // Use getDescendantIds which excludes deleted notes, plus the root itself.
-        // Also include all rawNotes with matching rootNoteId regardless of state,
-        // since deleted descendants should also be restored.
+        assertNoteStoreLoaded("undeleteNote", noteId)
+        // Skip warnIfDescendantsLikelyStale: a deleted note's containedNotes
+        // only lists active children, so it can't detect missing soft-deleted
+        // descendants — the heuristic doesn't apply here.
         val idsToRestore = NoteStore.getAllDescendantIds(noteId) + noteId
         val restoreData = mapOf<String, Any?>("state" to null, "updatedAt" to FieldValue.serverTimestamp())
         commitInBatches(idsToRestore.map { BatchOp(noteRef(it), restoreData, merge = true) })

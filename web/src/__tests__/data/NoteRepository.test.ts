@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { NoteRepository, matchLinesToIds } from '../../data/NoteRepository'
+import { NoteRepository, matchLinesToIds, ContentDropAbortError } from '../../data/NoteRepository'
+import { noteStore } from '../../data/NoteStore'
 import type { Firestore, DocumentReference } from 'firebase/firestore'
 import type { Auth } from 'firebase/auth'
 import type { NoteLine } from '../../data/Note'
@@ -67,6 +68,11 @@ beforeEach(() => {
 
   // Default: no tree-format descendants
   mockEmptyTreeQuery()
+
+  // Save/delete ops require NoteStore to be loaded; default to loaded for
+  // tests that aren't exercising the load guard. Tests for the guard itself
+  // override this.
+  vi.spyOn(noteStore, 'isLoaded').mockReturnValue(true)
 
   repository = new NoteRepository(mockDb, mockAuth)
 })
@@ -666,13 +672,8 @@ describe('NoteRepository', () => {
 
   describe('softDeleteNote', () => {
     it('deletes root and new-format descendants', async () => {
-      vi.mocked(mockGetDocs).mockResolvedValue({
-        docs: [
-          { id: 'child_1', data: () => ({}) },
-          { id: 'child_2', data: () => ({}) },
-        ],
-        empty: false,
-      } as any)
+      const getDescendantIdsSpy = vi.spyOn(noteStore, 'getDescendantIds')
+        .mockReturnValue(new Set(['child_1', 'child_2']))
       const batch = { update: vi.fn(), commit: vi.fn().mockResolvedValue(undefined) }
       vi.mocked(mockWriteBatch).mockReturnValue(batch as any)
       vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
@@ -683,10 +684,11 @@ describe('NoteRepository', () => {
 
       // root + 2 children
       expect(batch.update).toHaveBeenCalledTimes(3)
+      getDescendantIdsSpy.mockRestore()
     })
 
     it('deletes only root when no descendants', async () => {
-      vi.mocked(mockGetDocs).mockResolvedValue({ docs: [], empty: true } as any)
+      const getDescendantIdsSpy = vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set())
       vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
         return { id: args[args.length - 1] } as any
       })
@@ -696,18 +698,14 @@ describe('NoteRepository', () => {
       await repository.softDeleteNote('note_1')
 
       expect(batch.update).toHaveBeenCalledTimes(1)
+      getDescendantIdsSpy.mockRestore()
     })
   })
 
   describe('undeleteNote', () => {
     it('restores root and new-format descendants', async () => {
-      vi.mocked(mockGetDocs).mockResolvedValue({
-        docs: [
-          { id: 'child_1', data: () => ({}) },
-          { id: 'child_2', data: () => ({}) },
-        ],
-        empty: false,
-      } as any)
+      const getAllDescendantIdsSpy = vi.spyOn(noteStore, 'getAllDescendantIds')
+        .mockReturnValue(new Set(['child_1', 'child_2']))
       const batch = { update: vi.fn(), commit: vi.fn().mockResolvedValue(undefined) }
       vi.mocked(mockWriteBatch).mockReturnValue(batch as any)
       vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
@@ -717,8 +715,153 @@ describe('NoteRepository', () => {
       await repository.undeleteNote('note_1')
 
       expect(batch.update).toHaveBeenCalledTimes(3)
+      getAllDescendantIdsSpy.mockRestore()
     })
 
+  })
+
+  // endregion
+
+  // region Content-drop guard
+
+  describe('content-drop guard', () => {
+    function setupTransaction() {
+      vi.mocked(mockRunTransaction).mockImplementation(async (_db, fn) => {
+        const transaction = {
+          get: vi.fn().mockResolvedValue({ exists: () => false, data: () => ({}) }),
+          set: vi.fn(),
+          update: vi.fn(),
+        }
+        return fn(transaction as any)
+      })
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
+        return { id: args[args.length - 1] ?? 'new' } as any
+      })
+    }
+
+    it('aborts when save would soft-delete more than half of declared children', async () => {
+      // Existing note has 4 declared children (containedNotes), all live.
+      // Save sends only 1 child line — would delete 3 of 4 → trips the guard.
+      vi.spyOn(noteStore, 'getNoteById').mockReturnValue({
+        id: 'root',
+        content: 'Root',
+        containedNotes: ['c1', 'c2', 'c3', 'c4'],
+      } as any)
+      vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c1', 'c2', 'c3', 'c4']))
+      setupTransaction()
+
+      await expect(
+        repository.saveNoteWithChildren('root', [
+          { content: 'Root', noteId: 'root' },
+          { content: '\tonly survivor', noteId: 'c1' },
+        ]),
+      ).rejects.toBeInstanceOf(ContentDropAbortError)
+    })
+
+    it('passes when save deletes half or fewer of declared children', async () => {
+      vi.spyOn(noteStore, 'getNoteById').mockReturnValue({
+        id: 'root',
+        content: 'Root',
+        containedNotes: ['c1', 'c2', 'c3', 'c4'],
+      } as any)
+      vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c1', 'c2', 'c3', 'c4']))
+      setupTransaction()
+
+      await expect(
+        repository.saveNoteWithChildren('root', [
+          { content: 'Root', noteId: 'root' },
+          { content: '\tc1', noteId: 'c1' },
+          { content: '\tc2', noteId: 'c2' },
+        ]),
+      ).resolves.toBeInstanceOf(Map)
+    })
+
+    it('does not trip when fewer than 3 declared children exist', async () => {
+      vi.spyOn(noteStore, 'getNoteById').mockReturnValue({
+        id: 'root',
+        content: 'Root',
+        containedNotes: ['c1', 'c2'],
+      } as any)
+      vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c1', 'c2']))
+      setupTransaction()
+
+      await expect(
+        repository.saveNoteWithChildren('root', [{ content: 'Root', noteId: 'root' }]),
+      ).resolves.toBeInstanceOf(Map)
+    })
+
+    it('ignores orphan containedNotes refs (declared but not in NoteStore)', async () => {
+      // 4 declared, but 3 are orphans (not in existingDescendants). Real
+      // declared = ['c1']. Saving with c1 surviving → 0 of 1 to delete.
+      vi.spyOn(noteStore, 'getNoteById').mockReturnValue({
+        id: 'root',
+        content: 'Root',
+        containedNotes: ['c1', 'orphan_a', 'orphan_b', 'orphan_c'],
+      } as any)
+      vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c1']))
+      setupTransaction()
+
+      await expect(
+        repository.saveNoteWithChildren('root', [
+          { content: 'Root', noteId: 'root' },
+          { content: '\tc1', noteId: 'c1' },
+        ]),
+      ).resolves.toBeInstanceOf(Map)
+    })
+  })
+
+  // endregion
+
+  // region NoteStore-loaded invariant guard
+
+  describe('NoteStore-loaded invariant', () => {
+    it('saveNoteWithChildren throws NoteStoreNotLoadedError when NoteStore not loaded', async () => {
+      vi.spyOn(noteStore, 'isLoaded').mockReturnValue(false)
+      await expect(
+        repository.saveNoteWithChildren('note_1', [{ content: 'Hello', noteId: 'note_1' }]),
+      ).rejects.toMatchObject({
+        name: 'NoteStoreNotLoadedError',
+        operation: 'saveNoteWithChildren',
+        noteId: 'note_1',
+      })
+    })
+
+    it('softDeleteNote throws NoteStoreNotLoadedError when NoteStore not loaded', async () => {
+      vi.spyOn(noteStore, 'isLoaded').mockReturnValue(false)
+      await expect(repository.softDeleteNote('note_1')).rejects.toMatchObject({
+        name: 'NoteStoreNotLoadedError',
+        operation: 'softDeleteNote',
+      })
+    })
+
+    it('undeleteNote throws NoteStoreNotLoadedError when NoteStore not loaded', async () => {
+      vi.spyOn(noteStore, 'isLoaded').mockReturnValue(false)
+      await expect(repository.undeleteNote('note_1')).rejects.toMatchObject({
+        name: 'NoteStoreNotLoadedError',
+        operation: 'undeleteNote',
+      })
+    })
+
+    it('saveNoteWithFullContent throws NoteStoreNotLoadedError when NoteStore not loaded', async () => {
+      vi.spyOn(noteStore, 'isLoaded').mockReturnValue(false)
+      await expect(
+        repository.saveNoteWithFullContent('note_1', 'Hello'),
+      ).rejects.toMatchObject({
+        name: 'NoteStoreNotLoadedError',
+        operation: 'saveNoteWithFullContent',
+      })
+    })
+
+    it('thrown error includes a stack trace pointing at the call site', async () => {
+      vi.spyOn(noteStore, 'isLoaded').mockReturnValue(false)
+      try {
+        await repository.softDeleteNote('note_1')
+        expect.fail('expected throw')
+      } catch (e) {
+        expect(e).toBeInstanceOf(Error)
+        expect((e as Error).stack).toMatch(/NoteRepository/)
+      }
+    })
   })
 
   // endregion

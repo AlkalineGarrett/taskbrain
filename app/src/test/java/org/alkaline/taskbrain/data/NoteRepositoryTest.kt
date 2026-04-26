@@ -33,7 +33,12 @@ class NoteRepositoryTest {
         every { NoteStore.getAllDescendantIds(any()) } returns emptySet()
         every { NoteStore.getLiveDescendantsByParent(any()) } returns emptyMap()
         every { NoteStore.getNoteById(any()) } returns null
+        every { NoteStore.getRawNoteById(any()) } returns null
         every { NoteStore.raiseWarning(any()) } just Runs
+        // Save/delete ops require NoteStore to be loaded; default to loaded for
+        // tests that aren't exercising the load guard. Tests for the guard
+        // itself override this.
+        every { NoteStore.isLoaded() } returns true
 
         repository = NoteRepository(mockFirestore, mockAuth)
     }
@@ -805,6 +810,63 @@ class NoteRepositoryTest {
         repository.undeleteNote("note_1").getOrThrow()
 
         verify(exactly = 3) { batch.set(any(), any<Map<String, Any?>>(), any<SetOptions>()) }
+    }
+
+    // endregion
+
+    // region NoteStore-loaded invariant guard
+
+    @Test
+    fun `saveNoteWithChildren fails with NoteStoreNotLoadedException when NoteStore not loaded`() = runTest {
+        every { NoteStore.isLoaded() } returns false
+        val result = repository.saveNoteWithChildren(
+            "note_1",
+            listOf(NoteLine("Hello", "note_1")),
+            extraOpsBuilder = null,
+        )
+        val ex = result.exceptionOrNull()
+        assertTrue(ex is NoteStore.NoteStoreNotLoadedException)
+        assertEquals("saveNoteWithChildren", (ex as NoteStore.NoteStoreNotLoadedException).operation)
+        assertEquals("note_1", ex.noteId)
+    }
+
+    @Test
+    fun `softDeleteNote fails with NoteStoreNotLoadedException when NoteStore not loaded`() = runTest {
+        every { NoteStore.isLoaded() } returns false
+        val result = repository.softDeleteNote("note_1")
+        val ex = result.exceptionOrNull()
+        assertTrue(ex is NoteStore.NoteStoreNotLoadedException)
+        assertEquals("softDeleteNote", (ex as NoteStore.NoteStoreNotLoadedException).operation)
+    }
+
+    @Test
+    fun `undeleteNote fails with NoteStoreNotLoadedException when NoteStore not loaded`() = runTest {
+        every { NoteStore.isLoaded() } returns false
+        val result = repository.undeleteNote("note_1")
+        val ex = result.exceptionOrNull()
+        assertTrue(ex is NoteStore.NoteStoreNotLoadedException)
+        assertEquals("undeleteNote", (ex as NoteStore.NoteStoreNotLoadedException).operation)
+    }
+
+    @Test
+    fun `saveNoteWithFullContent fails with NoteStoreNotLoadedException when NoteStore not loaded`() = runTest {
+        every { NoteStore.isLoaded() } returns false
+        val result = repository.saveNoteWithFullContent("note_1", "Hello")
+        val ex = result.exceptionOrNull()
+        assertTrue(ex is NoteStore.NoteStoreNotLoadedException)
+        assertEquals("saveNoteWithFullContent", (ex as NoteStore.NoteStoreNotLoadedException).operation)
+    }
+
+    @Test
+    fun `NoteStoreNotLoadedException carries a stack trace pointing at NoteRepository`() = runTest {
+        every { NoteStore.isLoaded() } returns false
+        val ex = repository.softDeleteNote("note_1").exceptionOrNull()
+        assertNotNull(ex)
+        val stack = ex!!.stackTraceToString()
+        assertTrue(
+            "Expected stack to mention NoteRepository, got: $stack",
+            stack.contains("NoteRepository"),
+        )
     }
 
     // endregion

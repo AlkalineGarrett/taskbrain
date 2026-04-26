@@ -17,6 +17,33 @@ import {
 } from './NoteReconstruction'
 
 /**
+ * Thrown when a code path that depends on a fully-loaded NoteStore runs before
+ * the live listener has received its first snapshot. Save/delete operations
+ * read the descendant set from NoteStore — running them before the snapshot
+ * has arrived would silently miss soft-deleting removed descendants, leaving
+ * orphaned documents in Firestore.
+ *
+ * The Error superclass auto-captures `this.stack`, so `console.error(e)` prints
+ * the full call chain.
+ */
+export class NoteStoreNotLoadedError extends Error {
+  readonly operation: string
+  readonly noteId: string
+  constructor(operation: string, noteId: string) {
+    super(
+      `[NoteStore not loaded] ${operation}(noteId=${noteId}) ran before the ` +
+      `live note listener received its first snapshot. ` +
+      `Save/delete operations read descendants from the in-memory NoteStore; ` +
+      `running them now would silently miss soft-deleting removed descendants, ` +
+      `leaving orphaned documents. Try again after the note list has loaded.`
+    )
+    this.name = 'NoteStoreNotLoadedError'
+    this.operation = operation
+    this.noteId = noteId
+  }
+}
+
+/**
  * Singleton reactive store for all notes with reconstructed content.
  * Single source of truth for directive execution context.
  *
@@ -270,6 +297,29 @@ export class NoteStore {
 
   getRawNoteById(noteId: string): Note | undefined {
     return this.rawNotes.get(noteId)
+  }
+
+  /** IDs of all non-deleted notes whose rootNoteId matches [noteId]. */
+  getDescendantIds(noteId: string): Set<string> {
+    const result = new Set<string>()
+    for (const note of this.rawNotes.values()) {
+      if (note.rootNoteId === noteId && note.state !== 'deleted') result.add(note.id)
+    }
+    return result
+  }
+
+  /** IDs of all descendants of [noteId] including soft-deleted ones. */
+  getAllDescendantIds(noteId: string): Set<string> {
+    const result = new Set<string>()
+    for (const note of this.rawNotes.values()) {
+      if (note.rootNoteId === noteId) result.add(note.id)
+    }
+    return result
+  }
+
+  /** Whether the first Firestore snapshot has arrived. */
+  isLoaded(): boolean {
+    return this.loaded
   }
 
   /** Returns per-line NoteLines for a note, using the same parentNoteId walk as the reconstructed snapshot. */
