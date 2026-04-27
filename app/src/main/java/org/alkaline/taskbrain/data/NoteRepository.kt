@@ -12,6 +12,7 @@ import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Repository for managing composable notes in Firestore.
@@ -127,6 +128,14 @@ class NoteRepository(
     suspend fun loadNoteWithChildren(noteId: String): Result<NoteLoadResult> = ioLogged("loadNoteWithChildren") {
         requireUserId()
         val emptyResult = NoteLoadResult(listOf(NoteLine("", noteId)), isDeleted = false, showCompleted = true)
+
+        // Cold start: the snapshot listener is started in the VM init but the
+        // first cached snapshot hasn't landed yet. Wait briefly so the in-memory
+        // path can serve this load instead of issuing a parallel Firestore fetch
+        // for data the listener is about to deliver.
+        if (!NoteStore.isLoaded()) {
+            withTimeoutOrNull(NOTE_STORE_AWAIT_MS) { NoteStore.ensureLoaded() }
+        }
 
         if (NoteStore.isLoaded()) {
             val rawNote = NoteStore.getRawNoteById(noteId)
@@ -1090,6 +1099,7 @@ class NoteRepository(
     companion object {
         private const val TAG = "NoteRepository"
         private const val MAX_BATCH_SIZE = 500
+        private const val NOTE_STORE_AWAIT_MS = 1500L
     }
 }
 

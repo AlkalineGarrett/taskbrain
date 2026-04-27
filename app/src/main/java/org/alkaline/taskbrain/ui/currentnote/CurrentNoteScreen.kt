@@ -751,14 +751,19 @@ private fun DataLoadingEffects(
                 // else: NoteStore has different content from a direct edit — don't overwrite
             }
         }
-        // Skip the load if the ViewModel just resolved this noteId from a null→noteId
-        // transition (the LaunchedEffect(currentNoteId) sync). The first loadContent(null)
-        // already loaded this note; loading again would be redundant and races with the
-        // first load's background refresh coroutine.
-        val alreadyLoaded = displayedNoteId != null &&
+        // Skip if the VM is already loading or has loaded this same note.
+        // On startup, displayedNoteId transitions null→noteId: the first fire
+        // calls loadContent(null) which resolves the last-viewed note and
+        // starts a Firestore load (status=Loading); the second fire arrives
+        // before that load completes, so a Success-only check would re-issue
+        // the same fetch. Treat Loading-for-this-note as already handled.
+        val alreadyTargetingThisNote = displayedNoteId != null &&
             displayedNoteId == currentNoteViewModel.getCurrentNoteId() &&
-            currentNoteViewModel.loadStatus.value.let { it is LoadStatus.Success && it.noteId == displayedNoteId }
-        if (!alreadyLoaded) {
+            currentNoteViewModel.loadStatus.value.let { status ->
+                status is LoadStatus.Loading ||
+                    (status is LoadStatus.Success && status.noteId == displayedNoteId)
+            }
+        if (!alreadyTargetingThisNote) {
             currentNoteViewModel.loadContent(displayedNoteId, recentTabsViewModel)
         }
     }
