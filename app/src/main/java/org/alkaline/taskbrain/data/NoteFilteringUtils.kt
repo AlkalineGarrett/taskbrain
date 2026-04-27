@@ -3,7 +3,7 @@ package org.alkaline.taskbrain.data
 import kotlin.math.exp
 import kotlin.math.ln
 
-enum class NoteSortMode { RECENT, FREQUENT, CONSISTENT }
+enum class NoteSortMode { RECENT, FREQUENT, CONSISTENT, ALPHABETICAL }
 
 /**
  * Utility functions for filtering and sorting notes.
@@ -43,6 +43,14 @@ object NoteFilteringUtils {
         return sortByPrecomputedScore(notes) { consistencyScore(stats[it.id], nowMs) }
     }
 
+    /** Empty first lines sort to the end so named notes lead the list. */
+    fun sortByFirstLineAlphabetical(notes: List<Note>): List<Note> {
+        return notes.sortedWith(
+            compareBy<Note> { it.firstLine().isEmpty() }
+                .thenBy(String.CASE_INSENSITIVE_ORDER) { it.firstLine() }
+        )
+    }
+
     private inline fun sortByPrecomputedScore(notes: List<Note>, score: (Note) -> Double): List<Note> {
         return notes
             .map { it to score(it) }
@@ -65,6 +73,7 @@ object NoteFilteringUtils {
             NoteSortMode.RECENT -> sortByLastAccessedAtDescending(filtered, stats)
             NoteSortMode.FREQUENT -> sortByDecayedScoreDescending(filtered, stats, nowMs)
             NoteSortMode.CONSISTENT -> sortByConsistencyDescending(filtered, stats, nowMs)
+            NoteSortMode.ALPHABETICAL -> sortByFirstLineAlphabetical(filtered)
         }
     }
 

@@ -26,6 +26,10 @@ export interface NoteLine {
   noteId: string | null
 }
 
+export function firstLineOf(content: string): string {
+  return content.split('\n', 1)[0] ?? ''
+}
+
 export function noteFromFirestore(id: string, data: Record<string, unknown>): Note {
   return {
     id,

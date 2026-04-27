@@ -53,19 +53,20 @@
 
 .sortRow {
   display: flex;
+  justify-content: center;
   gap: 0.25rem;
   padding: 0.25rem 0 0.5rem;
 }
 
 .sortButton {
-  flex: 1;
   padding: 0.375rem 0.75rem;
   font-size: 0.8125rem;
-  border: 1px solid var(--color-border-input);
+  border: 1px solid var(--color-select);
   border-radius: 4px;
   background: white;
-  color: var(--color-text);
+  color: var(--color-select);
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .sortButton:hover {
@@ -73,13 +74,13 @@
 }
 
 .sortButtonActive {
-  background: var(--color-primary);
-  color: var(--color-on-primary);
-  border-color: var(--color-primary);
+  background: var(--color-select);
+  color: var(--color-on-select);
+  border-color: var(--color-select);
 }
 
 .sortButtonActive:hover {
-  background: var(--color-primary-hover);
+  background: var(--color-select-hover);
 }
 
 .status {

@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
@@ -31,16 +32,16 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -70,9 +71,11 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.firebase.Timestamp
 import org.alkaline.taskbrain.R
+import org.alkaline.taskbrain.ui.Dimens
 import org.alkaline.taskbrain.data.ContentSnippet
 import org.alkaline.taskbrain.data.FirestoreUsage
 import org.alkaline.taskbrain.data.Note
+import org.alkaline.taskbrain.data.firstLine
 import org.alkaline.taskbrain.data.NoteSearchResult
 import org.alkaline.taskbrain.data.NoteSortMode
 import org.alkaline.taskbrain.data.SearchHistoryEntry
@@ -255,7 +258,6 @@ fun NoteListScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SortModeRow(
     selected: NoteSortMode,
@@ -265,20 +267,65 @@ private fun SortModeRow(
         NoteSortMode.RECENT to R.string.sort_recent,
         NoteSortMode.FREQUENT to R.string.sort_frequent,
         NoteSortMode.CONSISTENT to R.string.sort_consistent,
+        NoteSortMode.ALPHABETICAL to R.string.sort_alphabetical,
     )
-    SingleChoiceSegmentedButtonRow(
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        modes.forEachIndexed { index, (mode, labelRes) ->
-            SegmentedButton(
+        for ((mode, labelRes) in modes) {
+            SortModeButton(
+                label = stringResource(labelRes),
                 selected = selected == mode,
                 onClick = { onModeSelected(mode) },
-                shape = SegmentedButtonDefaults.itemShape(index, modes.size),
-            ) {
-                Text(stringResource(labelRes))
-            }
+            )
+        }
+    }
+}
+
+@Composable
+private fun SortModeButton(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val accent = colorResource(R.color.select_button_background)
+    val onAccent = colorResource(R.color.select_button_text)
+    val shape = RoundedCornerShape(Dimens.StatusBarButtonCornerRadius)
+    val contentPadding = PaddingValues(
+        horizontal = Dimens.StatusBarButtonHorizontalPadding,
+        vertical = 0.dp,
+    )
+    val modifier = Modifier.height(Dimens.StatusBarButtonHeight)
+    val textStyle = MaterialTheme.typography.labelLarge.copy(
+        fontSize = Dimens.StatusBarButtonTextSize,
+    )
+    if (selected) {
+        Button(
+            onClick = onClick,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = accent,
+                contentColor = onAccent,
+            ),
+            shape = shape,
+            contentPadding = contentPadding,
+            modifier = modifier,
+        ) {
+            Text(text = label, maxLines = 1, softWrap = false, style = textStyle)
+        }
+    } else {
+        OutlinedButton(
+            onClick = onClick,
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = accent),
+            border = BorderStroke(1.dp, accent),
+            shape = shape,
+            contentPadding = contentPadding,
+            modifier = modifier,
+        ) {
+            Text(text = label, maxLines = 1, softWrap = false, style = textStyle)
         }
     }
 }
@@ -524,7 +571,7 @@ fun SearchResultItem(
     onRestore: (() -> Unit)? = null,
 ) {
     var showMenu by remember { mutableStateOf(false) }
-    val firstLine = result.note.content.lines().firstOrNull() ?: ""
+    val firstLine = result.note.firstLine()
     val timestamp = result.note.updatedAt
 
     Column(
@@ -668,7 +715,7 @@ fun NoteItem(
     onRestore: (() -> Unit)? = null
 ) {
     var showMenu by remember { mutableStateOf(false) }
-    val firstLine = note.content.lines().firstOrNull() ?: ""
+    val firstLine = note.firstLine()
 
     val timestamp = lastViewed ?: note.updatedAt
 

@@ -22,3 +22,5 @@ data class Note(
     /** Persistent cache for once[...] expression results. Keys are normalized AST strings, values are serialized DslValues. */
     val onceCache: Map<String, Map<String, Any>> = emptyMap(),
 )
+
+fun Note.firstLine(): String = content.lineSequence().firstOrNull() ?: ""

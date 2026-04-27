@@ -18,6 +18,11 @@
   --color-primary-text: #4A148C;
   --color-on-primary: #ffffff;
 
+  /* Selectable secondary controls (Android: select_button_background) */
+  --color-select: #018786;
+  --color-select-hover: #00605F;
+  --color-on-select: #ffffff;
+
   /* Status: success */
   --color-success: #4CAF50;
   --color-success-hover: #388E3C;

@@ -1,7 +1,7 @@
-import type { Note } from './Note'
+import { firstLineOf, type Note } from './Note'
 import type { NoteStats } from './NoteStats'
 
-export type NoteSortMode = 'recent' | 'frequent' | 'consistent'
+export type NoteSortMode = 'recent' | 'frequent' | 'consistent' | 'alphabetical'
 
 const VIEW_HALF_LIFE_MS = 14 * 24 * 60 * 60 * 1000
 const MS_PER_DAY = 24 * 60 * 60 * 1000
@@ -90,6 +90,17 @@ function sortByPrecomputedScore(notes: Note[], score: (n: Note) => number): Note
     .map((e) => e.note)
 }
 
+/** Empty first lines sort to the end so named notes lead the list. */
+export function sortByFirstLineAlphabetical(notes: Note[]): Note[] {
+  return [...notes].sort((a, b) => {
+    const af = firstLineOf(a.content)
+    const bf = firstLineOf(b.content)
+    if (af === '' && bf !== '') return 1
+    if (bf === '' && af !== '') return -1
+    return af.localeCompare(bf, undefined, { sensitivity: 'base' })
+  })
+}
+
 export function filterAndSortNotesByMode(
   notes: Note[],
   stats: Map<string, NoteStats>,
@@ -104,6 +115,8 @@ export function filterAndSortNotesByMode(
       return sortByDecayedScoreDescending(filtered, stats, nowMs)
     case 'consistent':
       return sortByConsistencyDescending(filtered, stats, nowMs)
+    case 'alphabetical':
+      return sortByFirstLineAlphabetical(filtered)
   }
 }
 

@@ -14,10 +14,11 @@ import {
   SEARCH, SEARCH_HINT, SEARCH_FILTER_NAME, SEARCH_FILTER_CONTENT,
   SEARCH_GO, SEARCH_NO_RESULTS, SEARCH_HISTORY_BUTTON,
   CLEAR_DELETED, CLEAR_DELETED_CONFIRM_TITLE, CLEAR_DELETED_CONFIRM_MESSAGE, clearedDeletedCount,
-  SORT_RECENT, SORT_FREQUENT, SORT_CONSISTENT,
+  SORT_RECENT, SORT_FREQUENT, SORT_CONSISTENT, SORT_ALPHABETICAL,
   FIRESTORE_USAGE, FIRESTORE_USAGE_TITLE, FIRESTORE_USAGE_CLOSE, FIRESTORE_USAGE_RESET,
 } from '@/strings'
 import type { NoteSortMode } from '@/data/NoteFilteringUtils'
+import { firstLineOf } from '@/data/Note'
 import styles from './NoteListScreen.module.css'
 
 export function NoteListScreen() {
@@ -240,6 +241,7 @@ function SortModeRow({
     { mode: 'recent', label: SORT_RECENT },
     { mode: 'frequent', label: SORT_FREQUENT },
     { mode: 'consistent', label: SORT_CONSISTENT },
+    { mode: 'alphabetical', label: SORT_ALPHABETICAL },
   ]
   return (
     <div className={styles.sortRow}>
@@ -561,10 +563,6 @@ function NoteItemMenu({
       )}
     </div>
   )
-}
-
-function firstLineOf(content: string): string {
-  return content.split('\n', 1)[0] ?? ''
 }
 
 function UsageReportDialog({

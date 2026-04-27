@@ -17,6 +17,10 @@
     <color name="action_button_disabled_background">#FFBDBDBD</color>
     <color name="action_button_disabled_text">#B3FFFFFF</color>
 
+    <!-- Selectable secondary controls -->
+    <color name="select_button_background">#FF018786</color>
+    <color name="select_button_text">#FFFFFFFF</color>
+
     <!-- Save button when the note needs a fix (auto-healed reconstruction) -->
     <color name="action_button_needs_fix_background">#FFE65100</color>
     <color name="action_button_needs_fix_background_hover">#FFBF360C</color>
