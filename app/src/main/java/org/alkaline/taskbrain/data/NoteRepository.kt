@@ -481,31 +481,57 @@ class NoteRepository(
         // (Firestore batch limit). Batch writes queue offline, unlike
         // transactions which require a server roundtrip.
         val ops = mutableListOf<BatchOp>()
+        var skippedUnchanged = 0
 
-        // Root note
-        val rootData = baseNoteData(userId, rootContent).apply {
-            put("containedNotes", childrenOfLine[0].toList())
-            if (hasCycle) {
-                put("parentNoteId", FieldValue.delete())
-                put("rootNoteId", FieldValue.delete())
+        // Root note. Skip the merge if the in-memory copy already matches what
+        // we'd write — saves both the doc write and the listener echo/fresh
+        // reads it would trigger across all clients.
+        val rootContainedList = childrenOfLine[0].toList()
+        val existingRoot = NoteStore.getRawNoteById(noteId)
+        val rootUnchanged = !hasCycle &&
+            existingRoot != null &&
+            existingRoot.content == rootContent &&
+            existingRoot.containedNotes == rootContainedList &&
+            existingRoot.state == null
+        if (rootUnchanged) {
+            skippedUnchanged++
+        } else {
+            val rootData = baseNoteData(userId, rootContent).apply {
+                put("containedNotes", rootContainedList)
+                if (hasCycle) {
+                    put("parentNoteId", FieldValue.delete())
+                    put("rootNoteId", FieldValue.delete())
+                }
             }
+            ops.add(BatchOp(parentRef, rootData, merge = true))
         }
-        ops.add(BatchOp(parentRef, rootData, merge = true))
 
         // Descendants
         for (i in 1 until linesToSave.size) {
             val content = linesToSave[i].content.trimStart('\t')
 
             val parentId = effectiveId(parentOfLine[i])
+            val containedList = childrenOfLine[i].toList()
 
             if (NoteIdSentinel.isRealNoteId(linesToSave[i].noteId)) {
+                val existingDescendant = NoteStore.getRawNoteById(effectiveId(i))
+                val unchanged = existingDescendant != null &&
+                    existingDescendant.content == content &&
+                    existingDescendant.parentNoteId == parentId &&
+                    existingDescendant.rootNoteId == noteId &&
+                    existingDescendant.containedNotes == containedList &&
+                    existingDescendant.state == null
+                if (unchanged) {
+                    skippedUnchanged++
+                    continue
+                }
                 ops.add(BatchOp(
                     noteRef(effectiveId(i)),
                     mapOf(
                         "content" to content,
                         "parentNoteId" to parentId,
                         "rootNoteId" to noteId,
-                        "containedNotes" to childrenOfLine[i].toList(),
+                        "containedNotes" to containedList,
                         "state" to null,
                         "updatedAt" to FieldValue.serverTimestamp(),
                     ),
@@ -519,13 +545,16 @@ class NoteRepository(
                         "content" to content,
                         "parentNoteId" to parentId,
                         "rootNoteId" to noteId,
-                        "containedNotes" to childrenOfLine[i].toList(),
+                        "containedNotes" to containedList,
                         "createdAt" to FieldValue.serverTimestamp(),
                         "updatedAt" to FieldValue.serverTimestamp(),
                     ),
                     merge = false
                 ))
             }
+        }
+        if (skippedUnchanged > 0) {
+            Log.d(TAG, "saveNoteWithChildren($noteId): skipped $skippedUnchanged unchanged docs of ${linesToSave.size}, writing ${ops.size}")
         }
 
         // Soft-delete removed notes

@@ -557,6 +557,182 @@ class NoteRepositoryTest {
         assertEquals("new_child", result[1])
     }
 
+    // region Save diff/skip Tests
+    //
+    // Verifies saveNoteWithChildren elides merge writes for lines whose
+    // computed payload matches the in-memory NoteStore copy.
+
+    /**
+     * Wires both the Firestore doc-ref mocks and the NoteStore lookups the
+     * save path consults: [rootNote] is returned for the root id and each
+     * child id resolves to its [Note] in NoteStore. Pass the same shape the
+     * production save would see in steady state.
+     */
+    private fun setupStore(rootNote: Note, vararg children: Note) {
+        mockDocument(rootNote.id, rootNote)
+        children.forEach { mockDocument(it.id, null) }
+        every { NoteStore.getDescendantIds(rootNote.id) } returns children.map { it.id }.toSet()
+        every { NoteStore.getRawNoteById(rootNote.id) } returns rootNote
+        children.forEach { child ->
+            every { NoteStore.getRawNoteById(child.id) } returns child
+        }
+    }
+
+    @Test
+    fun `saveNoteWithChildren skips all merge writes when nothing changed`() = runTest {
+        val rootNote = Note(id = "note_1", content = "Parent", containedNotes = listOf("c1"))
+        val unchangedChild = Note(
+            id = "c1",
+            content = "Untouched",
+            parentNoteId = "note_1",
+            rootNoteId = "note_1",
+        )
+        setupStore(rootNote, unchangedChild)
+        val batch = mockBatch()
+
+        val result = repository.saveNoteWithChildren(
+            "note_1",
+            listOf(NoteLine("Parent", "note_1"), NoteLine("\tUntouched", "c1")),
+            extraOpsBuilder = null,
+        )
+
+        assertTrue(result.isSuccess)
+        verify(exactly = 0) { batch.set(any(), any<Map<String, Any?>>(), any<SetOptions>()) }
+    }
+
+    @Test
+    fun `saveNoteWithChildren writes only the changed child when one of many is edited`() = runTest {
+        val rootNote = Note(id = "note_1", content = "Parent", containedNotes = listOf("c1", "c2", "c3"))
+        val c1 = Note(id = "c1", content = "First", parentNoteId = "note_1", rootNoteId = "note_1")
+        val c2 = Note(id = "c2", content = "Second", parentNoteId = "note_1", rootNoteId = "note_1")
+        val c3 = Note(id = "c3", content = "Third", parentNoteId = "note_1", rootNoteId = "note_1")
+        setupStore(rootNote, c1, c2, c3)
+        val batch = mockBatch()
+
+        repository.saveNoteWithChildren(
+            "note_1",
+            listOf(
+                NoteLine("Parent", "note_1"),
+                NoteLine("\tFirst", "c1"),
+                NoteLine("\tSecond EDITED", "c2"),
+                NoteLine("\tThird", "c3"),
+            ),
+            extraOpsBuilder = null,
+        ).getOrThrow()
+
+        // Root: containedNotes still [c1,c2,c3] → skip. c1, c3: unchanged →
+        // skip. c2: content differs → exactly one merge write.
+        verify(exactly = 1) { batch.set(any(), any<Map<String, Any?>>(), any<SetOptions>()) }
+    }
+
+    @Test
+    fun `saveNoteWithChildren writes root when content changes but skips unchanged child`() = runTest {
+        val rootNote = Note(id = "note_1", content = "Old parent", containedNotes = listOf("c1"))
+        val c1 = Note(id = "c1", content = "Untouched", parentNoteId = "note_1", rootNoteId = "note_1")
+        setupStore(rootNote, c1)
+        val batch = mockBatch()
+
+        repository.saveNoteWithChildren(
+            "note_1",
+            listOf(NoteLine("New parent", "note_1"), NoteLine("\tUntouched", "c1")),
+            extraOpsBuilder = null,
+        ).getOrThrow()
+
+        verify(exactly = 1) { batch.set(any(), any<Map<String, Any?>>(), any<SetOptions>()) }
+    }
+
+    @Test
+    fun `saveNoteWithChildren writes root when containedNotes order changes`() = runTest {
+        // Reordering siblings flips the parent's containedNotes — root must
+        // write even when neither child's content changed.
+        val rootNote = Note(id = "note_1", content = "Parent", containedNotes = listOf("a", "b"))
+        val a = Note(id = "a", content = "A", parentNoteId = "note_1", rootNoteId = "note_1")
+        val b = Note(id = "b", content = "B", parentNoteId = "note_1", rootNoteId = "note_1")
+        setupStore(rootNote, a, b)
+        val batch = mockBatch()
+
+        repository.saveNoteWithChildren(
+            "note_1",
+            listOf(
+                NoteLine("Parent", "note_1"),
+                NoteLine("\tB", "b"),
+                NoteLine("\tA", "a"),
+            ),
+            extraOpsBuilder = null,
+        ).getOrThrow()
+
+        // Root: containedNotes flipped → write. a, b: unchanged → skip.
+        verify(exactly = 1) { batch.set(any(), any<Map<String, Any?>>(), any<SetOptions>()) }
+    }
+
+    @Test
+    fun `saveNoteWithChildren writes parent and child when child is reparented`() = runTest {
+        // Indenting B under A flips the root's containedNotes (drops B), A's
+        // containedNotes (gains B), and B's parentNoteId. All three must
+        // write; nothing else exists to skip.
+        val rootNote = Note(id = "note_1", content = "Parent", containedNotes = listOf("a", "b"))
+        val a = Note(id = "a", content = "A", parentNoteId = "note_1", rootNoteId = "note_1")
+        val b = Note(id = "b", content = "B", parentNoteId = "note_1", rootNoteId = "note_1")
+        setupStore(rootNote, a, b)
+        val batch = mockBatch()
+
+        repository.saveNoteWithChildren(
+            "note_1",
+            listOf(
+                NoteLine("Parent", "note_1"),
+                NoteLine("\tA", "a"),
+                NoteLine("\t\tB", "b"),
+            ),
+            extraOpsBuilder = null,
+        ).getOrThrow()
+
+        verify(exactly = 3) { batch.set(any(), any<Map<String, Any?>>(), any<SetOptions>()) }
+    }
+
+    @Test
+    fun `saveNoteWithChildren writes child whose existing state is non-null`() = runTest {
+        // A child whose existing doc carries state (e.g., a soft-deleted line
+        // being restored) must always be written so the merge can reset state
+        // to null. Without this guard the doc would stay marked deleted.
+        val rootNote = Note(id = "note_1", content = "Parent", containedNotes = listOf("c1"))
+        val deletedChild = Note(
+            id = "c1", content = "Same", parentNoteId = "note_1", rootNoteId = "note_1",
+            state = "deleted",
+        )
+        setupStore(rootNote, deletedChild)
+        val batch = mockBatch()
+
+        repository.saveNoteWithChildren(
+            "note_1",
+            listOf(NoteLine("Parent", "note_1"), NoteLine("\tSame", "c1")),
+            extraOpsBuilder = null,
+        ).getOrThrow()
+
+        verify(exactly = 1) { batch.set(any(), any<Map<String, Any?>>(), any<SetOptions>()) }
+    }
+
+    @Test
+    fun `saveNoteWithChildren writes child whose existing parentNoteId differs`() = runTest {
+        // Existing doc claims a different parent than the editor places it
+        // under — must write to reconcile.
+        val rootNote = Note(id = "note_1", content = "Parent", containedNotes = listOf("c1"))
+        val orphan = Note(
+            id = "c1", content = "Same", parentNoteId = "stranger", rootNoteId = "note_1",
+        )
+        setupStore(rootNote, orphan)
+        val batch = mockBatch()
+
+        repository.saveNoteWithChildren(
+            "note_1",
+            listOf(NoteLine("Parent", "note_1"), NoteLine("\tSame", "c1")),
+            extraOpsBuilder = null,
+        ).getOrThrow()
+
+        verify(exactly = 1) { batch.set(any(), any<Map<String, Any?>>(), any<SetOptions>()) }
+    }
+
+    // endregion
+
     // endregion
 
     // region Create Tests

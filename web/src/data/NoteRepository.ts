@@ -312,23 +312,68 @@ export class NoteRepository {
       // to itself, clear parentNoteId/rootNoteId to make it a root note.
       const hasCycle = this.hasParentCycle(noteId)
 
-      // Total docs touched: root (1) + descendants + soft-deletes.
-      const txnDocCount = 1 + (linesToSave.length - 1) + toDelete.size
+      // Pre-compute skips: any merge write whose payload already matches
+      // in-memory state would be a no-op write. Skipping it saves the doc
+      // write AND the listener echo/fresh reads it would trigger across
+      // all clients listening to the notes collection.
+      const arraysEqual = (a: string[], b: string[]): boolean => {
+        if (a.length !== b.length) return false
+        for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return false
+        return true
+      }
+      const rootContainedList = childrenOfLine[0]!
+      const existingRoot = noteStore.getRawNoteById(noteId)
+      const rootUnchanged =
+        !hasCycle &&
+        existingRoot != null &&
+        existingRoot.content === rootContent &&
+        arraysEqual(existingRoot.containedNotes, rootContainedList) &&
+        existingRoot.state == null
+      const descendantSkipped = new Set<number>()
+      for (let i = 1; i < linesToSave.length; i++) {
+        if (!isRealNoteId(linesToSave[i]!.noteId)) continue
+        const existing = noteStore.getRawNoteById(effectiveId(i))
+        const newContent = linesToSave[i]!.content.replace(/^\t+/, '')
+        const newParentId = effectiveId(parentOfLine[i]!)
+        if (
+          existing != null &&
+          existing.content === newContent &&
+          existing.parentNoteId === newParentId &&
+          existing.rootNoteId === noteId &&
+          arraysEqual(existing.containedNotes, childrenOfLine[i]!) &&
+          existing.state == null
+        ) {
+          descendantSkipped.add(i)
+        }
+      }
+      const skippedUnchanged = (rootUnchanged ? 1 : 0) + descendantSkipped.size
+      const txnDocCount =
+        (rootUnchanged ? 0 : 1) +
+        (linesToSave.length - 1 - descendantSkipped.size) +
+        toDelete.size
       firestoreUsage.recordWrite('saveNoteWithChildren', 'transaction', txnDocCount)
+      if (skippedUnchanged > 0) {
+        console.log(
+          `saveNoteWithChildren(${noteId}): skipped ${skippedUnchanged} unchanged docs of ${linesToSave.length}, writing ${txnDocCount}`,
+        )
+      }
       return runTransaction(this.db, async (transaction) => {
         // Update root
-        const rootData: Record<string, unknown> = {
-          ...this.baseNoteData(userId, rootContent),
-          containedNotes: childrenOfLine[0]!,
+        if (!rootUnchanged) {
+          const rootData: Record<string, unknown> = {
+            ...this.baseNoteData(userId, rootContent),
+            containedNotes: childrenOfLine[0]!,
+          }
+          if (hasCycle) {
+            rootData.parentNoteId = null
+            rootData.rootNoteId = null
+          }
+          transaction.set(parentRef, rootData, { merge: true })
         }
-        if (hasCycle) {
-          rootData.parentNoteId = null
-          rootData.rootNoteId = null
-        }
-        transaction.set(parentRef, rootData, { merge: true })
 
         // Write each descendant
         for (let i = 1; i < linesToSave.length; i++) {
+          if (descendantSkipped.has(i)) continue
           const content = linesToSave[i]!.content.replace(/^\t+/, '')
 
           const id = effectiveId(i)

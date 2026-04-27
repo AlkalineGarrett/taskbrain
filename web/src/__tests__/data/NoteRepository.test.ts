@@ -3,7 +3,8 @@ import { NoteRepository, matchLinesToIds, ContentDropAbortError } from '../../da
 import { noteStore } from '../../data/NoteStore'
 import type { Firestore, DocumentReference } from 'firebase/firestore'
 import type { Auth } from 'firebase/auth'
-import type { NoteLine } from '../../data/Note'
+import type { Note, NoteLine } from '../../data/Note'
+import { note } from '../factories'
 
 // Mock firebase/firestore
 vi.mock('firebase/firestore', () => {
@@ -410,6 +411,172 @@ describe('NoteRepository', () => {
       ])
 
       expect(result.get(1)).toBe('new_child')
+    })
+  })
+
+  // Mirror of the Android NoteRepositoryTest "Save diff/skip" region.
+  describe('saveNoteWithChildren - diff/skip', () => {
+    function setupStore(notes: Note[], descendantIdsByRoot: Record<string, string[]>) {
+      const byId = new Map(notes.map((n) => [n.id, n]))
+      vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id: string) => byId.get(id))
+      vi.spyOn(noteStore, 'getNoteById').mockImplementation((id: string) => byId.get(id))
+      vi.spyOn(noteStore, 'getDescendantIds').mockImplementation(
+        (id: string) => new Set(descendantIdsByRoot[id] ?? []),
+      )
+    }
+
+    function captureMergeWrites(): ReturnType<typeof vi.fn> {
+      const setSpy = vi.fn()
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
+        if (args.length === 1) return { id: 'unexpected_new_doc' } as any
+        return { id: args[args.length - 1] } as any
+      })
+      vi.mocked(mockRunTransaction).mockImplementation(async (_db, fn) => {
+        return fn({ get: vi.fn(), set: setSpy, update: vi.fn() } as any)
+      })
+      return setSpy
+    }
+
+    function mergeCalls(setSpy: ReturnType<typeof vi.fn>) {
+      // Merge writes use the 3-arg overload (ref, data, { merge: true }).
+      // CREATE writes for fresh docs use the 2-arg form. The skip logic only
+      // affects the merge path, so that's what we count.
+      return setSpy.mock.calls.filter((c: unknown[]) => c.length === 3)
+    }
+
+    it('skips all merge writes when nothing changed', async () => {
+      const rootNote = note({ id: 'note_1', content: 'Parent', containedNotes: ['c1'] })
+      const child = note({
+        id: 'c1',
+        content: 'Untouched',
+        parentNoteId: 'note_1',
+        rootNoteId: 'note_1',
+      })
+      setupStore([rootNote, child], { note_1: ['c1'] })
+      const setSpy = captureMergeWrites()
+
+      await repository.saveNoteWithChildren('note_1', [
+        { content: 'Parent', noteId: 'note_1' },
+        { content: '\tUntouched', noteId: 'c1' },
+      ])
+
+      expect(mergeCalls(setSpy).length).toBe(0)
+    })
+
+    it('writes only the changed child when one of many is edited', async () => {
+      const rootNote = note({
+        id: 'note_1', content: 'Parent', containedNotes: ['c1', 'c2', 'c3'],
+      })
+      const c1 = note({ id: 'c1', content: 'First', parentNoteId: 'note_1', rootNoteId: 'note_1' })
+      const c2 = note({ id: 'c2', content: 'Second', parentNoteId: 'note_1', rootNoteId: 'note_1' })
+      const c3 = note({ id: 'c3', content: 'Third', parentNoteId: 'note_1', rootNoteId: 'note_1' })
+      setupStore([rootNote, c1, c2, c3], { note_1: ['c1', 'c2', 'c3'] })
+      const setSpy = captureMergeWrites()
+
+      await repository.saveNoteWithChildren('note_1', [
+        { content: 'Parent', noteId: 'note_1' },
+        { content: '\tFirst', noteId: 'c1' },
+        { content: '\tSecond EDITED', noteId: 'c2' },
+        { content: '\tThird', noteId: 'c3' },
+      ])
+
+      // Root: containedNotes still [c1,c2,c3] → skip. c1, c3 unchanged → skip.
+      // c2 content differs → exactly one merge write.
+      expect(mergeCalls(setSpy).length).toBe(1)
+    })
+
+    it('writes root when content changes but skips unchanged child', async () => {
+      const rootNote = note({ id: 'note_1', content: 'Old parent', containedNotes: ['c1'] })
+      const c1 = note({
+        id: 'c1', content: 'Untouched', parentNoteId: 'note_1', rootNoteId: 'note_1',
+      })
+      setupStore([rootNote, c1], { note_1: ['c1'] })
+      const setSpy = captureMergeWrites()
+
+      await repository.saveNoteWithChildren('note_1', [
+        { content: 'New parent', noteId: 'note_1' },
+        { content: '\tUntouched', noteId: 'c1' },
+      ])
+
+      expect(mergeCalls(setSpy).length).toBe(1)
+    })
+
+    it('writes root when containedNotes order changes', async () => {
+      // Reordering siblings flips the parent's containedNotes — root must
+      // write even when neither child's content changed.
+      const rootNote = note({ id: 'note_1', content: 'Parent', containedNotes: ['a', 'b'] })
+      const a = note({ id: 'a', content: 'A', parentNoteId: 'note_1', rootNoteId: 'note_1' })
+      const b = note({ id: 'b', content: 'B', parentNoteId: 'note_1', rootNoteId: 'note_1' })
+      setupStore([rootNote, a, b], { note_1: ['a', 'b'] })
+      const setSpy = captureMergeWrites()
+
+      await repository.saveNoteWithChildren('note_1', [
+        { content: 'Parent', noteId: 'note_1' },
+        { content: '\tB', noteId: 'b' },
+        { content: '\tA', noteId: 'a' },
+      ])
+
+      // Root flipped → write. Children unchanged → skip.
+      expect(mergeCalls(setSpy).length).toBe(1)
+    })
+
+    it('writes parent and child when child is reparented', async () => {
+      // Indenting B under A flips the root's containedNotes (drops B), A's
+      // containedNotes (gains B), and B's parentNoteId. All three must
+      // write; nothing else exists to skip.
+      const rootNote = note({ id: 'note_1', content: 'Parent', containedNotes: ['a', 'b'] })
+      const a = note({
+        id: 'a', content: 'A', parentNoteId: 'note_1', rootNoteId: 'note_1', containedNotes: [],
+      })
+      const b = note({ id: 'b', content: 'B', parentNoteId: 'note_1', rootNoteId: 'note_1' })
+      setupStore([rootNote, a, b], { note_1: ['a', 'b'] })
+      const setSpy = captureMergeWrites()
+
+      await repository.saveNoteWithChildren('note_1', [
+        { content: 'Parent', noteId: 'note_1' },
+        { content: '\tA', noteId: 'a' },
+        { content: '\t\tB', noteId: 'b' },
+      ])
+
+      expect(mergeCalls(setSpy).length).toBe(3)
+    })
+
+    it('writes child whose existing state is non-null', async () => {
+      // A child whose existing doc carries state (e.g., a soft-deleted line
+      // being restored) must always be written so the merge can reset state
+      // to null. Without this guard the doc would stay marked deleted.
+      const rootNote = note({ id: 'note_1', content: 'Parent', containedNotes: ['c1'] })
+      const deletedChild = note({
+        id: 'c1', content: 'Same', parentNoteId: 'note_1', rootNoteId: 'note_1',
+        state: 'deleted',
+      })
+      setupStore([rootNote, deletedChild], { note_1: ['c1'] })
+      const setSpy = captureMergeWrites()
+
+      await repository.saveNoteWithChildren('note_1', [
+        { content: 'Parent', noteId: 'note_1' },
+        { content: '\tSame', noteId: 'c1' },
+      ])
+
+      expect(mergeCalls(setSpy).length).toBe(1)
+    })
+
+    it('writes child whose existing parentNoteId differs', async () => {
+      // Edge case: NoteStore says the child currently lives under a
+      // different parent than the editor places it. Must write to reconcile.
+      const rootNote = note({ id: 'note_1', content: 'Parent', containedNotes: ['c1'] })
+      const orphan = note({
+        id: 'c1', content: 'Same', parentNoteId: 'stranger', rootNoteId: 'note_1',
+      })
+      setupStore([rootNote, orphan], { note_1: ['c1'] })
+      const setSpy = captureMergeWrites()
+
+      await repository.saveNoteWithChildren('note_1', [
+        { content: 'Parent', noteId: 'note_1' },
+        { content: '\tSame', noteId: 'c1' },
+      ])
+
+      expect(mergeCalls(setSpy).length).toBe(1)
     })
   })
 
