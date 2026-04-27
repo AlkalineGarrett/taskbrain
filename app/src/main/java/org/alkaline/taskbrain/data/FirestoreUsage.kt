@@ -36,14 +36,14 @@ object FirestoreUsage {
     private const val MAX_DAILY = 7
     private const val PERSIST_DEBOUNCE_MS = 30_000L
 
-    enum class ReadType {
-        DOC_GET,
-        GET_DOCS,
-        LISTENER_INITIAL_FRESH,
-        LISTENER_INITIAL_CACHED,
-        LISTENER_UPDATE_FRESH,
-        LISTENER_UPDATE_CACHED,
-        LISTENER_LOCAL_ECHO,
+    enum class ReadType(val isBilled: Boolean) {
+        DOC_GET(isBilled = true),
+        GET_DOCS(isBilled = true),
+        LISTENER_INITIAL_FRESH(isBilled = true),
+        LISTENER_UPDATE_FRESH(isBilled = true),
+        LISTENER_INITIAL_CACHED(isBilled = false),
+        LISTENER_UPDATE_CACHED(isBilled = false),
+        LISTENER_LOCAL_ECHO(isBilled = false),
     }
 
     enum class WriteType {
@@ -105,29 +105,43 @@ object FirestoreUsage {
     }
 
     fun getReport(): String = synchronized(lock) {
+        val now = System.currentTimeMillis()
+        val current = hourly.lastOrNull()
+        val last24 = summarize(hourly.filter { it.start >= now - 24 * HOUR_MS })
+        val last7 = summarize(daily.filter { it.start >= now - 7 * DAY_MS })
         buildString {
             appendLine("=== Firestore Usage Report ===")
-            val now = System.currentTimeMillis()
-            val current = hourly.lastOrNull()
-            if (current != null) {
-                appendLine()
-                appendLine("Current hour (${formatHour(current.start)}):")
-                append(formatBucket(current))
-            }
-            val last24 = summarize(hourly.filter { it.start >= now - 24 * HOUR_MS })
-            appendLine()
-            appendLine()
-            appendLine("Last 24 hours:")
-            append(formatBucket(last24))
-            val last7 = summarize(daily.filter { it.start >= now - 7 * DAY_MS })
-            appendLine()
-            appendLine()
-            appendLine("Last 7 days:")
-            append(formatBucket(last7))
+            appendTimeSeries("== Billed ==", current, last24, last7, ::formatBilledBucket)
+            appendTimeSeries("== Local-only ==", current, last24, last7, ::formatLocalBucket)
             appendLine()
             appendLine()
             append("=== End ===")
         }
+    }
+
+    private fun StringBuilder.appendTimeSeries(
+        sectionLabel: String,
+        current: Bucket?,
+        last24: Bucket,
+        last7: Bucket,
+        formatter: (Bucket) -> String,
+    ) {
+        appendLine()
+        appendLine()
+        appendLine(sectionLabel)
+        if (current != null) {
+            appendLine()
+            appendLine("Current hour (${formatHour(current.start)}):")
+            append(formatter(current))
+        }
+        appendLine()
+        appendLine()
+        appendLine("Last 24 hours:")
+        append(formatter(last24))
+        appendLine()
+        appendLine()
+        appendLine("Last 7 days:")
+        append(formatter(last7))
     }
 
     fun reset() {
@@ -174,35 +188,55 @@ object FirestoreUsage {
         return "%tb %td %02d:00".format(cal, cal, cal.get(Calendar.HOUR_OF_DAY))
     }
 
-    private fun formatBucket(b: Bucket): String = buildString {
-        var totalReadOps = 0L
-        var totalReadDocs = 0L
-        var totalWriteOps = 0L
-        var totalWriteDocs = 0L
-        appendLine("  Reads:")
-        for ((key, c) in b.reads.entries.sortedByDescending { it.value.docs }) {
-            val parts = key.split("|", limit = 2)
-            val op = parts.getOrNull(0) ?: ""
-            val type = parts.getOrNull(1) ?: ""
-            appendLine("    ${op.padEnd(34)} ${type.padEnd(28)} ${"%5d".format(c.ops)} ops × ${"%6d".format(c.docs)} docs")
-            totalReadOps += c.ops
-            totalReadDocs += c.docs
+    private fun formatEntry(key: String, c: Counter): String {
+        val parts = key.split("|", limit = 2)
+        val op = parts.getOrNull(0) ?: ""
+        val type = (parts.getOrNull(1) ?: "").removePrefix("LISTENER_")
+        return "$op $type: ${formatDocsOps(c.docs, c.ops)}"
+    }
+
+    private fun formatDocsOps(docs: Long, ops: Long): String =
+        "$docs ${pluralize("doc", docs)} over $ops ${pluralize("op", ops)}"
+
+    private fun pluralize(noun: String, count: Long): String =
+        if (count == 1L) noun else "${noun}s"
+
+    private fun formatBilledBucket(b: Bucket): String {
+        val billedReads = b.reads.entries.filter { (key, _) -> isBilled(key) }
+        val totalReadOps = billedReads.sumOf { it.value.ops }
+        val totalReadDocs = billedReads.sumOf { it.value.docs }
+        val totalWriteOps = b.writes.values.sumOf { it.ops }
+        val totalWriteDocs = b.writes.values.sumOf { it.docs }
+        val ratioSuffix = if (totalWriteDocs > 0) {
+            " (R:W %.1fx)".format(totalReadDocs.toDouble() / totalWriteDocs)
+        } else ""
+        val lines = mutableListOf<String>()
+        lines += "  Reads: ${formatDocsOps(totalReadDocs, totalReadOps)}"
+        billedReads.sortedByDescending { it.value.docs }.forEach { (key, c) ->
+            lines += "    ${formatEntry(key, c)}"
         }
-        appendLine("    TOTAL: $totalReadOps ops × $totalReadDocs docs")
-        appendLine("  Writes:")
-        for ((key, c) in b.writes.entries.sortedByDescending { it.value.docs }) {
-            val parts = key.split("|", limit = 2)
-            val op = parts.getOrNull(0) ?: ""
-            val type = parts.getOrNull(1) ?: ""
-            appendLine("    ${op.padEnd(34)} ${type.padEnd(28)} ${"%5d".format(c.ops)} ops × ${"%6d".format(c.docs)} docs")
-            totalWriteOps += c.ops
-            totalWriteDocs += c.docs
+        lines += "  Writes: ${formatDocsOps(totalWriteDocs, totalWriteOps)}$ratioSuffix"
+        b.writes.entries.sortedByDescending { it.value.docs }.forEach { (key, c) ->
+            lines += "    ${formatEntry(key, c)}"
         }
-        append("    TOTAL: $totalWriteOps ops × $totalWriteDocs docs")
-        if (totalWriteDocs > 0) {
-            appendLine()
-            append("    R:W RATIO: %.1fx".format(totalReadDocs.toDouble() / totalWriteDocs))
+        return lines.joinToString("\n")
+    }
+
+    private fun formatLocalBucket(b: Bucket): String {
+        val localReads = b.reads.entries.filter { (key, _) -> !isBilled(key) }
+        val totalDocs = localReads.sumOf { it.value.docs }
+        val totalOps = localReads.sumOf { it.value.ops }
+        val lines = mutableListOf<String>()
+        lines += "  Reads: ${formatDocsOps(totalDocs, totalOps)}"
+        localReads.sortedByDescending { it.value.docs }.forEach { (key, c) ->
+            lines += "    ${formatEntry(key, c)}"
         }
+        return lines.joinToString("\n")
+    }
+
+    private fun isBilled(key: String): Boolean {
+        val type = key.substringAfter('|', "")
+        return runCatching { ReadType.valueOf(type).isBilled }.getOrDefault(true)
     }
 
     private fun load() {

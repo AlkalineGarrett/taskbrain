@@ -183,7 +183,19 @@ export function RecentTabsBar({ notesNeedingFix }: RecentTabsBarProps = {}) {
 
 /** Call this when a note is opened. Moves/adds tab to front with animation. */
 export async function addOrUpdateTab(noteId: string, displayText: string): Promise<void> {
-  snapshotAndSetTabs?.((prev) => addOrUpdateTabState(prev, noteId, displayText))
+  // Skip when this note is already the front tab with matching display text
+  // — useTabSync's open effect re-fires whenever loadStatus or other deps
+  // settle after a save, which would otherwise rewrite the doc unchanged.
+  let needsWrite = true
+  snapshotAndSetTabs?.((prev) => {
+    const front = prev[0]
+    if (front?.noteId === noteId && front.displayText === displayText) {
+      needsWrite = false
+      return prev
+    }
+    return addOrUpdateTabState(prev, noteId, displayText)
+  })
+  if (!needsWrite) return
 
   try {
     await repo.addOrUpdateTab(noteId, displayText)
@@ -209,7 +221,16 @@ export async function removeTab(noteId: string, currentNoteId: string | undefine
 
 /** Call this when a note's title changes. Updates text without reordering (no animation). */
 export async function updateTabDisplayText(noteId: string, displayText: string): Promise<void> {
-  setTabsNoAnimation?.((prev) => updateDisplayTextState(prev, noteId, displayText))
+  let needsWrite = true
+  setTabsNoAnimation?.((prev) => {
+    const existing = prev.find((t) => t.noteId === noteId)
+    if (existing && existing.displayText === displayText) {
+      needsWrite = false
+      return prev
+    }
+    return updateDisplayTextState(prev, noteId, displayText)
+  })
+  if (!needsWrite) return
 
   try {
     await repo.addOrUpdateTab(noteId, displayText)

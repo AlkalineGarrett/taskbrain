@@ -111,10 +111,15 @@ class RecentTabsViewModel : ViewModel() {
     fun onNoteOpened(noteId: String, content: String) {
         val displayText = TabState.extractDisplayText(content)
 
+        // Skip when this note is already the front tab with matching display text
+        // — the loaded note's loadStatus is re-published after every save, which
+        // would otherwise re-fire this with no real change.
+        val current = _tabs.value ?: emptyList()
+        val front = current.firstOrNull()
+        if (front?.noteId == noteId && front.displayText == displayText) return
+
         // OPTIMISTIC UPDATE: Immediately move/add tab to front for instant animation
-        _tabs.value = TabState.addOrUpdate(
-            _tabs.value ?: emptyList(), noteId, displayText
-        )
+        _tabs.value = TabState.addOrUpdate(current, noteId, displayText)
 
         // Persist to Firestore in background (no loadTabs() call on success)
         viewModelScope.launch {
@@ -171,6 +176,9 @@ class RecentTabsViewModel : ViewModel() {
      */
     fun updateTabDisplayText(noteId: String, content: String) {
         val displayText = TabState.extractDisplayText(content)
+        val existing = (_tabs.value ?: emptyList()).find { it.noteId == noteId }
+        if (existing != null && existing.displayText == displayText) return
+
         viewModelScope.launch {
             val result = repository.updateTabDisplayText(noteId, displayText)
             result.fold(
