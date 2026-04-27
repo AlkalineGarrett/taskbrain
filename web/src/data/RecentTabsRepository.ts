@@ -14,6 +14,7 @@ import {
 } from 'firebase/firestore'
 import type { Auth } from 'firebase/auth'
 import type { Timestamp } from 'firebase/firestore'
+import { firestoreUsage } from './FirestoreUsage'
 
 export interface RecentTab {
   noteId: string
@@ -50,6 +51,7 @@ export class RecentTabsRepository {
       displayText,
       lastAccessedAt: serverTimestamp(),
     })
+    firestoreUsage.recordWrite('addOrUpdateTab', 'set')
     await this.enforceTabLimit(userId)
   }
 
@@ -61,6 +63,7 @@ export class RecentTabsRepository {
       limit(MAX_TABS),
     )
     const snapshot = await getDocs(q)
+    firestoreUsage.recordRead('getOpenTabs', 'getDocs', snapshot.size)
     return snapshot.docs.map((d) => {
       const data = d.data()
       return {
@@ -74,6 +77,7 @@ export class RecentTabsRepository {
   async removeTab(noteId: string): Promise<void> {
     const userId = this.requireUserId()
     await deleteDoc(this.tabRef(userId, noteId))
+    firestoreUsage.recordWrite('removeTab', 'delete')
   }
 
   async updateTabDisplayText(noteId: string, displayText: string): Promise<void> {
@@ -81,6 +85,7 @@ export class RecentTabsRepository {
     const ref = this.tabRef(userId, noteId)
     try {
       await updateDoc(ref, { displayText })
+      firestoreUsage.recordWrite('updateTabDisplayText', 'update')
     } catch {
       // Tab may not exist, ignore
     }
@@ -92,13 +97,14 @@ export class RecentTabsRepository {
       orderBy('lastAccessedAt', 'desc'),
     )
     const snapshot = await getDocs(q)
+    firestoreUsage.recordRead('enforceTabLimit', 'getDocs', snapshot.size)
 
     if (snapshot.size > MAX_TABS) {
+      const excess = snapshot.docs.slice(MAX_TABS)
       const batch = writeBatch(this.db)
-      snapshot.docs.slice(MAX_TABS).forEach((d) => {
-        batch.delete(d.ref)
-      })
+      excess.forEach((d) => batch.delete(d.ref))
       await batch.commit()
+      firestoreUsage.recordWrite('enforceTabLimit', 'batch.commit', excess.length)
     }
   }
 }

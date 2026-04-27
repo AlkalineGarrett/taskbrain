@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useNotes } from '@/hooks/useNotes'
 import { useSearch } from '@/hooks/useSearch'
 import { noteStore } from '@/data/NoteStore'
+import { firestoreUsage } from '@/data/FirestoreUsage'
 import { db, auth } from '@/firebase/config'
 import type { NoteSearchResult, SearchMatch, ContentSnippet } from '@/data/NoteSearchUtils'
 import type { SearchHistoryEntry } from '@/data/SearchHistoryRepository'
@@ -14,6 +15,7 @@ import {
   SEARCH_GO, SEARCH_NO_RESULTS, SEARCH_HISTORY_BUTTON,
   CLEAR_DELETED, CLEAR_DELETED_CONFIRM_TITLE, CLEAR_DELETED_CONFIRM_MESSAGE, clearedDeletedCount,
   SORT_RECENT, SORT_FREQUENT, SORT_CONSISTENT,
+  FIRESTORE_USAGE, FIRESTORE_USAGE_TITLE, FIRESTORE_USAGE_CLOSE, FIRESTORE_USAGE_RESET,
 } from '@/strings'
 import type { NoteSortMode } from '@/data/NoteFilteringUtils'
 import styles from './NoteListScreen.module.css'
@@ -61,6 +63,13 @@ export function NoteListScreen() {
   const [clearStatus, setClearStatus] = useState<{ count: number } | null>(null)
   const [clearing, setClearing] = useState(false)
 
+  const [usageReport, setUsageReport] = useState<string | null>(null)
+  const openUsageReport = () => {
+    const report = firestoreUsage.getReport()
+    console.log(report)
+    setUsageReport(report)
+  }
+
   const handleClearDeleted = async () => {
     setClearConfirmOpen(false)
     setClearing(true)
@@ -87,8 +96,22 @@ export function NoteListScreen() {
           <button className={styles.refreshButton} onClick={refresh}>
             {REFRESH}
           </button>
+          <button className={styles.refreshButton} onClick={openUsageReport}>
+            {FIRESTORE_USAGE}
+          </button>
         </div>
       </div>
+
+      {usageReport != null && (
+        <UsageReportDialog
+          report={usageReport}
+          onClose={() => setUsageReport(null)}
+          onReset={() => {
+            firestoreUsage.reset()
+            setUsageReport(firestoreUsage.getReport())
+          }}
+        />
+      )}
 
       {!searchState.isSearchOpen && (
         <SortModeRow selected={sortMode} onSelect={setSortMode} />
@@ -542,6 +565,33 @@ function NoteItemMenu({
 
 function firstLineOf(content: string): string {
   return content.split('\n', 1)[0] ?? ''
+}
+
+function UsageReportDialog({
+  report,
+  onClose,
+  onReset,
+}: {
+  report: string
+  onClose: () => void
+  onReset: () => void
+}) {
+  return (
+    <div className={styles.usageOverlay} role="dialog" aria-label={FIRESTORE_USAGE_TITLE}>
+      <div className={styles.usageDialog}>
+        <h3 className={styles.usageTitle}>{FIRESTORE_USAGE_TITLE}</h3>
+        <pre className={styles.usagePre}>{report}</pre>
+        <div className={styles.usageActions}>
+          <button className={styles.refreshButton} onClick={onReset}>
+            {FIRESTORE_USAGE_RESET}
+          </button>
+          <button className={styles.refreshButton} onClick={onClose}>
+            {FIRESTORE_USAGE_CLOSE}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function formatDate(ts: { toDate(): Date } | null): string {

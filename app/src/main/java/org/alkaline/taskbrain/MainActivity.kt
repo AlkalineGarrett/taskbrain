@@ -165,6 +165,9 @@ class MainActivity : AppCompatActivity() {
      * This is required to show alarm notifications.
      */
     private fun requestNotificationPermissionIfNeeded() {
+        // Skip in emulator/test mode — the dialog interrupts MainActivity
+        // composition and races with NavHost graph setup.
+        if (BuildConfig.USE_FIREBASE_EMULATOR) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (!PermissionHelper.hasNotificationPermission(this)) {
                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)

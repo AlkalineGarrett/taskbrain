@@ -138,17 +138,34 @@ object NoteStore {
                 return@addSnapshotListener
             }
             if (snapshot == null) return@addSnapshotListener
-            // Skip local-echo snapshots, but always process the first snapshot
-            // so ensureLoaded() can resolve even if there are pending writes.
-            if (loaded && snapshot.metadata.hasPendingWrites()) return@addSnapshotListener
+            if (loaded && snapshot.metadata.hasPendingWrites()) {
+                FirestoreUsage.recordRead(
+                    "NoteStore.listener",
+                    FirestoreUsage.ReadType.LISTENER_LOCAL_ECHO,
+                    snapshot.documentChanges.size,
+                )
+                return@addSnapshotListener
+            }
 
             val isFirstSnapshot = !loaded
-
+            val fromCache = snapshot.metadata.isFromCache
             if (isFirstSnapshot) {
+                FirestoreUsage.recordRead(
+                    "NoteStore.listener",
+                    if (fromCache) FirestoreUsage.ReadType.LISTENER_INITIAL_CACHED
+                    else FirestoreUsage.ReadType.LISTENER_INITIAL_FRESH,
+                    snapshot.documents.size,
+                )
                 handleFirstSnapshot(snapshot.documents.mapNotNull { doc ->
                     parseNote(doc.id, doc.data)
                 })
             } else {
+                FirestoreUsage.recordRead(
+                    "NoteStore.listener",
+                    if (fromCache) FirestoreUsage.ReadType.LISTENER_UPDATE_CACHED
+                    else FirestoreUsage.ReadType.LISTENER_UPDATE_FRESH,
+                    snapshot.documentChanges.size,
+                )
                 handleIncrementalSnapshot(snapshot.documentChanges)
             }
         }

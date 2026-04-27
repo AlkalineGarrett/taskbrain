@@ -17,3 +17,9 @@
 local.properties
 node_modules
 logs/
+# Firebase emulator runtime artifacts
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+.firebase/
+emu-data/

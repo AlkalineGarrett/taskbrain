@@ -155,6 +155,7 @@ class NoteRepository(
         }
 
         val document = noteRef(noteId).get().await()
+        FirestoreUsage.recordRead("loadNoteWithChildren", FirestoreUsage.ReadType.DOC_GET)
         val note = if (document.exists()) document.toObject(Note::class.java)?.copy(id = noteId) else null
         if (note == null) {
             emptyResult
@@ -188,6 +189,7 @@ class NoteRepository(
                 null
             }
         }.filter { it.state != "deleted" }
+        FirestoreUsage.recordRead("loadNoteLines", FirestoreUsage.ReadType.GET_DOCS, descendants.size)
 
         if (descendants.isEmpty()) {
             return listOf(NoteLine(note.content, note.id))
@@ -212,14 +214,16 @@ class NoteRepository(
         val userId = requireUserId()
         val result = notesCollection.whereEqualTo("userId", userId).get().await()
 
-        val allNotes = result.mapNotNull { doc ->
+        val parsed = result.mapNotNull { doc ->
             try {
                 doc.toObject(Note::class.java).copy(id = doc.id)
             } catch (e: Exception) {
                 Log.e(TAG, "Error parsing note", e)
                 null
             }
-        }.filter { it.state != "deleted" }
+        }
+        FirestoreUsage.recordRead("loadNotesWithFullContent", FirestoreUsage.ReadType.GET_DOCS, parsed.size)
+        val allNotes = parsed.filter { it.state != "deleted" }
 
         val topLevelNotes = allNotes.filter { it.parentNoteId == null }
 
@@ -238,39 +242,45 @@ class NoteRepository(
         val userId = requireUserId()
         val result = notesCollection.whereEqualTo("userId", userId).get().await()
 
-        result.mapNotNull { doc ->
+        val parsed = result.mapNotNull { doc ->
             try {
                 doc.toObject(Note::class.java).copy(id = doc.id)
             } catch (e: Exception) {
                 Log.e(TAG, "Error parsing note", e)
                 null
             }
-        }.filter { it.parentNoteId == null && it.state != "deleted" }
+        }
+        FirestoreUsage.recordRead("loadUserNotes", FirestoreUsage.ReadType.GET_DOCS, parsed.size)
+        parsed.filter { it.parentNoteId == null && it.state != "deleted" }
     }
 
     suspend fun loadAllUserNotes(): Result<List<Note>> = ioLogged("loadAllUserNotes") {
         val userId = requireUserId()
         val result = notesCollection.whereEqualTo("userId", userId).get().await()
 
-        result.mapNotNull { doc ->
+        val parsed = result.mapNotNull { doc ->
             try {
                 doc.toObject(Note::class.java).copy(id = doc.id)
             } catch (e: Exception) {
                 Log.e(TAG, "Error parsing note", e)
                 null
             }
-        }.filter { it.parentNoteId == null }
+        }
+        FirestoreUsage.recordRead("loadAllUserNotes", FirestoreUsage.ReadType.GET_DOCS, parsed.size)
+        parsed.filter { it.parentNoteId == null }
     }
 
     suspend fun loadNoteById(noteId: String): Result<Note?> = ioLogged("loadNoteById") {
         requireUserId()
         val document = noteRef(noteId).get().await()
+        FirestoreUsage.recordRead("loadNoteById", FirestoreUsage.ReadType.DOC_GET)
         if (document.exists()) document.toObject(Note::class.java)?.copy(id = document.id) else null
     }
 
     suspend fun isNoteDeleted(noteId: String): Result<Boolean> = ioLogged("isNoteDeleted") {
         requireUserId()
         val document = noteRef(noteId).get().await()
+        FirestoreUsage.recordRead("isNoteDeleted", FirestoreUsage.ReadType.DOC_GET)
         document.exists() && document.toObject(Note::class.java)?.state == "deleted"
     }
 
@@ -527,7 +537,7 @@ class NoteRepository(
             ops.add(BatchOp(extra.ref, extra.data, extra.merge))
         }
 
-        commitInBatches(ops)
+        commitInBatches("saveNoteWithChildren", ops)
 
         newRefs.mapValues { it.value.id }
     }
@@ -781,6 +791,7 @@ class NoteRepository(
     suspend fun createNote(): Result<String> = ioLogged("createNote") {
         val userId = requireUserId()
         val ref = notesCollection.add(newNoteData(userId, "")).await()
+        FirestoreUsage.recordWrite("createNote", FirestoreUsage.WriteType.SET)
         Log.d(TAG, "Note created with ID: ${ref.id}")
         ref.id
     }
@@ -796,6 +807,7 @@ class NoteRepository(
 
         if (childLines.isEmpty() || childLines.all { it.trimStart('\t').isEmpty() }) {
             val ref = notesCollection.add(newNoteData(userId, firstLine)).await()
+            FirestoreUsage.recordWrite("createMultiLineNote", FirestoreUsage.WriteType.SET)
             return@body ref.id
         }
 
@@ -854,6 +866,8 @@ class NoteRepository(
         }
 
         batch.commit().await()
+        // Root note + N descendants written in a single batch.
+        FirestoreUsage.recordWrite("createMultiLineNote", FirestoreUsage.WriteType.BATCH_COMMIT, nodes.size + 1)
         Log.d(TAG, "Multi-line note created with ID: ${parentRef.id}")
         parentRef.id
     }
@@ -869,7 +883,7 @@ class NoteRepository(
         warnIfDescendantsLikelyStale("softDeleteNote", noteId)
         val idsToDelete = NoteStore.getDescendantIds(noteId) + noteId
         val deleteData = mapOf("state" to "deleted", "updatedAt" to FieldValue.serverTimestamp())
-        commitInBatches(idsToDelete.map { BatchOp(noteRef(it), deleteData, merge = true) })
+        commitInBatches("softDeleteNote", idsToDelete.map { BatchOp(noteRef(it), deleteData, merge = true) })
     }
 
     /**
@@ -883,7 +897,7 @@ class NoteRepository(
         // descendants — the heuristic doesn't apply here.
         val idsToRestore = NoteStore.getAllDescendantIds(noteId) + noteId
         val restoreData = mapOf<String, Any?>("state" to null, "updatedAt" to FieldValue.serverTimestamp())
-        commitInBatches(idsToRestore.map { BatchOp(noteRef(it), restoreData, merge = true) })
+        commitInBatches("undeleteNote", idsToRestore.map { BatchOp(noteRef(it), restoreData, merge = true) })
     }
 
     // ── Utility operations ──────────────────────────────────────────────
@@ -896,6 +910,7 @@ class NoteRepository(
                 "updatedAt" to FieldValue.serverTimestamp()
             )
         ).await()
+        FirestoreUsage.recordWrite("updateShowCompleted", FirestoreUsage.WriteType.UPDATE)
     }
 
     /**
@@ -1019,6 +1034,11 @@ class NoteRepository(
                             .whereIn(com.google.firebase.firestore.FieldPath.documentId(), batch)
                             .get().await()
                         val fetched = snapshot.documents.associateBy { it.id }
+                        FirestoreUsage.recordRead(
+                            "launchDescendantDiagnostics",
+                            FirestoreUsage.ReadType.GET_DOCS,
+                            fetched.size,
+                        )
                         for (id in batch) {
                             val doc = fetched[id]
                             if (doc == null || !doc.exists()) {
@@ -1052,7 +1072,7 @@ class NoteRepository(
         val merge: Boolean
     )
 
-    private suspend fun commitInBatches(ops: List<BatchOp>) {
+    private suspend fun commitInBatches(operation: String, ops: List<BatchOp>) {
         for (chunk in ops.chunked(MAX_BATCH_SIZE)) {
             val batch = db.batch()
             for (op in chunk) {
@@ -1063,6 +1083,7 @@ class NoteRepository(
                 }
             }
             batch.commit().await()
+            FirestoreUsage.recordWrite(operation, FirestoreUsage.WriteType.BATCH_COMMIT, chunk.size)
         }
     }
 

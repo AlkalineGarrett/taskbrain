@@ -30,13 +30,20 @@ android {
         }
     }
 
+    val useFirebaseEmulator = (project.findProperty("useFirebaseEmulator") as String?)
+        ?.toBoolean() ?: false
+
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
             buildConfigField("Boolean", "AGENT_COMMAND_ENABLED", "false")
+            buildConfigField(
+                "Boolean", "USE_FIREBASE_EMULATOR", useFirebaseEmulator.toString()
+            )
         }
         release {
             buildConfigField("Boolean", "AGENT_COMMAND_ENABLED", "false")
+            buildConfigField("Boolean", "USE_FIREBASE_EMULATOR", "false")
             // -- not truly release
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("debug")
@@ -135,4 +142,7 @@ dependencies {
     testImplementation(libs.json)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

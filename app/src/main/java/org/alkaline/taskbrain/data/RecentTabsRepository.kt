@@ -82,12 +82,24 @@ class RecentTabsRepository(
                         return@addSnapshotListener
                     }
                     if (snapshot == null) return@addSnapshotListener
-                    // After first snapshot, skip the local-write echo: addOrUpdateTab
-                    // / removeTab fire the listener twice (pending + confirmed), and
-                    // rebuilding the cache list on the pending pass is wasted work.
-                    if (deferred.isCompleted && snapshot.metadata.hasPendingWrites()) {
+                    val firstAlreadyDelivered = deferred.isCompleted
+                    if (firstAlreadyDelivered && snapshot.metadata.hasPendingWrites()) {
+                        FirestoreUsage.recordRead(
+                            "RecentTabsRepo.listener",
+                            FirestoreUsage.ReadType.LISTENER_LOCAL_ECHO,
+                            snapshot.documentChanges.size,
+                        )
                         return@addSnapshotListener
                     }
+                    val fromCache = snapshot.metadata.isFromCache
+                    val type = when {
+                        !firstAlreadyDelivered && fromCache -> FirestoreUsage.ReadType.LISTENER_INITIAL_CACHED
+                        !firstAlreadyDelivered -> FirestoreUsage.ReadType.LISTENER_INITIAL_FRESH
+                        fromCache -> FirestoreUsage.ReadType.LISTENER_UPDATE_CACHED
+                        else -> FirestoreUsage.ReadType.LISTENER_UPDATE_FRESH
+                    }
+                    val docCount = if (firstAlreadyDelivered) snapshot.documentChanges.size else snapshot.size()
+                    FirestoreUsage.recordRead("RecentTabsRepo.listener", type, docCount)
                     val tabs = snapshot.documents.mapNotNull { doc ->
                         try {
                             doc.toObject(RecentTab::class.java)
@@ -129,6 +141,7 @@ class RecentTabsRepository(
                 "lastAccessedAt" to FieldValue.serverTimestamp()
             )
             tabRef(userId, noteId).set(data).await()
+            FirestoreUsage.recordWrite("addOrUpdateTab", FirestoreUsage.WriteType.SET)
             enforceTabLimit(userId)
             Log.d(TAG, "Tab added/updated: $noteId")
             Unit
@@ -151,6 +164,7 @@ class RecentTabsRepository(
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             tabRef(userId, noteId).delete().await()
+            FirestoreUsage.recordWrite("removeTab", FirestoreUsage.WriteType.DELETE)
             Log.d(TAG, "Tab removed: $noteId")
             Unit
         }
@@ -163,6 +177,7 @@ class RecentTabsRepository(
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             tabRef(userId, noteId).update("displayText", displayText).await()
+            FirestoreUsage.recordWrite("updateTabDisplayText", FirestoreUsage.WriteType.UPDATE)
             Log.d(TAG, "Tab display text updated: $noteId")
             Unit
         }
@@ -184,6 +199,7 @@ class RecentTabsRepository(
                 batch.delete(tabRef(userId, tab.noteId))
             }
             batch.commit().await()
+            FirestoreUsage.recordWrite("removeTabsNotIn", FirestoreUsage.WriteType.BATCH_COMMIT, staleTabs.size)
             Log.d(TAG, "Removed ${staleTabs.size} stale tabs")
             Unit
         }
@@ -205,6 +221,7 @@ class RecentTabsRepository(
             batch.delete(tabRef(userId, tab.noteId))
         }
         batch.commit().await()
+        FirestoreUsage.recordWrite("enforceTabLimit", FirestoreUsage.WriteType.BATCH_COMMIT, toRemove.size)
         Log.d(TAG, "Enforced tab limit, removed ${toRemove.size} old tabs")
     }
 

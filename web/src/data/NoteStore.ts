@@ -8,6 +8,7 @@ import {
 } from 'firebase/firestore'
 import type { Auth } from 'firebase/auth'
 import { noteFromFirestore, type Note, type NoteLine } from './Note'
+import { firestoreUsage } from './FirestoreUsage'
 import {
   rebuildAllNotes,
   rebuildAffectedNotes,
@@ -160,9 +161,26 @@ export class NoteStore {
     this.unsubscribe = onSnapshot(q, (snapshot) => {
       // Skip local-echo snapshots, but always process the first snapshot
       // so ensureLoaded() can resolve even if there are pending writes.
-      if (this.loaded && snapshot.metadata.hasPendingWrites) return
+      if (this.loaded && snapshot.metadata.hasPendingWrites) {
+        firestoreUsage.recordRead('NoteStore.listener', 'listener.local-echo', snapshot.docChanges().length)
+        return
+      }
 
       const isFirstSnapshot = !this.loaded
+
+      if (isFirstSnapshot) {
+        firestoreUsage.recordRead(
+          'NoteStore.listener',
+          snapshot.metadata.fromCache ? 'listener.initial-cached' : 'listener.initial-fresh',
+          snapshot.docs.length,
+        )
+      } else {
+        firestoreUsage.recordRead(
+          'NoteStore.listener',
+          snapshot.metadata.fromCache ? 'listener.update-cached' : 'listener.update-fresh',
+          snapshot.docChanges().length,
+        )
+      }
 
       if (isFirstSnapshot) {
         // Initial load — process all docs at once

@@ -1,8 +1,10 @@
 import { initializeApp } from 'firebase/app'
-import { getAuth } from 'firebase/auth'
+import { connectAuthEmulator, getAuth, signInAnonymously } from 'firebase/auth'
 import {
   type Firestore,
+  connectFirestoreEmulator,
   initializeFirestore,
+  memoryLocalCache,
   persistentLocalCache,
   persistentMultipleTabManager,
 } from 'firebase/firestore'
@@ -18,6 +20,8 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig)
 export const auth = getAuth(app)
+
+const useEmulator = import.meta.env.VITE_USE_FIREBASE_EMULATOR === 'true'
 
 /**
  * Diagnostic: best-effort feature detection of IndexedDB. If unavailable
@@ -49,7 +53,20 @@ if (persistentCacheError) {
  * `persistentCacheError` export above signals that case to the UI.
  */
 export const db: Firestore = initializeFirestore(app, {
-  localCache: persistentLocalCache({
-    tabManager: persistentMultipleTabManager(),
-  }),
+  localCache: useEmulator
+    ? memoryLocalCache()
+    : persistentLocalCache({
+        tabManager: persistentMultipleTabManager(),
+      }),
 })
+
+if (useEmulator) {
+  connectFirestoreEmulator(db, 'localhost', 8080)
+  connectAuthEmulator(auth, 'http://localhost:9099', { disableWarnings: true })
+  if (!auth.currentUser) {
+    signInAnonymously(auth).catch((e) => {
+      console.error('[firebase emulator] anonymous sign-in failed', e)
+    })
+  }
+  console.info('[firebase emulator] wired Firestore 8080, Auth 9099')
+}

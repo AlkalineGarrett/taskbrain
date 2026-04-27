@@ -36,6 +36,11 @@ export const PASTE = 'Paste'
 export const SEND = 'Send'
 export const COLLAPSE = 'Collapse'
 export const REFRESH = 'Refresh'
+// Firestore usage diagnostic (Android: action_firestore_usage, firestore_usage_*)
+export const FIRESTORE_USAGE = 'Usage'
+export const FIRESTORE_USAGE_TITLE = 'Firestore Usage'
+export const FIRESTORE_USAGE_CLOSE = 'Close'
+export const FIRESTORE_USAGE_RESET = 'Reset counters'
 
 // Note list (Android: action_add_note, action_delete_note, action_restore_note, etc.)
 export const ADD_NOTE = 'Add note'

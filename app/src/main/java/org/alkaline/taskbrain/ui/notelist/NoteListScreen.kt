@@ -19,9 +19,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -66,6 +71,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.firebase.Timestamp
 import org.alkaline.taskbrain.R
 import org.alkaline.taskbrain.data.ContentSnippet
+import org.alkaline.taskbrain.data.FirestoreUsage
 import org.alkaline.taskbrain.data.Note
 import org.alkaline.taskbrain.data.NoteSearchResult
 import org.alkaline.taskbrain.data.NoteSortMode
@@ -75,6 +81,8 @@ import org.alkaline.taskbrain.ui.components.ActionButton
 import org.alkaline.taskbrain.ui.components.ActionButtonBar
 import org.alkaline.taskbrain.ui.components.ErrorDialog
 import android.text.format.DateFormat
+import android.util.Log
+import androidx.compose.ui.text.font.FontFamily
 import java.util.Date
 
 @Composable
@@ -93,6 +101,8 @@ fun NoteListScreen(
     val activeSearchResults by noteListViewModel.activeSearchResults.observeAsState(emptyList())
     val deletedSearchResults by noteListViewModel.deletedSearchResults.observeAsState(emptyList())
     val searchHistory by noteListViewModel.searchHistory.observeAsState(emptyList())
+
+    var usageReport by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         noteListViewModel.loadNotes()
@@ -123,6 +133,17 @@ fun NoteListScreen(
         )
     }
 
+    usageReport?.let { report ->
+        FirestoreUsageDialog(
+            report = report,
+            onClose = { usageReport = null },
+            onReset = {
+                FirestoreUsage.reset()
+                usageReport = FirestoreUsage.getReport()
+            },
+        )
+    }
+
     Scaffold(
         topBar = {
             Column {
@@ -134,6 +155,11 @@ fun NoteListScreen(
                     },
                     onRefreshClick = { noteListViewModel.loadNotes() },
                     onSearchClick = { noteListViewModel.toggleSearch() },
+                    onUsageClick = {
+                        val report = FirestoreUsage.getReport()
+                        Log.i("FirestoreUsage", "\n$report")
+                        usageReport = report
+                    },
                 )
                 if (!searchState.isSearchOpen) {
                     SortModeRow(
@@ -262,6 +288,7 @@ fun NoteListTopBar(
     onAddNoteClick: () -> Unit,
     onRefreshClick: () -> Unit,
     onSearchClick: () -> Unit,
+    onUsageClick: () -> Unit,
 ) {
     ActionButtonBar(
         modifier = Modifier,
@@ -283,7 +310,47 @@ fun NoteListTopBar(
                 icon = Icons.Filled.Refresh,
                 onClick = onRefreshClick
             )
+            Spacer(modifier = Modifier.width(8.dp))
+            ActionButton(
+                text = stringResource(R.string.action_firestore_usage),
+                icon = Icons.Filled.Assessment,
+                onClick = onUsageClick
+            )
         }
+    )
+}
+
+@Composable
+private fun FirestoreUsageDialog(
+    report: String,
+    onClose: () -> Unit,
+    onReset: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text(stringResource(R.string.firestore_usage_title)) },
+        text = {
+            // Selectable so the user can long-press and copy the report out.
+            SelectionContainer {
+                Text(
+                    text = report,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onClose) {
+                Text(stringResource(R.string.firestore_usage_close))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onReset) {
+                Text(stringResource(R.string.firestore_usage_reset))
+            }
+        },
     )
 }
 

@@ -23,6 +23,38 @@ Run a single test class:
 ./gradlew test --tests "org.alkaline.taskbrain.data.NoteLineTrackerTest"
 ```
 
+## Firebase Emulator (local dev + tests)
+
+The repo ships with `firebase.json` + `firestore.rules.emulator` so the app
+and tests can run against a local Firebase Emulator Suite (Firestore on 8080,
+Auth on 9099, UI on 4000). The emulator path uses anonymous sign-in instead
+of Google Sign-In, so it works without OAuth setup.
+
+```bash
+firebase emulators:start                # Terminal A — leave running
+~/Library/Android/sdk/emulator/emulator -avd Medium_Phone_API_36 &> /tmp/avd.log &   # Boot Android AVD in background
+./gradlew connectedAndroidTest -PuseFirebaseEmulator=true     # Run instrumentation tests (installs app + test APKs)
+./gradlew installDebug -PuseFirebaseEmulator=true             # Or install the app only, for manual interactive testing
+VITE_USE_FIREBASE_EMULATOR=true npm --prefix web run dev      # Web: dev server uses emulator
+```
+
+Replace `Medium_Phone_API_36` with whichever AVD `emulator -list-avds`
+returns. Wait for `adb devices` to show the device as `device` (not
+`offline`) before running the gradle tasks.
+
+`-PuseFirebaseEmulator=true` flips a `BuildConfig.USE_FIREBASE_EMULATOR`
+field; `TaskBrainApplication.onCreate` reads it to wire `useEmulator(...)`
+on Firestore + Auth and kick off `signInAnonymously()`. The smoke test
+`CreateNoteFlowTest` self-skips when the flag is off.
+
+Persist emulator data across restarts with
+`firebase emulators:start --import=./emu-data --export-on-exit=./emu-data`.
+
+**Do not run `firebase deploy --only firestore:rules`.** The repo's
+`firebase.json` points the rules path at the *permissive* emulator file —
+deploying it would open prod to any signed-in user. Production rules live
+in `firestore.rules` and are deployed manually via the Firebase console.
+
 ## Architecture
 
 **Pattern:** MVVM with Jetpack Compose UI

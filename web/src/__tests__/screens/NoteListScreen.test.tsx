@@ -43,6 +43,7 @@ function makeNote(overrides: Partial<Note> & { id: string; content: string }): N
     updatedAt: null,
     path: '',
     onceCache: {},
+    tags: [],
   } as Note
 }
 

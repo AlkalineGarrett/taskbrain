@@ -120,7 +120,15 @@ fun MainScreen(
     // Determine the start destination based on sign-in status
     val startDestination = if (isUserSignedIn) Screen.CurrentNote.route else Screen.Login.route
 
+    // Track previous sign-in state so we only navigate on transitions. The
+    // first composition is handled by `startDestination`; navigating on
+    // first composition races with NavHost's graph setup (NavHost calls
+    // setGraph in its own LaunchedEffect, which fires after this one).
+    var previousSignedIn by remember { mutableStateOf<Boolean?>(null) }
     LaunchedEffect(isUserSignedIn) {
+        val previous = previousSignedIn
+        previousSignedIn = isUserSignedIn
+        if (previous == null || previous == isUserSignedIn) return@LaunchedEffect
         if (isUserSignedIn) {
             // Skip if there's a pending alarm — the alarm LaunchedEffect will handle navigation
             if (pendingAlarmId != null) return@LaunchedEffect

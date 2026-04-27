@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only network config: allow cleartext HTTP to the Firebase Emulator
+  Suite. The Auth emulator doesn't speak HTTPS, and Android 28+ blocks
+  cleartext by default. Restricted to loopback hosts so this never affects
+  general internet traffic in debug builds.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>

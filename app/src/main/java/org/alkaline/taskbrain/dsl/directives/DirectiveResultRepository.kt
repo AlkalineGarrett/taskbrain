@@ -8,6 +8,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import org.alkaline.taskbrain.data.FirestoreUsage
 import org.alkaline.taskbrain.data.NoteStore
 
 /**
@@ -68,13 +69,26 @@ class DirectiveResultRepository(
                     return@addSnapshotListener
                 }
                 if (snapshot == null) return@addSnapshotListener
-                // Skip local-echo snapshots after the first delivery — saveResult
-                // writes fire the listener twice (pending + server-confirmed), and
-                // rebuilding the cache map on the pending pass is wasted work.
-                synchronized(cacheLock) {
-                    if (firstSnapshotDelivered.contains(noteId) &&
-                        snapshot.metadata.hasPendingWrites()) return@addSnapshotListener
+                val firstAlreadyDelivered = synchronized(cacheLock) {
+                    firstSnapshotDelivered.contains(noteId)
                 }
+                if (firstAlreadyDelivered && snapshot.metadata.hasPendingWrites()) {
+                    FirestoreUsage.recordRead(
+                        "DirectiveResultRepo.listener",
+                        FirestoreUsage.ReadType.LISTENER_LOCAL_ECHO,
+                        snapshot.documentChanges.size,
+                    )
+                    return@addSnapshotListener
+                }
+                val fromCache = snapshot.metadata.isFromCache
+                val type = when {
+                    !firstAlreadyDelivered && fromCache -> FirestoreUsage.ReadType.LISTENER_INITIAL_CACHED
+                    !firstAlreadyDelivered -> FirestoreUsage.ReadType.LISTENER_INITIAL_FRESH
+                    fromCache -> FirestoreUsage.ReadType.LISTENER_UPDATE_CACHED
+                    else -> FirestoreUsage.ReadType.LISTENER_UPDATE_FRESH
+                }
+                val docCount = if (firstAlreadyDelivered) snapshot.documentChanges.size else snapshot.size()
+                FirestoreUsage.recordRead("DirectiveResultRepo.listener", type, docCount)
                 val map = snapshot.documents.associate { doc ->
                     doc.id to (doc.toObject(DirectiveResult::class.java) ?: DirectiveResult())
                 }
@@ -104,6 +118,7 @@ class DirectiveResultRepository(
                 "collapsed" to result.collapsed
             )
             resultsCollection(noteId).document(directiveHash).set(data).await()
+            FirestoreUsage.recordWrite("saveDirectiveResult", FirestoreUsage.WriteType.SET)
             Unit
         }
     }.onFailure { Log.e(TAG, "Error saving directive result", it) }
@@ -140,6 +155,7 @@ class DirectiveResultRepository(
             resultsCollection(noteId).document(directiveHash)
                 .update("collapsed", collapsed)
                 .await()
+            FirestoreUsage.recordWrite("updateCollapsed", FirestoreUsage.WriteType.UPDATE)
             Unit
         }
     }.onFailure { Log.e(TAG, "Error updating collapsed state", it) }
@@ -152,11 +168,14 @@ class DirectiveResultRepository(
     suspend fun deleteAllResults(noteId: String): Result<Unit> = runCatching {
         withContext(Dispatchers.IO) {
             val snapshot = resultsCollection(noteId).get().await()
+            FirestoreUsage.recordRead("deleteAllResults", FirestoreUsage.ReadType.GET_DOCS, snapshot.documents.size)
+            if (snapshot.isEmpty) return@withContext
             val batch = db.batch()
             snapshot.documents.forEach { doc ->
                 batch.delete(doc.reference)
             }
             batch.commit().await()
+            FirestoreUsage.recordWrite("deleteAllResults", FirestoreUsage.WriteType.BATCH_COMMIT, snapshot.documents.size)
             Unit
         }
     }.onFailure { Log.e(TAG, "Error deleting directive results", it) }

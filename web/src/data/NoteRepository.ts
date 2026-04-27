@@ -16,6 +16,7 @@ import type { Auth } from 'firebase/auth'
 import { noteFromFirestore, type Note, type NoteLine } from './Note'
 import { reconstructNoteContent, reconstructNoteLines } from './NoteReconstruction'
 import { noteStore, NoteStoreNotLoadedError } from './NoteStore'
+import { firestoreUsage } from './FirestoreUsage'
 import { isSentinelNoteId, isRealNoteId } from './NoteIdSentinel'
 import { performSimilarityMatching } from '@/editor/ContentSimilarity'
 
@@ -90,6 +91,7 @@ export class NoteRepository {
     return this.logged('loadNoteWithChildren', async () => {
       this.requireUserId()
       const docSnap = await getDoc(this.noteRef(noteId))
+      firestoreUsage.recordRead('loadNoteWithChildren', 'doc.get')
 
       if (!docSnap.exists()) {
         return { lines: [{ content: '', noteId }], isDeleted: false, showCompleted: true }
@@ -116,6 +118,7 @@ export class NoteRepository {
     const userId = this.requireUserId()
     const descendantQuery = query(this.notesRef, where('rootNoteId', '==', note.id), where('userId', '==', userId))
     const descendantSnap = await getDocs(descendantQuery)
+    firestoreUsage.recordRead('loadNoteLines', 'getDocs', descendantSnap.size)
 
     const descendants = descendantSnap.docs
       .map((d) => noteFromFirestore(d.id, d.data()))
@@ -147,6 +150,7 @@ export class NoteRepository {
       const userId = this.requireUserId()
       const q = query(this.notesRef, where('userId', '==', userId))
       const snapshot = await getDocs(q)
+      firestoreUsage.recordRead('loadNotesWithFullContent', 'getDocs', snapshot.size)
 
       const allNotes = snapshot.docs
         .map((d) => noteFromFirestore(d.id, d.data()))
@@ -176,6 +180,7 @@ export class NoteRepository {
       const userId = this.requireUserId()
       const q = query(this.notesRef, where('userId', '==', userId))
       const snapshot = await getDocs(q)
+      firestoreUsage.recordRead('loadUserNotes', 'getDocs', snapshot.size)
 
       return snapshot.docs
         .map((d) => noteFromFirestore(d.id, d.data()))
@@ -188,6 +193,7 @@ export class NoteRepository {
       const userId = this.requireUserId()
       const q = query(this.notesRef, where('userId', '==', userId))
       const snapshot = await getDocs(q)
+      firestoreUsage.recordRead('loadAllUserNotes', 'getDocs', snapshot.size)
 
       return snapshot.docs
         .map((d) => noteFromFirestore(d.id, d.data()))
@@ -199,6 +205,7 @@ export class NoteRepository {
     return this.logged('loadNoteById', async () => {
       this.requireUserId()
       const docSnap = await getDoc(this.noteRef(noteId))
+      firestoreUsage.recordRead('loadNoteById', 'doc.get')
       if (!docSnap.exists()) return null
       return noteFromFirestore(docSnap.id, docSnap.data())
     })
@@ -208,6 +215,7 @@ export class NoteRepository {
     return this.logged('isNoteDeleted', async () => {
       this.requireUserId()
       const docSnap = await getDoc(this.noteRef(noteId))
+      firestoreUsage.recordRead('isNoteDeleted', 'doc.get')
       if (!docSnap.exists()) return false
       return docSnap.data().state === 'deleted'
     })
@@ -304,6 +312,9 @@ export class NoteRepository {
       // to itself, clear parentNoteId/rootNoteId to make it a root note.
       const hasCycle = this.hasParentCycle(noteId)
 
+      // Total docs touched: root (1) + descendants + soft-deletes.
+      const txnDocCount = 1 + (linesToSave.length - 1) + toDelete.size
+      firestoreUsage.recordWrite('saveNoteWithChildren', 'transaction', txnDocCount)
       return runTransaction(this.db, async (transaction) => {
         // Update root
         const rootData: Record<string, unknown> = {
@@ -514,6 +525,7 @@ export class NoteRepository {
       const userId = this.requireUserId()
       const { addDoc } = await import('firebase/firestore')
       const ref = await addDoc(this.notesRef, this.newNoteData(userId, ''))
+      firestoreUsage.recordWrite('createNote', 'set')
       return ref.id
     })
   }
@@ -531,6 +543,7 @@ export class NoteRepository {
       if (childLines.length === 0 || childLines.every((l) => l.replace(/^\t+/, '') === '')) {
         const { addDoc } = await import('firebase/firestore')
         const ref = await addDoc(this.notesRef, this.newNoteData(userId, firstLine))
+        firestoreUsage.recordWrite('createMultiLineNote', 'set')
         return ref.id
       }
 
@@ -591,6 +604,8 @@ export class NoteRepository {
       }
 
       await batch.commit()
+      // Root note + N descendants written in a single batch.
+      firestoreUsage.recordWrite('createMultiLineNote', 'batch.commit', nodes.length + 1)
       return parentRef.id
     })
   }
@@ -615,6 +630,7 @@ export class NoteRepository {
         })
       }
       await batch.commit()
+      firestoreUsage.recordWrite('softDeleteNote', 'batch.commit', idsToDelete.size)
     })
   }
 
@@ -635,15 +651,18 @@ export class NoteRepository {
         where('userId', '==', userId),
       )
       const snap = await getDocs(q)
+      firestoreUsage.recordRead('hardDeleteAllSoftDeleted', 'getDocs', snap.size)
       if (snap.empty) return 0
 
       const BATCH_LIMIT = 500
       for (let i = 0; i < snap.docs.length; i += BATCH_LIMIT) {
+        const chunk = snap.docs.slice(i, i + BATCH_LIMIT)
         const batch = writeBatch(this.db)
-        for (const d of snap.docs.slice(i, i + BATCH_LIMIT)) {
+        for (const d of chunk) {
           batch.delete(d.ref)
         }
         await batch.commit()
+        firestoreUsage.recordWrite('hardDeleteAllSoftDeleted', 'batch.commit', chunk.length)
       }
       return snap.size
     })
@@ -670,6 +689,7 @@ export class NoteRepository {
         })
       }
       await batch.commit()
+      firestoreUsage.recordWrite('undeleteNote', 'batch.commit', idsToRestore.size)
     })
   }
 
@@ -682,6 +702,7 @@ export class NoteRepository {
         showCompleted,
         updatedAt: serverTimestamp(),
       })
+      firestoreUsage.recordWrite('updateShowCompleted', 'update')
     })
   }
 
