@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef, useLayoutEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { RecentTabsRepository, type RecentTab } from '@/data/RecentTabsRepository'
-import { addOrUpdateTabState, updateDisplayTextState, removeTabState, extractDisplayText } from '@/data/TabState'
+import { addOrUpdateTabState, updateDisplayTextState, removeTabState, extractDisplayText, mergeOptimisticTabs } from '@/data/TabState'
 import { noteStore } from '@/data/NoteStore'
 import { db, auth } from '@/firebase/config'
 import { EMPTY_TAB, TAB_NEEDS_FIX_INDICATOR } from '@/strings'
@@ -73,7 +73,7 @@ export function RecentTabsBar({ notesNeedingFix }: RecentTabsBarProps = {}) {
     const loadTabs = async () => {
       try {
         const openTabs = await repo.getOpenTabs()
-        setTabs(refreshDisplayTexts(openTabs))
+        setTabs((prev) => refreshDisplayTexts(mergeOptimisticTabs(prev, openTabs)))
       } catch {
         // silently fail
       }
@@ -183,19 +183,13 @@ export function RecentTabsBar({ notesNeedingFix }: RecentTabsBarProps = {}) {
 
 /** Call this when a note is opened. Moves/adds tab to front with animation. */
 export async function addOrUpdateTab(noteId: string, displayText: string): Promise<void> {
-  // Skip when this note is already the front tab with matching display text
-  // — useTabSync's open effect re-fires whenever loadStatus or other deps
-  // settle after a save, which would otherwise rewrite the doc unchanged.
-  let needsWrite = true
-  snapshotAndSetTabs?.((prev) => {
-    const front = prev[0]
-    if (front?.noteId === noteId && front.displayText === displayText) {
-      needsWrite = false
-      return prev
-    }
-    return addOrUpdateTabState(prev, noteId, displayText)
-  })
-  if (!needsWrite) return
+  // Dedup against the listener cache, not React state — RecentTabsBar's local
+  // state resets on remount (e.g., Admin → CurrentNote) so a state-based check
+  // would miss the front-tab match.
+  const cached = await repo.getOpenTabs()
+  if (cached[0]?.noteId === noteId && cached[0].displayText === displayText) return
+
+  snapshotAndSetTabs?.((prev) => addOrUpdateTabState(prev, noteId, displayText))
 
   try {
     await repo.addOrUpdateTab(noteId, displayText)
@@ -221,19 +215,14 @@ export async function removeTab(noteId: string, currentNoteId: string | undefine
 
 /** Call this when a note's title changes. Updates text without reordering (no animation). */
 export async function updateTabDisplayText(noteId: string, displayText: string): Promise<void> {
-  let needsWrite = true
-  setTabsNoAnimation?.((prev) => {
-    const existing = prev.find((t) => t.noteId === noteId)
-    if (existing && existing.displayText === displayText) {
-      needsWrite = false
-      return prev
-    }
-    return updateDisplayTextState(prev, noteId, displayText)
-  })
-  if (!needsWrite) return
+  const cached = await repo.getOpenTabs()
+  const cachedExisting = cached.find((t) => t.noteId === noteId)
+  if (cachedExisting && cachedExisting.displayText === displayText) return
+
+  setTabsNoAnimation?.((prev) => updateDisplayTextState(prev, noteId, displayText))
 
   try {
-    await repo.addOrUpdateTab(noteId, displayText)
+    await repo.updateTabDisplayText(noteId, displayText)
   } catch {
     // silently fail
   }

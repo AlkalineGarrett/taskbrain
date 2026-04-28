@@ -26,6 +26,8 @@ export interface NoteLoadResult {
   showCompleted: boolean
 }
 
+const NOTE_STORE_AWAIT_MS = 1500
+
 /**
  * Repository for managing composable notes in Firestore.
  *
@@ -86,10 +88,35 @@ export class NoteRepository {
 
   /**
    * Loads a note and its descendants, returning lines plus note metadata.
+   *
+   * On cold start the snapshot listener may not have delivered its first
+   * cached snapshot yet. Wait briefly so the in-memory path can serve this
+   * load instead of issuing a parallel server fetch for data the listener
+   * is about to deliver from the IndexedDB persistent cache.
    */
   async loadNoteWithChildren(noteId: string): Promise<NoteLoadResult> {
     return this.logged('loadNoteWithChildren', async () => {
       this.requireUserId()
+
+      if (!noteStore.isLoaded()) {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        await Promise.race([
+          noteStore.ensureLoaded().finally(() => clearTimeout(timer)),
+          new Promise<void>((resolve) => { timer = setTimeout(resolve, NOTE_STORE_AWAIT_MS) }),
+        ])
+      }
+      if (noteStore.isLoaded()) {
+        const rawNote = noteStore.getRawNoteById(noteId)
+        const storeLines = rawNote ? noteStore.getNoteLinesById(noteId) : undefined
+        if (rawNote && storeLines) {
+          return {
+            lines: storeLines,
+            isDeleted: rawNote.state === 'deleted',
+            showCompleted: rawNote.showCompleted ?? true,
+          }
+        }
+      }
+
       const docSnap = await getDoc(this.noteRef(noteId))
       firestoreUsage.recordRead('loadNoteWithChildren', 'DOC_GET')
 

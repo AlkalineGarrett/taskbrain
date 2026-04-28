@@ -25,6 +25,22 @@ export function addOrUpdateTabState(
 }
 
 /**
+ * Prefer existing optimistic displayText over a stale empty value from a
+ * fresh load — guards against the race where a load resolves after an
+ * optimistic write but before the write is visible to the server.
+ */
+export function mergeOptimisticTabs(prev: RecentTab[], loaded: RecentTab[]): RecentTab[] {
+  const optimisticByNoteId = new Map(prev.map((t) => [t.noteId, t]))
+  return loaded.map((tab) => {
+    const existing = optimisticByNoteId.get(tab.noteId)
+    if (existing && existing.displayText && !tab.displayText) {
+      return { ...tab, displayText: existing.displayText }
+    }
+    return tab
+  })
+}
+
+/**
  * Updates the display text for a specific tab without reordering.
  */
 export function updateDisplayTextState(
