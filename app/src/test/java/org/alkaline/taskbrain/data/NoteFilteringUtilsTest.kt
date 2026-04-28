@@ -111,4 +111,44 @@ class NoteFilteringUtilsTest {
 
         assertTrue(NoteFilteringUtils.filterAndSortNotes(notes).isEmpty())
     }
+
+    @Test
+    fun `filterAndSortDeletedNotes includes deleted top-level notes`() {
+        val now = Date()
+        val notes = listOf(
+            note("live", updatedAt = Timestamp(now)),
+            note("gone", state = "deleted", updatedAt = Timestamp(now))
+        )
+
+        val filtered = NoteFilteringUtils.filterAndSortDeletedNotes(notes)
+
+        assertEquals(listOf("gone"), filtered.map { it.id })
+    }
+
+    @Test
+    fun `filterAndSortDeletedNotes excludes deleted child lines`() {
+        // Removed child lines keep parentNoteId on soft-delete so the deleted-section
+        // view doesn't surface them — only deleted parent notes should appear.
+        val notes = listOf(
+            note("parent_gone", state = "deleted"),
+            note("child_gone", state = "deleted", parentNoteId = "some_parent")
+        )
+
+        val filtered = NoteFilteringUtils.filterAndSortDeletedNotes(notes)
+
+        assertEquals(listOf("parent_gone"), filtered.map { it.id })
+    }
+
+    @Test
+    fun `filterAndSortDeletedNotes sorts most recent first`() {
+        val now = Date()
+        val notes = listOf(
+            note("older", state = "deleted", updatedAt = Timestamp(Date(now.time - 5000))),
+            note("newer", state = "deleted", updatedAt = Timestamp(now))
+        )
+
+        val sorted = NoteFilteringUtils.filterAndSortDeletedNotes(notes)
+
+        assertEquals(listOf("newer", "older"), sorted.map { it.id })
+    }
 }

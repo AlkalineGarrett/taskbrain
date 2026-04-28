@@ -432,12 +432,12 @@ export class NoteRepository {
           }
         }
 
-        // Soft-delete removed notes and clear parent refs to prevent orphan cycles
+        // Soft-delete removed notes. Preserve parentNoteId/rootNoteId so the
+        // deleted-notes view can distinguish removed child lines (have a parent)
+        // from deleted top-level notes (don't).
         for (const id of toDelete) {
           transaction.update(this.noteRef(id), {
             state: 'deleted',
-            parentNoteId: null,
-            rootNoteId: null,
             updatedAt: serverTimestamp(),
           })
         }

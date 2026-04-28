@@ -3,6 +3,7 @@ import {
   filterTopLevelNotes,
   sortByUpdatedAtDescending,
   filterAndSortNotes,
+  filterAndSortDeletedNotes,
 } from '../../data/NoteFilteringUtils'
 import type { Note } from '../../data/Note'
 import { note } from '../factories'
@@ -91,5 +92,35 @@ describe('filterAndSortNotes', () => {
       note({ id: 'deleted', state: 'deleted' }),
     ]
     expect(filterAndSortNotes(notes)).toEqual([])
+  })
+})
+
+describe('filterAndSortDeletedNotes', () => {
+  it('includes deleted top-level notes', () => {
+    const now = Date.now()
+    const notes = [
+      note({ id: 'live', updatedAt: ts(now) }),
+      note({ id: 'gone', state: 'deleted', updatedAt: ts(now) }),
+    ]
+    expect(filterAndSortDeletedNotes(notes).map((n) => n.id)).toEqual(['gone'])
+  })
+
+  it('excludes deleted child lines (parentNoteId set)', () => {
+    // Removed child lines keep parentNoteId on soft-delete so the deleted-section
+    // view doesn't surface them — only deleted parent notes should appear.
+    const notes = [
+      note({ id: 'parent_gone', state: 'deleted' }),
+      note({ id: 'child_gone', state: 'deleted', parentNoteId: 'some_parent' }),
+    ]
+    expect(filterAndSortDeletedNotes(notes).map((n) => n.id)).toEqual(['parent_gone'])
+  })
+
+  it('sorts most recent first', () => {
+    const now = Date.now()
+    const notes = [
+      note({ id: 'older', state: 'deleted', updatedAt: ts(now - 5000) }),
+      note({ id: 'newer', state: 'deleted', updatedAt: ts(now) }),
+    ]
+    expect(filterAndSortDeletedNotes(notes).map((n) => n.id)).toEqual(['newer', 'older'])
   })
 })

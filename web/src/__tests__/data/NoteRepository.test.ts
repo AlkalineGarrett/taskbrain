@@ -425,16 +425,17 @@ describe('NoteRepository', () => {
       )
     }
 
-    function captureMergeWrites(): ReturnType<typeof vi.fn> {
+    function captureWrites(): { setSpy: ReturnType<typeof vi.fn>; updateSpy: ReturnType<typeof vi.fn> } {
       const setSpy = vi.fn()
+      const updateSpy = vi.fn()
       vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
         if (args.length === 1) return { id: 'unexpected_new_doc' } as any
         return { id: args[args.length - 1] } as any
       })
       vi.mocked(mockRunTransaction).mockImplementation(async (_db, fn) => {
-        return fn({ get: vi.fn(), set: setSpy, update: vi.fn() } as any)
+        return fn({ get: vi.fn(), set: setSpy, update: updateSpy } as any)
       })
-      return setSpy
+      return { setSpy, updateSpy }
     }
 
     function mergeCalls(setSpy: ReturnType<typeof vi.fn>) {
@@ -453,7 +454,7 @@ describe('NoteRepository', () => {
         rootNoteId: 'note_1',
       })
       setupStore([rootNote, child], { note_1: ['c1'] })
-      const setSpy = captureMergeWrites()
+      const { setSpy } = captureWrites()
 
       await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
@@ -471,7 +472,7 @@ describe('NoteRepository', () => {
       const c2 = note({ id: 'c2', content: 'Second', parentNoteId: 'note_1', rootNoteId: 'note_1' })
       const c3 = note({ id: 'c3', content: 'Third', parentNoteId: 'note_1', rootNoteId: 'note_1' })
       setupStore([rootNote, c1, c2, c3], { note_1: ['c1', 'c2', 'c3'] })
-      const setSpy = captureMergeWrites()
+      const { setSpy } = captureWrites()
 
       await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
@@ -491,7 +492,7 @@ describe('NoteRepository', () => {
         id: 'c1', content: 'Untouched', parentNoteId: 'note_1', rootNoteId: 'note_1',
       })
       setupStore([rootNote, c1], { note_1: ['c1'] })
-      const setSpy = captureMergeWrites()
+      const { setSpy } = captureWrites()
 
       await repository.saveNoteWithChildren('note_1', [
         { content: 'New parent', noteId: 'note_1' },
@@ -508,7 +509,7 @@ describe('NoteRepository', () => {
       const a = note({ id: 'a', content: 'A', parentNoteId: 'note_1', rootNoteId: 'note_1' })
       const b = note({ id: 'b', content: 'B', parentNoteId: 'note_1', rootNoteId: 'note_1' })
       setupStore([rootNote, a, b], { note_1: ['a', 'b'] })
-      const setSpy = captureMergeWrites()
+      const { setSpy } = captureWrites()
 
       await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
@@ -530,7 +531,7 @@ describe('NoteRepository', () => {
       })
       const b = note({ id: 'b', content: 'B', parentNoteId: 'note_1', rootNoteId: 'note_1' })
       setupStore([rootNote, a, b], { note_1: ['a', 'b'] })
-      const setSpy = captureMergeWrites()
+      const { setSpy } = captureWrites()
 
       await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
@@ -551,7 +552,7 @@ describe('NoteRepository', () => {
         state: 'deleted',
       })
       setupStore([rootNote, deletedChild], { note_1: ['c1'] })
-      const setSpy = captureMergeWrites()
+      const { setSpy } = captureWrites()
 
       await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
@@ -569,7 +570,7 @@ describe('NoteRepository', () => {
         id: 'c1', content: 'Same', parentNoteId: 'stranger', rootNoteId: 'note_1',
       })
       setupStore([rootNote, orphan], { note_1: ['c1'] })
-      const setSpy = captureMergeWrites()
+      const { setSpy } = captureWrites()
 
       await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
@@ -577,6 +578,31 @@ describe('NoteRepository', () => {
       ])
 
       expect(mergeCalls(setSpy).length).toBe(1)
+    })
+
+    it('soft-deletes removed child without clearing parentNoteId/rootNoteId', async () => {
+      // The deleted-section view distinguishes deleted parent notes (no
+      // parentNoteId) from removed child lines (parentNoteId set). Clearing
+      // those fields here would make the child indistinguishable from a
+      // top-level deletion and surface it incorrectly.
+      const rootNote = note({ id: 'note_1', content: 'Parent', containedNotes: ['c1'] })
+      const child = note({
+        id: 'c1', content: 'Doomed', parentNoteId: 'note_1', rootNoteId: 'note_1',
+      })
+      setupStore([rootNote, child], { note_1: ['c1'] })
+      const { updateSpy } = captureWrites()
+
+      await repository.saveNoteWithChildren('note_1', [
+        { content: 'Parent', noteId: 'note_1' },
+      ])
+
+      const deleteCall = updateSpy.mock.calls.find(
+        (c: any[]) => c[1]?.state === 'deleted',
+      )
+      expect(deleteCall).toBeDefined()
+      const payload = deleteCall![1] as Record<string, unknown>
+      expect(payload).not.toHaveProperty('parentNoteId')
+      expect(payload).not.toHaveProperty('rootNoteId')
     })
   })
 

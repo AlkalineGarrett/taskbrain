@@ -557,14 +557,14 @@ class NoteRepository(
             Log.d(TAG, "saveNoteWithChildren($noteId): skipped $skippedUnchanged unchanged docs of ${linesToSave.size}, writing ${ops.size}")
         }
 
-        // Soft-delete removed notes
+        // Soft-delete removed notes. Preserve parentNoteId/rootNoteId so the
+        // deleted-notes view can distinguish removed child lines (have a parent)
+        // from deleted top-level notes (don't).
         for (id in toDelete) {
             ops.add(BatchOp(
                 noteRef(id),
                 mapOf(
                     "state" to "deleted",
-                    "parentNoteId" to FieldValue.delete(),
-                    "rootNoteId" to FieldValue.delete(),
                     "updatedAt" to FieldValue.serverTimestamp(),
                 ),
                 merge = true

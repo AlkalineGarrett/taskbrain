@@ -731,6 +731,39 @@ class NoteRepositoryTest {
         verify(exactly = 1) { batch.set(any(), any<Map<String, Any?>>(), any<SetOptions>()) }
     }
 
+    @Test
+    fun `saveNoteWithChildren soft-deletes removed child without clearing parent refs`() = runTest {
+        // The deleted-section view distinguishes deleted parent notes (no
+        // parentNoteId) from removed child lines (parentNoteId set). Clearing
+        // those fields here would make the child indistinguishable from a
+        // top-level deletion and surface it incorrectly.
+        val rootNote = Note(id = "note_1", content = "Parent", containedNotes = listOf("c1"))
+        val child = Note(
+            id = "c1", content = "Doomed", parentNoteId = "note_1", rootNoteId = "note_1",
+        )
+        setupStore(rootNote, child)
+        val batch = mockBatch()
+        val childRef = mockCollection.document("c1")
+
+        repository.saveNoteWithChildren(
+            "note_1",
+            listOf(NoteLine("Parent", "note_1")),
+            extraOpsBuilder = null,
+        ).getOrThrow()
+
+        val deletePayload = slot<Map<String, Any?>>()
+        verify { batch.set(childRef, capture(deletePayload), any<SetOptions>()) }
+        assertEquals("deleted", deletePayload.captured["state"])
+        assertFalse(
+            "parentNoteId must not be cleared on soft-delete",
+            deletePayload.captured.containsKey("parentNoteId"),
+        )
+        assertFalse(
+            "rootNoteId must not be cleared on soft-delete",
+            deletePayload.captured.containsKey("rootNoteId"),
+        )
+    }
+
     // endregion
 
     // endregion
