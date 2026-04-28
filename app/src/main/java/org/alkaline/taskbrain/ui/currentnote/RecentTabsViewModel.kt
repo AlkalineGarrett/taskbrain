@@ -33,8 +33,19 @@ class RecentTabsViewModel : ViewModel() {
     private val _tabs = MutableLiveData<List<RecentTab>>(emptyList())
     val tabs: LiveData<List<RecentTab>> = _tabs
 
-    private val _isLoading = MutableLiveData<Boolean>(false)
-    val isLoading: LiveData<Boolean> = _isLoading
+    init {
+        // Kick off the lazy listener so other devices' writes start flowing.
+        viewModelScope.launch { repository.getOpenTabs() }
+        // The listener-backed cache is the sole writer to [_tabs] — this
+        // device's own writes echo through the local-echo path in
+        // RecentTabsRepository's listener, and other devices' writes flow in
+        // once the server confirms.
+        viewModelScope.launch {
+            repository.cachedTabs.collect { shared ->
+                _tabs.value = refreshDisplayTexts(shared)
+            }
+        }
+    }
 
     private val _error = MutableLiveData<TabsError?>(null)
     val error: LiveData<TabsError?> = _error
@@ -68,130 +79,57 @@ class RecentTabsViewModel : ViewModel() {
     }
 
     /**
-     * Loads open tabs from Firebase.
-     */
-    fun loadTabs() {
-        _isLoading.value = true
-        viewModelScope.launch {
-            val result = repository.getOpenTabs()
-            result.fold(
-                onSuccess = { tabList ->
-                    // Merge: prefer existing optimistic displayText over stale Firestore data.
-                    // This prevents a race where loadTabs() Firestore read completes after
-                    // onNoteOpened() wrote a correct displayText optimistically but before
-                    // the Firestore write from onNoteOpened() is visible to the read.
-                    val optimisticMap = _tabs.value?.associateBy { it.noteId }.orEmpty()
-                    val merged = tabList.map { loaded ->
-                        val existing = optimisticMap[loaded.noteId]
-                        if (existing != null && existing.displayText.isNotEmpty() && loaded.displayText.isEmpty()) {
-                            loaded.copy(displayText = existing.displayText)
-                        } else {
-                            loaded
-                        }
-                    }
-                    _tabs.value = refreshDisplayTexts(merged)
-                    Log.d(TAG, "Loaded ${tabList.size} tabs")
-                },
-                onFailure = { e ->
-                    Log.e(TAG, "Error loading tabs", e)
-                    _tabs.value = emptyList()
-                    _error.value = TabsError("Failed to load tabs", e)
-                }
-            )
-            _isLoading.value = false
-        }
-    }
-
-    /**
-     * Called when a note is opened. Adds or updates the tab.
-     * Uses optimistic update for immediate UI animation.
-     * @param noteId The ID of the note being opened
-     * @param content The note content (first line will be used as display text)
+     * Called when a note is opened. Skips the write when the note is already
+     * at the front of the shared history with matching displayText. The UI
+     * update flows through the listener-backed cache, not from here — see
+     * the [init] block.
      */
     fun onNoteOpened(noteId: String, content: String) {
         val displayText = TabState.extractDisplayText(content)
-
-        // Skip when this note is already the front tab with matching display text
-        // — the loaded note's loadStatus is re-published after every save, which
-        // would otherwise re-fire this with no real change.
-        val current = _tabs.value ?: emptyList()
-        val front = current.firstOrNull()
+        val front = _tabs.value?.firstOrNull()
         if (front?.noteId == noteId && front.displayText == displayText) return
 
-        // OPTIMISTIC UPDATE: Immediately move/add tab to front for instant animation
-        _tabs.value = TabState.addOrUpdate(current, noteId, displayText)
-
-        // Persist to Firestore in background (no loadTabs() call on success)
         viewModelScope.launch {
-            val result = repository.addOrUpdateTab(noteId, displayText)
-            result.onFailure { e ->
+            repository.addOrUpdateTab(noteId, displayText).onFailure { e ->
                 Log.e(TAG, "Error adding tab for note: $noteId", e)
-                // Sync with Firebase on error to recover correct state
-                loadTabs()
                 _error.value = TabsError("Failed to sync tab", e)
             }
         }
     }
 
-    /**
-     * Called when user closes a tab with the X button.
-     */
+    /** Called when user closes a tab with the X button. */
     fun closeTab(noteId: String) {
-        // Clear cache for this note
         noteCache.remove(noteId)
-
         viewModelScope.launch {
-            val result = repository.removeTab(noteId)
-            result.fold(
-                onSuccess = {
-                    _tabs.value = TabState.remove(_tabs.value ?: emptyList(), noteId)
-                },
-                onFailure = { e ->
-                    Log.e(TAG, "Error closing tab: $noteId", e)
-                    _error.value = TabsError("Failed to close tab", e)
-                }
-            )
-        }
-    }
-
-    /**
-     * Called when a note is deleted. Removes its tab immediately.
-     */
-    fun onNoteDeleted(noteId: String) {
-        // Clear cache for deleted note
-        noteCache.remove(noteId)
-
-        viewModelScope.launch {
-            val result = repository.removeTab(noteId)
-            result.onFailure { e ->
-                Log.e(TAG, "Error removing tab for deleted note: $noteId", e)
-                // Don't show error for this - it's a background cleanup
+            repository.removeTab(noteId).onFailure { e ->
+                Log.e(TAG, "Error closing tab: $noteId", e)
+                _error.value = TabsError("Failed to close tab", e)
             }
-            _tabs.value = TabState.remove(_tabs.value ?: emptyList(), noteId)
         }
     }
 
-    /**
-     * Updates the display text for a tab (e.g., after note content changes).
-     */
+    /** Called when a note is deleted. Removes its tab. */
+    fun onNoteDeleted(noteId: String) {
+        noteCache.remove(noteId)
+        viewModelScope.launch {
+            repository.removeTab(noteId).onFailure { e ->
+                Log.e(TAG, "Error removing tab for deleted note: $noteId", e)
+                // Background cleanup — don't surface errors.
+            }
+        }
+    }
+
+    /** Persists a fresh display text. Skips no-op writes. */
     fun updateTabDisplayText(noteId: String, content: String) {
         val displayText = TabState.extractDisplayText(content)
         val existing = (_tabs.value ?: emptyList()).find { it.noteId == noteId }
         if (existing != null && existing.displayText == displayText) return
 
         viewModelScope.launch {
-            val result = repository.updateTabDisplayText(noteId, displayText)
-            result.fold(
-                onSuccess = {
-                    _tabs.value = TabState.updateDisplayText(
-                        _tabs.value ?: emptyList(), noteId, displayText
-                    )
-                },
-                onFailure = { e ->
-                    Log.e(TAG, "Error updating tab display text: $noteId", e)
-                    // Don't show error for display text updates - non-critical
-                }
-            )
+            repository.updateTabDisplayText(noteId, displayText).onFailure { e ->
+                Log.e(TAG, "Error updating tab display text: $noteId", e)
+                // Display-text updates are non-critical; suppress UI error.
+            }
         }
     }
 

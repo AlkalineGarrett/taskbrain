@@ -19,6 +19,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { EditorLine } from '@/components/EditorLine'
 import { CompletedPlaceholderRow } from '@/components/CompletedPlaceholderRow'
 import { RecentTabsBar } from '@/components/RecentTabsBar'
+import { extractDisplayText } from '@/data/TabState'
 import { LOADING_NOTE, DELETE_NOTE, DELETE_NOTE_CONFIRM_TITLE, DELETE_NOTE_CONFIRM_MESSAGE, SAVE_ERROR_BANNER, SAVE_ERROR_DISMISS, SYNC_ERROR_BANNER } from '@/strings'
 import { db, auth } from '@/firebase/config'
 import { findDirectives } from '@/dsl/directives/DirectiveFinder'
@@ -157,7 +158,17 @@ export function NoteEditorScreen() {
 
   return (
     <div className={styles.container}>
-      <RecentTabsBar notesNeedingFix={notesNeedingFix} />
+      <RecentTabsBar
+        notesNeedingFix={notesNeedingFix}
+        currentTab={
+          loadedNoteId
+            ? {
+                noteId: loadedNoteId,
+                displayText: extractDisplayText(editorState.lines[0]?.text ?? ''),
+              }
+            : null
+        }
+      />
 
       <CommandBar
         controller={activeController}

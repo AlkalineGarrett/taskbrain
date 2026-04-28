@@ -1,5 +1,6 @@
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
+import { recentTabsRepo } from '@/data/RecentTabsRepository'
 import { APP_NAME, NAV_CURRENT_NOTE, NAV_ALL_NOTES, NAV_ALARMS, NAV_ADMIN, SIGN_OUT } from '@/strings'
 import styles from './NavBar.module.css'
 
@@ -19,14 +20,18 @@ export function NavBar() {
       <div className={styles.navItems}>
         <button
           className={`${styles.navItem} ${isNoteEditor ? styles.active : ''}`}
-          onClick={() => {
+          onClick={async () => {
             if (isNoteEditor) return
+            // Prefer this device's last-viewed note. On a fresh device the
+            // shared history is the fallback — pick its most-recent entry.
             const lastNoteId = localStorage.getItem('lastNoteId')
             if (lastNoteId) {
               navigate(`/note/${lastNoteId}`)
+              return
             }
+            const tabs = await recentTabsRepo.getOpenTabs()
+            if (tabs[0]) navigate(`/note/${tabs[0].noteId}`)
           }}
-          disabled={!isNoteEditor && !localStorage.getItem('lastNoteId')}
         >
           {NAV_CURRENT_NOTE}
         </button>

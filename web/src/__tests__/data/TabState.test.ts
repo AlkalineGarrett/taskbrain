@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
-  addOrUpdateTabState,
-  updateDisplayTextState,
-  removeTabState,
+  computeDisplayTabs,
+  nextNoteIdAfterRemove,
   extractDisplayText,
+  MAX_DISPLAYED,
 } from '../../data/TabState'
 import type { RecentTab } from '../../data/RecentTabsRepository'
 
@@ -11,135 +11,57 @@ function tab(noteId: string, displayText = noteId): RecentTab {
   return { noteId, displayText, lastAccessedAt: null }
 }
 
-describe('addOrUpdateTabState', () => {
-  it('adds a new tab to the front of an empty list', () => {
-    const result = addOrUpdateTabState([], 'a', 'Note A')
-    expect(result).toEqual([tab('a', 'Note A')])
+describe('computeDisplayTabs', () => {
+  it('pins currentTab in slot 0 and dedupes the shared list', () => {
+    const result = computeDisplayTabs(tab('c'), [tab('a'), tab('b'), tab('c'), tab('d')])
+    expect(result.map((t) => t.noteId)).toEqual(['c', 'a', 'b', 'd'])
   })
 
-  it('adds a new tab to the front of an existing list', () => {
-    const tabs = [tab('a'), tab('b')]
-    const result = addOrUpdateTabState(tabs, 'c', 'Note C')
-    expect(result.map((t) => t.noteId)).toEqual(['c', 'a', 'b'])
+  it('caps the displayed list at MAX_DISPLAYED total', () => {
+    const shared = [tab('a'), tab('b'), tab('c'), tab('d'), tab('e'), tab('f')]
+    const result = computeDisplayTabs(tab('z'), shared)
+    expect(result).toHaveLength(MAX_DISPLAYED)
+    expect(result[0]!.noteId).toBe('z')
+    expect(result.slice(1).map((t) => t.noteId)).toEqual(['a', 'b', 'c', 'd'])
   })
 
-  it('moves an existing tab to the front', () => {
-    const tabs = [tab('a'), tab('b'), tab('c')]
-    const result = addOrUpdateTabState(tabs, 'c', 'Note C')
-    expect(result.map((t) => t.noteId)).toEqual(['c', 'a', 'b'])
+  it('keeps current pinned even when not in the shared list', () => {
+    // Other devices' writes can push this device's current past the buffer.
+    const shared = [tab('a'), tab('b'), tab('c'), tab('d')]
+    const result = computeDisplayTabs(tab('orphan'), shared)
+    expect(result.map((t) => t.noteId)).toEqual(['orphan', 'a', 'b', 'c', 'd'])
   })
 
-  it('updates display text of an existing tab', () => {
-    const tabs = [tab('a', 'Old'), tab('b')]
-    const result = addOrUpdateTabState(tabs, 'a', 'New')
-    expect(result[0]!.displayText).toBe('New')
+  it('returns the shared list as-is when no current tab', () => {
+    const shared = [tab('a'), tab('b'), tab('c'), tab('d'), tab('e'), tab('f')]
+    const result = computeDisplayTabs(null, shared)
+    expect(result.map((t) => t.noteId)).toEqual(['a', 'b', 'c', 'd', 'e'])
   })
 
-  it('caps at 5 tabs when adding a new one', () => {
-    const tabs = [tab('a'), tab('b'), tab('c'), tab('d'), tab('e')]
-    const result = addOrUpdateTabState(tabs, 'f', 'Note F')
-    expect(result).toHaveLength(5)
-    expect(result[0]!.noteId).toBe('f')
-    expect(result.map((t) => t.noteId)).not.toContain('e')
-  })
-
-  it('does not drop tabs when moving an existing tab to front', () => {
-    const tabs = [tab('a'), tab('b'), tab('c'), tab('d'), tab('e')]
-    const result = addOrUpdateTabState(tabs, 'e', 'Note E')
-    expect(result).toHaveLength(5)
-    expect(result[0]!.noteId).toBe('e')
-  })
-
-  it('preserves lastAccessedAt of existing tab', () => {
-    const ts = { toDate: () => new Date() } as any
-    const tabs: RecentTab[] = [{ noteId: 'a', displayText: 'old', lastAccessedAt: ts }]
-    const result = addOrUpdateTabState(tabs, 'a', 'new')
-    expect(result[0]!.lastAccessedAt).toBe(ts)
-  })
-
-  it('with tab already at front just updates text', () => {
-    const tabs = [tab('a', 'Old'), tab('b'), tab('c')]
-    const result = addOrUpdateTabState(tabs, 'a', 'New')
-    expect(result.map((t) => t.noteId)).toEqual(['a', 'b', 'c'])
-    expect(result[0]!.displayText).toBe('New')
+  it('uses currentTab displayText (not the shared entry) so an in-flight title edit shows immediately', () => {
+    const result = computeDisplayTabs(
+      tab('c', 'Fresh title'),
+      [tab('c', 'Stale title'), tab('a')],
+    )
+    expect(result[0]!.displayText).toBe('Fresh title')
   })
 })
 
-describe('updateDisplayTextState', () => {
-  it('updates text without reordering', () => {
-    const tabs = [tab('a', 'Old'), tab('b'), tab('c')]
-    const result = updateDisplayTextState(tabs, 'b', 'Updated')
-    expect(result.map((t) => t.noteId)).toEqual(['a', 'b', 'c'])
-    expect(result[1]!.displayText).toBe('Updated')
+describe('nextNoteIdAfterRemove', () => {
+  it('returns the next-most-recent shared entry', () => {
+    expect(nextNoteIdAfterRemove('a', [tab('a'), tab('b'), tab('c')])).toBe('b')
   })
 
-  it('with nonexistent noteId returns unchanged', () => {
-    const tabs = [tab('a'), tab('b')]
-    const result = updateDisplayTextState(tabs, 'z', 'X')
-    expect(result).toEqual(tabs)
-  })
-})
-
-describe('removeTabState', () => {
-  it('removes a tab that is not current', () => {
-    const tabs = [tab('a'), tab('b'), tab('c')]
-    const result = removeTabState(tabs, 'b', 'a')
-    expect(result.tabs.map((t) => t.noteId)).toEqual(['a', 'c'])
-    expect(result.navigateTo).toBeUndefined()
+  it('skips the removed id even if not at the front', () => {
+    expect(nextNoteIdAfterRemove('b', [tab('a'), tab('b'), tab('c')])).toBe('a')
   })
 
-  it('navigates to next tab when closing current tab', () => {
-    const tabs = [tab('a'), tab('b'), tab('c')]
-    const result = removeTabState(tabs, 'b', 'b')
-    expect(result.tabs.map((t) => t.noteId)).toEqual(['a', 'c'])
-    expect(result.navigateTo).toBe('c')
+  it('returns null when shared has nothing else', () => {
+    expect(nextNoteIdAfterRemove('a', [tab('a')])).toBeNull()
   })
 
-  it('navigates to previous tab when closing last current tab', () => {
-    const tabs = [tab('a'), tab('b'), tab('c')]
-    const result = removeTabState(tabs, 'c', 'c')
-    expect(result.tabs.map((t) => t.noteId)).toEqual(['a', 'b'])
-    expect(result.navigateTo).toBe('b')
-  })
-
-  it('navigates to first tab when closing current first tab', () => {
-    const tabs = [tab('a'), tab('b'), tab('c')]
-    const result = removeTabState(tabs, 'a', 'a')
-    expect(result.tabs.map((t) => t.noteId)).toEqual(['b', 'c'])
-    expect(result.navigateTo).toBe('b')
-  })
-
-  it('navigates home when closing the only tab', () => {
-    const tabs = [tab('a')]
-    const result = removeTabState(tabs, 'a', 'a')
-    expect(result.tabs).toEqual([])
-    expect(result.navigateTo).toBeNull()
-  })
-
-  it('does not navigate when closing non-current tab', () => {
-    const tabs = [tab('a'), tab('b')]
-    const result = removeTabState(tabs, 'b', 'a')
-    expect(result.navigateTo).toBeUndefined()
-  })
-
-  it('handles removing a tab not in the list', () => {
-    const tabs = [tab('a'), tab('b')]
-    const result = removeTabState(tabs, 'z', 'a')
-    expect(result.tabs.map((t) => t.noteId)).toEqual(['a', 'b'])
-    expect(result.navigateTo).toBeUndefined()
-  })
-
-  it('handles undefined currentNoteId', () => {
-    const tabs = [tab('a'), tab('b')]
-    const result = removeTabState(tabs, 'a', undefined)
-    expect(result.tabs.map((t) => t.noteId)).toEqual(['b'])
-    expect(result.navigateTo).toBeUndefined()
-  })
-
-  it('removes from single-element list', () => {
-    const result = removeTabState([tab('a')], 'a', 'b')
-    expect(result.tabs).toEqual([])
-    expect(result.navigateTo).toBeUndefined()
+  it('returns null when shared is empty', () => {
+    expect(nextNoteIdAfterRemove('a', [])).toBeNull()
   })
 })
 

@@ -1,6 +1,7 @@
 package org.alkaline.taskbrain.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -9,134 +10,95 @@ class TabStateTest {
     private fun tab(noteId: String, displayText: String = noteId) =
         RecentTab(noteId = noteId, displayText = displayText)
 
-    // --- addOrUpdate ---
+    private fun current(noteId: String, displayText: String = noteId) =
+        TabState.CurrentTab(noteId = noteId, displayText = displayText)
+
+    // --- computeDisplayTabs ---
 
     @Test
-    fun `addOrUpdate adds new tab to front of empty list`() {
-        val result = TabState.addOrUpdate(emptyList(), "a", "Note A")
-        assertEquals(listOf(tab("a", "Note A")), result)
+    fun `computeDisplayTabs pins currentTab in slot 0 and dedupes the shared list`() {
+        val result = TabState.computeDisplayTabs(
+            current("c"),
+            listOf(tab("a"), tab("b"), tab("c"), tab("d")),
+        )
+        assertEquals(listOf("c", "a", "b", "d"), result.map { it.noteId })
     }
 
     @Test
-    fun `addOrUpdate adds new tab to front of existing list`() {
-        val tabs = listOf(tab("a"), tab("b"))
-        val result = TabState.addOrUpdate(tabs, "c", "Note C")
-        assertEquals(listOf("c", "a", "b"), result.map { it.noteId })
+    fun `computeDisplayTabs caps at MAX_DISPLAYED total`() {
+        val shared = listOf(tab("a"), tab("b"), tab("c"), tab("d"), tab("e"), tab("f"))
+        val result = TabState.computeDisplayTabs(current("z"), shared)
+        assertEquals(MAX_DISPLAYED, result.size)
+        assertEquals("z", result.first().noteId)
+        assertEquals(listOf("a", "b", "c", "d"), result.drop(1).map { it.noteId })
     }
 
     @Test
-    fun `addOrUpdate moves existing tab to front`() {
-        val tabs = listOf(tab("a"), tab("b"), tab("c"))
-        val result = TabState.addOrUpdate(tabs, "c", "Note C")
-        assertEquals(listOf("c", "a", "b"), result.map { it.noteId })
+    fun `computeDisplayTabs keeps current pinned even when not in shared`() {
+        // Other devices' writes can push this device's current past the buffer.
+        val result = TabState.computeDisplayTabs(
+            current("orphan"),
+            listOf(tab("a"), tab("b"), tab("c"), tab("d")),
+        )
+        assertEquals(listOf("orphan", "a", "b", "c", "d"), result.map { it.noteId })
     }
 
     @Test
-    fun `addOrUpdate updates display text of existing tab`() {
-        val tabs = listOf(tab("a", "Old"), tab("b"))
-        val result = TabState.addOrUpdate(tabs, "a", "New")
-        assertEquals("New", result.first().displayText)
+    fun `computeDisplayTabs with null current returns shared as-is`() {
+        val shared = listOf(tab("a"), tab("b"), tab("c"), tab("d"), tab("e"), tab("f"))
+        val result = TabState.computeDisplayTabs(null, shared)
+        assertEquals(listOf("a", "b", "c", "d", "e"), result.map { it.noteId })
     }
 
     @Test
-    fun `addOrUpdate caps at 5 tabs when adding new`() {
-        val tabs = listOf(tab("a"), tab("b"), tab("c"), tab("d"), tab("e"))
-        val result = TabState.addOrUpdate(tabs, "f", "Note F")
-        assertEquals(5, result.size)
-        assertEquals("f", result.first().noteId)
-        assertEquals(null, result.find { it.noteId == "e" })
+    fun `computeDisplayTabs uses currentTab displayText when shared has stale text`() {
+        val result = TabState.computeDisplayTabs(
+            current("c", "Fresh title"),
+            listOf(tab("c", "Stale title"), tab("a")),
+        )
+        assertEquals("Fresh title", result.first().displayText)
+    }
+
+    // --- nextNoteIdAfterRemove ---
+
+    @Test
+    fun `nextNoteIdAfterRemove returns next-most-recent`() {
+        assertEquals(
+            "b",
+            TabState.nextNoteIdAfterRemove("a", listOf(tab("a"), tab("b"), tab("c"))),
+        )
     }
 
     @Test
-    fun `addOrUpdate does not drop tabs when moving existing to front`() {
-        val tabs = listOf(tab("a"), tab("b"), tab("c"), tab("d"), tab("e"))
-        val result = TabState.addOrUpdate(tabs, "e", "Note E")
-        assertEquals(5, result.size)
-        assertEquals("e", result.first().noteId)
+    fun `nextNoteIdAfterRemove skips the removed id even when not at front`() {
+        assertEquals(
+            "a",
+            TabState.nextNoteIdAfterRemove("b", listOf(tab("a"), tab("b"), tab("c"))),
+        )
     }
 
     @Test
-    fun `addOrUpdate preserves lastAccessedAt of existing tab`() {
-        val ts = com.google.firebase.Timestamp.now()
-        val tabs = listOf(RecentTab(noteId = "a", displayText = "old", lastAccessedAt = ts))
-        val result = TabState.addOrUpdate(tabs, "a", "new")
-        assertEquals(ts, result.first().lastAccessedAt)
+    fun `nextNoteIdAfterRemove returns null when shared has nothing else`() {
+        assertNull(TabState.nextNoteIdAfterRemove("a", listOf(tab("a"))))
     }
 
     @Test
-    fun `addOrUpdate with tab already at front just updates text`() {
-        val tabs = listOf(tab("a", "Old"), tab("b"), tab("c"))
-        val result = TabState.addOrUpdate(tabs, "a", "New")
-        assertEquals(listOf("a", "b", "c"), result.map { it.noteId })
-        assertEquals("New", result.first().displayText)
-    }
-
-    // --- remove ---
-
-    @Test
-    fun `remove removes a tab`() {
-        val tabs = listOf(tab("a"), tab("b"), tab("c"))
-        val result = TabState.remove(tabs, "b")
-        assertEquals(listOf("a", "c"), result.map { it.noteId })
-    }
-
-    @Test
-    fun `remove with nonexistent noteId returns unchanged list`() {
-        val tabs = listOf(tab("a"), tab("b"))
-        val result = TabState.remove(tabs, "z")
-        assertEquals(listOf("a", "b"), result.map { it.noteId })
-    }
-
-    @Test
-    fun `remove from single-element list returns empty`() {
-        val result = TabState.remove(listOf(tab("a")), "a")
-        assertEquals(emptyList<RecentTab>(), result)
-    }
-
-    // --- updateDisplayText ---
-
-    @Test
-    fun `updateDisplayText changes text without reordering`() {
-        val tabs = listOf(tab("a", "Old"), tab("b"), tab("c"))
-        val result = TabState.updateDisplayText(tabs, "b", "Updated")
-        assertEquals(listOf("a", "b", "c"), result.map { it.noteId })
-        assertEquals("Updated", result[1].displayText)
-    }
-
-    @Test
-    fun `updateDisplayText with nonexistent noteId returns unchanged`() {
-        val tabs = listOf(tab("a"), tab("b"))
-        val result = TabState.updateDisplayText(tabs, "z", "X")
-        assertEquals(tabs, result)
+    fun `nextNoteIdAfterRemove returns null when shared is empty`() {
+        assertNull(TabState.nextNoteIdAfterRemove("a", emptyList()))
     }
 
     // --- closeTabNavigationTarget ---
 
     @Test
-    fun `closeTab navigates to next tab when closing current`() {
+    fun `closeTab navigates to next-most-recent when closing current`() {
         val tabs = listOf(tab("a"), tab("b"), tab("c"))
         val result = TabState.closeTabNavigationTarget(tabs, "b", "b")
-        assertEquals(CloseTabResult.SwitchTo("c"), result)
-    }
-
-    @Test
-    fun `closeTab navigates to previous tab when closing last`() {
-        val tabs = listOf(tab("a"), tab("b"), tab("c"))
-        val result = TabState.closeTabNavigationTarget(tabs, "c", "c")
-        assertEquals(CloseTabResult.SwitchTo("b"), result)
-    }
-
-    @Test
-    fun `closeTab navigates to first tab when closing first`() {
-        val tabs = listOf(tab("a"), tab("b"), tab("c"))
-        val result = TabState.closeTabNavigationTarget(tabs, "a", "a")
-        assertEquals(CloseTabResult.SwitchTo("b"), result)
+        assertEquals(CloseTabResult.SwitchTo("a"), result)
     }
 
     @Test
     fun `closeTab navigates back when closing only tab`() {
-        val tabs = listOf(tab("a"))
-        val result = TabState.closeTabNavigationTarget(tabs, "a", "a")
+        val result = TabState.closeTabNavigationTarget(listOf(tab("a")), "a", "a")
         assertTrue(result is CloseTabResult.NavigateBack)
     }
 

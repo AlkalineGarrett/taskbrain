@@ -50,7 +50,7 @@ describe('useNoteDeletion', () => {
     await act(async () => { await result.current.handleDeleteNote() })
 
     expect(softDeleteSpy).toHaveBeenCalledWith('current-id')
-    expect(removeTabSpy).toHaveBeenCalledWith('current-id', 'current-id')
+    expect(removeTabSpy).toHaveBeenCalledWith('current-id')
     expect(navigateSpy).toHaveBeenCalledWith('/note/next-id')
   })
 

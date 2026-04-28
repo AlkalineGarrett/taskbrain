@@ -400,8 +400,11 @@ fun CurrentNoteScreen(
             .background(if (editorContent.isNoteDeleted) deletedNoteBackground else Color.White)
     ) {
         val notesNeedingFix by NoteStore.notesNeedingFix.collectAsState()
+        val currentTabForBar = displayedNoteId?.let { id ->
+            TabState.CurrentTab(noteId = id, displayText = TabState.extractDisplayText(editorContent.userContent))
+        }
         RecentTabsBar(
-            tabs = recentTabs,
+            tabs = TabState.computeDisplayTabs(currentTabForBar, recentTabs),
             currentNoteId = displayedNoteId ?: "",
             notesNeedingFix = notesNeedingFix,
             onTabClick = { targetNoteId ->
@@ -834,10 +837,9 @@ private fun DataLoadingEffects(
         }
     }
 
-    // Load tabs on initial composition, with retry on failure
-    LaunchedEffect(Unit) {
-        recentTabsViewModel.loadTabs()
-    }
+    // The ViewModel's init block kicks off the Firestore listener; the cache
+    // flow into _tabs is the load path. Surface listener errors and clear them
+    // after a short delay so transient failures don't leave a sticky banner.
     val tabsError2 = tabsError
     var tabsRetryCount by remember { mutableIntStateOf(0) }
     LaunchedEffect(tabsError2, tabsRetryCount) {
@@ -845,7 +847,6 @@ private fun DataLoadingEffects(
             delay(1500)
             tabsRetryCount++
             recentTabsViewModel.clearError()
-            recentTabsViewModel.loadTabs()
         }
     }
 }

@@ -1,7 +1,9 @@
 package org.alkaline.taskbrain.data
 
-private const val MAX_TABS = 5
 private const val MAX_DISPLAY_LENGTH = 12
+
+/** Tabs visible in the bar. The Firestore-backed history stores 2x this. */
+const val MAX_DISPLAYED = 5
 
 /**
  * Pure state functions for tab management.
@@ -9,31 +11,39 @@ private const val MAX_DISPLAY_LENGTH = 12
  */
 object TabState {
 
+    /** What the screen needs to provide for the pinned current-tab slot. */
+    data class CurrentTab(val noteId: String, val displayText: String)
+
     /**
-     * Moves an existing tab to the front (updating its display text),
-     * or adds a new tab at the front. List is not capped here since
-     * the repository enforces the limit on persistence.
+     * Build the displayed tab list. The current tab (per-device) is pinned at
+     * slot 0; the shared history fills the rest with the current tab deduped.
+     *
+     * The shared list is the same on every device, but each device's display
+     * differs because each device's currentTab is local. With the current tab
+     * not in the shared list (e.g. another device pushed it past the 10-item
+     * buffer), it still renders in slot 0 — we keep showing what the user is
+     * actually viewing.
      */
-    fun addOrUpdate(
-        tabs: List<RecentTab>,
-        noteId: String,
-        displayText: String
+    fun computeDisplayTabs(
+        currentTab: CurrentTab?,
+        sharedTabs: List<RecentTab>
     ): List<RecentTab> {
-        val existing = tabs.find { it.noteId == noteId }
-        return if (existing != null) {
-            listOf(existing.copy(displayText = displayText)) +
-                tabs.filter { it.noteId != noteId }
-        } else {
-            (listOf(RecentTab(noteId = noteId, displayText = displayText)) + tabs)
-                .take(MAX_TABS)
-        }
+        if (currentTab == null) return sharedTabs.take(MAX_DISPLAYED)
+        val rest = sharedTabs.filter { it.noteId != currentTab.noteId }
+        val pinned = RecentTab(noteId = currentTab.noteId, displayText = currentTab.displayText)
+        return (listOf(pinned) + rest).take(MAX_DISPLAYED)
     }
 
     /**
-     * Removes a tab from the list.
+     * After removing [removedNoteId] from the shared history, the noteId the
+     * caller should navigate to (next-most-recent that isn't the removed one),
+     * or null when nothing is left and the caller should go home.
      */
-    fun remove(tabs: List<RecentTab>, noteId: String): List<RecentTab> =
-        tabs.filter { it.noteId != noteId }
+    fun nextNoteIdAfterRemove(
+        removedNoteId: String,
+        sharedTabs: List<RecentTab>
+    ): String? =
+        sharedTabs.firstOrNull { it.noteId != removedNoteId }?.noteId
 
     /**
      * Determines which tab to navigate to after closing a tab.
@@ -41,27 +51,14 @@ object TabState {
      * Returns the next tab's noteId (or previous if closing the last tab).
      */
     fun closeTabNavigationTarget(
-        tabs: List<RecentTab>,
+        sharedTabs: List<RecentTab>,
         closedNoteId: String,
         currentNoteId: String
     ): CloseTabResult {
         if (closedNoteId != currentNoteId) return CloseTabResult.StayOnCurrent
-        val closedIndex = tabs.indexOfFirst { it.noteId == closedNoteId }
-        val remaining = tabs.filter { it.noteId != closedNoteId }
-        if (remaining.isEmpty()) return CloseTabResult.NavigateBack
-        val nextIndex = minOf(closedIndex, remaining.size - 1)
-        return CloseTabResult.SwitchTo(remaining[nextIndex].noteId)
+        val next = nextNoteIdAfterRemove(closedNoteId, sharedTabs)
+        return if (next == null) CloseTabResult.NavigateBack else CloseTabResult.SwitchTo(next)
     }
-
-    /**
-     * Updates the display text for a specific tab without reordering.
-     */
-    fun updateDisplayText(
-        tabs: List<RecentTab>,
-        noteId: String,
-        displayText: String
-    ): List<RecentTab> =
-        tabs.map { if (it.noteId == noteId) it.copy(displayText = displayText) else it }
 
     /**
      * Extracts display text from note content.

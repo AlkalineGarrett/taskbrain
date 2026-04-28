@@ -10,6 +10,8 @@ import com.google.firebase.firestore.Query
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
@@ -33,7 +35,15 @@ class RecentTabsRepository(
     private val auth: FirebaseAuth = FirebaseAuth.getInstance()
 ) {
     private val cacheLock = Any()
-    private val cachedTabs = MutableStateFlow<List<RecentTab>>(emptyList())
+    private val _cachedTabs = MutableStateFlow<List<RecentTab>>(emptyList())
+
+    /**
+     * The full shared history (capped at [MAX_STORED]). Observe to react to
+     * both this device's writes (echoed locally — see [ensureListenerAttached])
+     * and other devices' writes once the server confirms them.
+     */
+    val cachedTabs: StateFlow<List<RecentTab>> = _cachedTabs.asStateFlow()
+
     private var listener: ListenerRegistration? = null
     private var loadDeferred: CompletableDeferred<Unit>? = null
 
@@ -59,7 +69,7 @@ class RecentTabsRepository(
             val deferred = loadDeferred ?: CompletableDeferred<Unit>().also { loadDeferred = it }
             if (listener != null) return deferred
 
-            // No `.limit(MAX_TABS)` here: the cache holds the full openTabs
+            // No `.limit(MAX_STORED)` here: the cache holds the full openTabs
             // list so [enforceTabLimit] can compute trim deletes from memory
             // instead of hitting Firestore on every tab open.
             listener = openTabsCollection(userId)
@@ -83,23 +93,22 @@ class RecentTabsRepository(
                     }
                     if (snapshot == null) return@addSnapshotListener
                     val firstAlreadyDelivered = deferred.isCompleted
-                    if (firstAlreadyDelivered && snapshot.metadata.hasPendingWrites()) {
-                        FirestoreUsage.recordRead(
-                            "RecentTabsRepo.listener",
-                            FirestoreUsage.ReadType.LISTENER_LOCAL_ECHO,
-                            snapshot.documentChanges.size,
-                        )
-                        return@addSnapshotListener
-                    }
+                    val isLocalEcho = firstAlreadyDelivered && snapshot.metadata.hasPendingWrites()
                     val fromCache = snapshot.metadata.isFromCache
                     val type = when {
                         !firstAlreadyDelivered && fromCache -> FirestoreUsage.ReadType.LISTENER_INITIAL_CACHED
                         !firstAlreadyDelivered -> FirestoreUsage.ReadType.LISTENER_INITIAL_FRESH
+                        isLocalEcho -> FirestoreUsage.ReadType.LISTENER_LOCAL_ECHO
                         fromCache -> FirestoreUsage.ReadType.LISTENER_UPDATE_CACHED
                         else -> FirestoreUsage.ReadType.LISTENER_UPDATE_FRESH
                     }
                     val docCount = if (firstAlreadyDelivered) snapshot.documentChanges.size else snapshot.size()
                     FirestoreUsage.recordRead("RecentTabsRepo.listener", type, docCount)
+                    // Process local-echo snapshots too: subscribers (the bar's
+                    // ViewModel) need the cache to reflect this device's own
+                    // writes immediately, not just other devices' confirmed
+                    // writes — otherwise dedup checks and cross-device removal
+                    // both lag a server roundtrip.
                     val tabs = snapshot.documents.mapNotNull { doc ->
                         try {
                             doc.toObject(RecentTab::class.java)
@@ -108,7 +117,7 @@ class RecentTabsRepository(
                             null
                         }
                     }
-                    cachedTabs.value = tabs
+                    _cachedTabs.value = tabs
                     if (!deferred.isCompleted) deferred.complete(Unit)
                 }
             return deferred
@@ -124,12 +133,12 @@ class RecentTabsRepository(
             listener?.remove()
             listener = null
             loadDeferred = null
-            cachedTabs.value = emptyList()
+            _cachedTabs.value = emptyList()
         }
     }
 
     /**
-     * Adds or updates a tab. If more than [MAX_TABS] exist after adding,
+     * Adds or updates a tab. If more than [MAX_STORED] exist after adding,
      * removes the oldest. Uses the noteId as document ID for easy upsert.
      */
     suspend fun addOrUpdateTab(noteId: String, displayText: String): Result<Unit> = runCatching {
@@ -154,7 +163,7 @@ class RecentTabsRepository(
      */
     suspend fun getOpenTabs(): Result<List<RecentTab>> = runCatching {
         ensureListenerAttached().await()
-        cachedTabs.value.take(MAX_TABS)
+        _cachedTabs.value.take(MAX_STORED)
     }.onFailure { Log.e(TAG, "Error getting open tabs", it) }
 
     /**
@@ -192,7 +201,7 @@ class RecentTabsRepository(
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             ensureListenerAttached().await()
-            val staleTabs = cachedTabs.value.filter { it.noteId !in validNoteIds }
+            val staleTabs = _cachedTabs.value.filter { it.noteId !in validNoteIds }
             if (staleTabs.isEmpty()) return@withContext
             val batch = db.batch()
             for (tab in staleTabs) {
@@ -213,9 +222,9 @@ class RecentTabsRepository(
      */
     private suspend fun enforceTabLimit(userId: String) {
         ensureListenerAttached().await()
-        val all = cachedTabs.value
-        if (all.size <= MAX_TABS) return
-        val toRemove = all.drop(MAX_TABS)
+        val all = _cachedTabs.value
+        if (all.size <= MAX_STORED) return
+        val toRemove = all.drop(MAX_STORED)
         val batch = db.batch()
         for (tab in toRemove) {
             batch.delete(tabRef(userId, tab.noteId))
@@ -227,6 +236,12 @@ class RecentTabsRepository(
 
     companion object {
         private const val TAG = "RecentTabsRepository"
-        const val MAX_TABS = 5
+
+        /**
+         * The shared list holds twice the displayed count so a deletion still
+         * leaves a full row of 5 to fall back on. The display cap (5) lives in
+         * [TabState].
+         */
+        const val MAX_STORED = 10
     }
 }

@@ -1,18 +1,16 @@
 import { useEffect, useState, useCallback, useRef, useLayoutEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { RecentTabsRepository, type RecentTab } from '@/data/RecentTabsRepository'
-import { addOrUpdateTabState, updateDisplayTextState, removeTabState, extractDisplayText, mergeOptimisticTabs } from '@/data/TabState'
+import { recentTabsRepo as repo, type RecentTab } from '@/data/RecentTabsRepository'
+import { computeDisplayTabs, extractDisplayText, nextNoteIdAfterRemove } from '@/data/TabState'
 import { noteStore } from '@/data/NoteStore'
-import { db, auth } from '@/firebase/config'
 import { EMPTY_TAB, TAB_NEEDS_FIX_INDICATOR } from '@/strings'
 import styles from './RecentTabsBar.module.css'
-
-const repo = new RecentTabsRepository(db, auth)
 const TAB_ANIMATION_MS = 250
 
 /**
- * Cross-references tab displayTexts with NoteStore content and fixes stale values.
- * Persists corrections to Firestore in the background.
+ * Cross-references tab displayTexts with NoteStore content and writes
+ * corrections back. Compensates for an old tab that hasn't been re-opened
+ * since the note's title changed.
  */
 function refreshDisplayTexts(tabs: RecentTab[]): RecentTab[] {
   return tabs.map((tab) => {
@@ -28,19 +26,18 @@ function refreshDisplayTexts(tabs: RecentTab[]): RecentTab[] {
   })
 }
 
-/**
- * Module-level refs so external functions can snapshot positions
- * and update tabs state without prop drilling.
- */
-let snapshotAndSetTabs: ((updater: (prev: RecentTab[]) => RecentTab[]) => void) | null = null
-let setTabsNoAnimation: React.Dispatch<React.SetStateAction<RecentTab[]>> | null = null
-
 interface RecentTabsBarProps {
   notesNeedingFix?: Set<string>
+  /**
+   * The note this device is currently viewing. Pinned at slot 0 of the bar
+   * even when missing from the shared history (e.g. another device pushed it
+   * past the 10-item buffer). Null when no note is loaded.
+   */
+  currentTab: { noteId: string; displayText: string } | null
 }
 
-export function RecentTabsBar({ notesNeedingFix }: RecentTabsBarProps = {}) {
-  const [tabs, setTabs] = useState<RecentTab[]>([])
+export function RecentTabsBar({ notesNeedingFix, currentTab }: RecentTabsBarProps) {
+  const [sharedTabs, setSharedTabs] = useState<RecentTab[]>([])
   const navigate = useNavigate()
   const { noteId: currentNoteId } = useParams<{ noteId: string }>()
 
@@ -48,38 +45,30 @@ export function RecentTabsBar({ notesNeedingFix }: RecentTabsBarProps = {}) {
   const tabRefs = useRef<Map<string, HTMLButtonElement>>(new Map())
   const prevPositions = useRef<Map<string, number>>(new Map())
 
-  /** Snapshot current tab positions, then apply a state update. */
-  const snapshotAndSetTabsLocal = useCallback((updater: (prev: RecentTab[]) => RecentTab[]) => {
-    // Capture positions before React re-renders
-    prevPositions.current = new Map()
-    tabRefs.current.forEach((el, noteId) => {
-      prevPositions.current.set(noteId, el.getBoundingClientRect().left)
-    })
-    setTabs(updater)
+  // Subscribe to the listener-backed cache so external writes (this device's
+  // own writes via local-echo, plus other devices' writes via server snapshot)
+  // both update the bar without remount.
+  useEffect(() => {
+    const sync = () => {
+      // Snapshot positions before React re-renders so the FLIP layout effect
+      // can animate moves caused by the listener echo (e.g. another device
+      // pushed a tab to the front).
+      prevPositions.current = new Map()
+      tabRefs.current.forEach((el, noteId) => {
+        prevPositions.current.set(noteId, el.getBoundingClientRect().left)
+      })
+      setSharedTabs(refreshDisplayTexts(repo.getCachedTabs()))
+    }
+    // Pull whatever's already cached (warm listener after a remount); future
+    // snapshots flow through the subscription. Listener-attach is fire-and-
+    // forget — the first snapshot will fire `sync` again via `subscribe`.
+    sync()
+    const unsubscribe = repo.subscribe(sync)
+    void repo.getOpenTabs()
+    return unsubscribe
   }, [])
 
-  // Expose to module-level functions
-  useEffect(() => {
-    snapshotAndSetTabs = snapshotAndSetTabsLocal
-    setTabsNoAnimation = setTabs
-    return () => {
-      snapshotAndSetTabs = null
-      setTabsNoAnimation = null
-    }
-  }, [snapshotAndSetTabsLocal])
-
-  // Load tabs from Firestore on mount only (no animation)
-  useEffect(() => {
-    const loadTabs = async () => {
-      try {
-        const openTabs = await repo.getOpenTabs()
-        setTabs((prev) => refreshDisplayTexts(mergeOptimisticTabs(prev, openTabs)))
-      } catch {
-        // silently fail
-      }
-    }
-    void loadTabs()
-  }, [])
+  const tabs = computeDisplayTabs(currentTab, sharedTabs)
 
   // FLIP animation: runs only when tabs changes
   useLayoutEffect(() => {
@@ -128,13 +117,10 @@ export function RecentTabsBar({ notesNeedingFix }: RecentTabsBarProps = {}) {
     async (e: React.MouseEvent, noteId: string) => {
       e.stopPropagation()
       await repo.removeTab(noteId)
-      setTabs((prev) => {
-        const result = removeTabState(prev, noteId, currentNoteId)
-        if (result.navigateTo !== undefined) {
-          navigate(result.navigateTo ? `/note/${result.navigateTo}` : '/')
-        }
-        return result.tabs
-      })
+      if (noteId === currentNoteId) {
+        const next = nextNoteIdAfterRemove(noteId, repo.getCachedTabs())
+        navigate(next ? `/note/${next}` : '/')
+      }
     },
     [currentNoteId, navigate],
   )
@@ -181,16 +167,15 @@ export function RecentTabsBar({ notesNeedingFix }: RecentTabsBarProps = {}) {
   )
 }
 
-/** Call this when a note is opened. Moves/adds tab to front with animation. */
+/**
+ * Push a note to the front of the shared history. Skips the write when the
+ * note is already at the front with the same display text — the listener's
+ * read-your-write echo means the cache reflects this device's recent writes,
+ * so the dedup check is reliable across remounts.
+ */
 export async function addOrUpdateTab(noteId: string, displayText: string): Promise<void> {
-  // Dedup against the listener cache, not React state — RecentTabsBar's local
-  // state resets on remount (e.g., Admin → CurrentNote) so a state-based check
-  // would miss the front-tab match.
   const cached = await repo.getOpenTabs()
   if (cached[0]?.noteId === noteId && cached[0].displayText === displayText) return
-
-  snapshotAndSetTabs?.((prev) => addOrUpdateTabState(prev, noteId, displayText))
-
   try {
     await repo.addOrUpdateTab(noteId, displayText)
   } catch {
@@ -199,28 +184,23 @@ export async function addOrUpdateTab(noteId: string, displayText: string): Promi
 }
 
 /**
- * Removes a tab and returns the noteId to navigate to (null = go home).
- * Use when closing a tab programmatically (e.g., after deleting a note).
+ * Remove a tab from the shared history. Returns the next noteId to navigate
+ * to (next-most-recent in shared excluding the removed one), or null when
+ * shared is empty and the caller should go home.
+ *
+ * Currently only used by note deletion, which is why navigation is always
+ * required. The X-button in the bar handles its own navigation inline.
  */
-export async function removeTab(noteId: string, currentNoteId: string | undefined): Promise<string | null> {
-  let navigateTo: string | null = null
-  await repo.removeTab(noteId)
-  setTabsNoAnimation?.((prev) => {
-    const result = removeTabState(prev, noteId, currentNoteId)
-    navigateTo = result.navigateTo ?? null
-    return result.tabs
-  })
-  return navigateTo
+export async function removeTab(removedNoteId: string): Promise<string | null> {
+  await repo.removeTab(removedNoteId)
+  return nextNoteIdAfterRemove(removedNoteId, repo.getCachedTabs())
 }
 
-/** Call this when a note's title changes. Updates text without reordering (no animation). */
+/** Update a tab's display text without reordering. Skips no-op writes. */
 export async function updateTabDisplayText(noteId: string, displayText: string): Promise<void> {
   const cached = await repo.getOpenTabs()
   const cachedExisting = cached.find((t) => t.noteId === noteId)
   if (cachedExisting && cachedExisting.displayText === displayText) return
-
-  setTabsNoAnimation?.((prev) => updateDisplayTextState(prev, noteId, displayText))
-
   try {
     await repo.updateTabDisplayText(noteId, displayText)
   } catch {

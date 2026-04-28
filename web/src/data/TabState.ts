@@ -1,74 +1,50 @@
 import type { RecentTab } from './RecentTabsRepository'
 
-const MAX_TABS = 5
 const MAX_DISPLAY_LENGTH = 12
 const ALARM_SYMBOL = '⏰'
 const ALARM_DIRECTIVE_REGEX = /\[alarm\("[^"]+"\)]/g
 const RECURRING_ALARM_DIRECTIVE_REGEX = /\[recurringAlarm\("[^"]+"\)]/g
 
+/** Tabs visible in the bar. The Firestore-backed history stores 2x this. */
+export const MAX_DISPLAYED = 5
+
 /**
- * Moves an existing tab to the front, updating its display text.
- * If the tab doesn't exist, adds it to the front (capped at MAX_TABS).
+ * Build the displayed tab list. The current tab (per-device) is pinned at
+ * slot 0; the shared history fills the rest with the current tab deduped.
+ *
+ * The shared list is the same on every device, but each device's display
+ * differs because each device's currentTab is local. With the current tab
+ * not in the shared list (e.g. another device pushed it off the end of the
+ * 10-item buffer), it still renders in slot 0 — we keep showing what the
+ * user is actually viewing.
+ *
+ * The current tab only contributes display data (noteId, displayText) — no
+ * lastAccessedAt is required, since the pinned slot doesn't sort.
  */
-export function addOrUpdateTabState(
-  tabs: RecentTab[],
-  noteId: string,
-  displayText: string,
+export function computeDisplayTabs(
+  currentTab: { noteId: string; displayText: string } | null,
+  sharedTabs: RecentTab[],
 ): RecentTab[] {
-  const existing = tabs.find((t) => t.noteId === noteId)
-  if (existing) {
-    const updated = { ...existing, displayText }
-    return [updated, ...tabs.filter((t) => t.noteId !== noteId)]
+  if (!currentTab) return sharedTabs.slice(0, MAX_DISPLAYED)
+  const rest = sharedTabs.filter((t) => t.noteId !== currentTab.noteId)
+  const pinned: RecentTab = {
+    noteId: currentTab.noteId,
+    displayText: currentTab.displayText,
+    lastAccessedAt: null,
   }
-  const newTab: RecentTab = { noteId, displayText, lastAccessedAt: null }
-  return [newTab, ...tabs].slice(0, MAX_TABS)
+  return [pinned, ...rest].slice(0, MAX_DISPLAYED)
 }
 
 /**
- * Prefer existing optimistic displayText over a stale empty value from a
- * fresh load — guards against the race where a load resolves after an
- * optimistic write but before the write is visible to the server.
+ * After removing [removedNoteId] from the shared history, the noteId the
+ * caller should navigate to (next-most-recent that isn't the removed one),
+ * or null when nothing is left and the caller should go home.
  */
-export function mergeOptimisticTabs(prev: RecentTab[], loaded: RecentTab[]): RecentTab[] {
-  const optimisticByNoteId = new Map(prev.map((t) => [t.noteId, t]))
-  return loaded.map((tab) => {
-    const existing = optimisticByNoteId.get(tab.noteId)
-    if (existing && existing.displayText && !tab.displayText) {
-      return { ...tab, displayText: existing.displayText }
-    }
-    return tab
-  })
-}
-
-/**
- * Updates the display text for a specific tab without reordering.
- */
-export function updateDisplayTextState(
-  tabs: RecentTab[],
-  noteId: string,
-  displayText: string,
-): RecentTab[] {
-  return tabs.map((t) => (t.noteId === noteId ? { ...t, displayText } : t))
-}
-
-/**
- * Removes a tab and determines where to navigate.
- * Returns the new tab list and the noteId to navigate to (null = go home).
- */
-export function removeTabState(
-  tabs: RecentTab[],
-  noteId: string,
-  currentNoteId: string | undefined,
-): { tabs: RecentTab[]; navigateTo?: string | null } {
-  const closedIndex = tabs.findIndex((t) => t.noteId === noteId)
-  const remaining = tabs.filter((t) => t.noteId !== noteId)
-
-  if (noteId !== currentNoteId) {
-    return { tabs: remaining }
-  }
-
-  const nextTab = remaining[closedIndex] ?? remaining[closedIndex - 1]
-  return { tabs: remaining, navigateTo: nextTab?.noteId ?? null }
+export function nextNoteIdAfterRemove(
+  removedNoteId: string,
+  sharedTabs: RecentTab[],
+): string | null {
+  return sharedTabs.find((t) => t.noteId !== removedNoteId)?.noteId ?? null
 }
 
 /**

@@ -14,7 +14,7 @@ export function useNoteDeletion(noteId: string | null | undefined) {
     if (!noteId) return
     try {
       await noteRepo.softDeleteNote(noteId)
-      const nextNoteId = await removeTab(noteId, noteId)
+      const nextNoteId = await removeTab(noteId)
       navigate(nextNoteId ? `/note/${nextNoteId}` : '/')
     } catch (e) {
       console.error('Failed to delete note:', e)
