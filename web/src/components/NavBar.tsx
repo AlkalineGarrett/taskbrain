@@ -1,6 +1,6 @@
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
-import { APP_NAME, NAV_CURRENT_NOTE, NAV_ALL_NOTES, NAV_ALARMS, SIGN_OUT } from '@/strings'
+import { APP_NAME, NAV_CURRENT_NOTE, NAV_ALL_NOTES, NAV_ALARMS, NAV_ADMIN, SIGN_OUT } from '@/strings'
 import styles from './NavBar.module.css'
 
 export function NavBar() {
@@ -10,6 +10,7 @@ export function NavBar() {
 
   const isNoteEditor = location.pathname.startsWith('/note/')
   const isNoteList = location.pathname === '/'
+  const isAdmin = location.pathname === '/admin'
 
   return (
     <nav className={styles.navbar}>
@@ -40,6 +41,12 @@ export function NavBar() {
           disabled
         >
           {NAV_ALARMS}
+        </button>
+        <button
+          className={`${styles.navItem} ${isAdmin ? styles.active : ''}`}
+          onClick={() => navigate('/admin')}
+        >
+          {NAV_ADMIN}
         </button>
       </div>
 

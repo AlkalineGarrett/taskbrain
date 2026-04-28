@@ -24,7 +24,7 @@ export async function saveDirectiveResult(
     warning: result.warning ?? null,
     collapsed: result.collapsed,
   })
-  firestoreUsage.recordWrite('saveDirectiveResult', 'set')
+  firestoreUsage.recordWrite('saveDirectiveResult', 'SET')
 }
 
 /**
@@ -32,7 +32,7 @@ export async function saveDirectiveResult(
  */
 export async function getDirectiveResults(noteId: string): Promise<Map<string, DirectiveResult>> {
   const snapshot = await getDocs(resultsCollection(noteId))
-  firestoreUsage.recordRead('getDirectiveResults', 'getDocs', snapshot.size)
+  firestoreUsage.recordRead('getDirectiveResults', 'GET_DOCS', snapshot.size)
   const results = new Map<string, DirectiveResult>()
   for (const docSnap of snapshot.docs) {
     const data = docSnap.data()
@@ -57,7 +57,7 @@ export async function updateCollapsedState(
 ): Promise<void> {
   const docRef = doc(resultsCollection(noteId), directiveHash)
   await updateDoc(docRef, { collapsed })
-  firestoreUsage.recordWrite('updateCollapsedState', 'update')
+  firestoreUsage.recordWrite('updateCollapsedState', 'UPDATE')
 }
 
 /**
@@ -65,12 +65,12 @@ export async function updateCollapsedState(
  */
 export async function deleteAllDirectiveResults(noteId: string): Promise<void> {
   const snapshot = await getDocs(resultsCollection(noteId))
-  firestoreUsage.recordRead('deleteAllDirectiveResults', 'getDocs', snapshot.size)
+  firestoreUsage.recordRead('deleteAllDirectiveResults', 'GET_DOCS', snapshot.size)
   if (snapshot.empty) return
   const batch = writeBatch(db)
   for (const docSnap of snapshot.docs) {
     batch.delete(docSnap.ref)
   }
   await batch.commit()
-  firestoreUsage.recordWrite('deleteAllDirectiveResults', 'batch.commit', snapshot.size)
+  firestoreUsage.recordWrite('deleteAllDirectiveResults', 'BATCH_COMMIT', snapshot.size)
 }

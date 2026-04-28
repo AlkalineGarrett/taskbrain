@@ -3,6 +3,7 @@
     <string name="title_current_note">Current note</string>
     <string name="title_note_list">All notes</string>
     <string name="title_notifications">Alarms</string>
+    <string name="title_admin">Admin</string>
     <string name="agent_chat_label">Make request to agent</string>
     <string name="default_web_client_id">613948682660-pc7vp2pdala64j83mqcvg631crbm76nv.apps.googleusercontent.com</string>
 

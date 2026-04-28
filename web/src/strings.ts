@@ -6,10 +6,11 @@
 // App (Android: app_name)
 export const APP_NAME = 'TaskBrain'
 
-// Navigation (Android: title_current_note, title_note_list, title_notifications, title_schedules)
+// Navigation (Android: title_current_note, title_note_list, title_notifications, title_admin, title_schedules)
 export const NAV_CURRENT_NOTE = 'Current note'
 export const NAV_ALL_NOTES = 'All notes'
 export const NAV_ALARMS = 'Alarms'
+export const NAV_ADMIN = 'Admin'
 export const NAV_SCHEDULES = 'Schedules'
 
 // Auth (Android: sign_in_google, sign_out)

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.runtime.collectAsState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Home
@@ -56,6 +57,7 @@ import kotlinx.coroutines.withContext
 import org.alkaline.taskbrain.service.NotificationSyncer
 import org.alkaline.taskbrain.dsl.directives.ScheduleExecutionRepository
 import org.alkaline.taskbrain.ui.Dimens
+import org.alkaline.taskbrain.ui.admin.AdminScreen
 import org.alkaline.taskbrain.ui.alarms.AlarmsScreen
 import org.alkaline.taskbrain.ui.auth.GoogleSignInScreen
 import org.alkaline.taskbrain.ui.components.MissedSchedulesBanner
@@ -69,6 +71,7 @@ sealed class Screen(val route: String, val titleResourceId: Int, val icon: Image
     object CurrentNote : Screen("current_note", R.string.title_current_note, Icons.Filled.Description)
     object NoteList : Screen("note_list", R.string.title_note_list, Icons.Filled.Dashboard)
     object Notifications : Screen("notifications", R.string.title_notifications, Icons.Filled.Notifications)
+    object Admin : Screen("admin", R.string.title_admin, Icons.Filled.AdminPanelSettings)
     object Schedules : Screen("schedules", R.string.title_schedules, Icons.Filled.Schedule)
     object Login : Screen("login", R.string.google_title_text, Icons.Filled.Home) // Icon not used for login
 }
@@ -146,6 +149,7 @@ fun MainScreen(
         Screen.CurrentNote,
         Screen.NoteList,
         Screen.Notifications,
+        Screen.Admin,
     )
 
     Scaffold(
@@ -345,6 +349,9 @@ fun MainScreen(
                     openAlarmId = alarmIdToOpen,
                     onOpenAlarmConsumed = { alarmIdToOpen = null }
                 )
+            }
+            composable(Screen.Admin.route) {
+                AdminScreen()
             }
             composable(Screen.Schedules.route) {
                 SchedulesScreen(

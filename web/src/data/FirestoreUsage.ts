@@ -1,37 +1,34 @@
 /**
  * Bucketed counters for Firestore reads and writes, segmented by operation
- * name and event type. Used to find hotspots — call
- * `firestoreUsage.recordRead(...)` / `recordWrite(...)` at every Firestore
- * call site, then tap the Usage button on NoteListScreen to view the report.
+ * name and event type. Mirrors Android's `FirestoreUsage.kt` so reports look
+ * the same on both platforms — keep the data model and formatters in sync.
  *
- * Data model:
- * - Hourly buckets: last 24 hours, one bucket per local-clock hour.
- * - Daily buckets: last 7 days, one bucket per local-clock day.
- * - Each bucket holds (operation, type) → {ops, docs} maps for both reads
- *   and writes.
- *
- * Persistence: buckets are stored in localStorage and survive reloads, so
- * the user can tap "Usage" any time to see hotspots without having to leave
- * the app running. Writes are throttled to once per 30s to avoid hot-path
- * cost; the latest unsaved increment is lost on a hard tab-close (acceptable
- * — this is diagnostic data, not user data).
+ * Persistence: buckets are stored in localStorage. Writes are throttled to
+ * once per 30s to keep the per-call hot path cheap; the latest unsaved
+ * increment is lost on a hard tab-close (acceptable — diagnostic only).
  */
 
 export type ReadType =
-  | 'doc.get'
-  | 'getDocs'
-  | 'listener.initial-fresh'
-  | 'listener.initial-cached'
-  | 'listener.update-fresh'
-  | 'listener.update-cached'
-  | 'listener.local-echo'
+  | 'DOC_GET'
+  | 'GET_DOCS'
+  | 'LISTENER_INITIAL_FRESH'
+  | 'LISTENER_UPDATE_FRESH'
+  | 'LISTENER_INITIAL_CACHED'
+  | 'LISTENER_UPDATE_CACHED'
+  | 'LISTENER_LOCAL_ECHO'
 
 export type WriteType =
-  | 'set'
-  | 'update'
-  | 'delete'
-  | 'batch.commit'
-  | 'transaction'
+  | 'SET'
+  | 'UPDATE'
+  | 'DELETE'
+  | 'BATCH_COMMIT'
+  | 'TRANSACTION'
+
+const LOCAL_ONLY_READ_TYPES = new Set<string>([
+  'LISTENER_INITIAL_CACHED',
+  'LISTENER_UPDATE_CACHED',
+  'LISTENER_LOCAL_ECHO',
+])
 
 interface Counter {
   ops: number
@@ -90,24 +87,14 @@ class FirestoreUsage {
   }
 
   getReport(): string {
-    const lines: string[] = ['=== Firestore Usage Report ===']
     const now = Date.now()
-    const lastHour = this.hourly[this.hourly.length - 1]
-    if (lastHour) {
-      lines.push('')
-      lines.push(`Current hour (${formatHour(lastHour.start)}):`)
-      lines.push(formatBucket(lastHour))
-    }
+    const current = this.hourly[this.hourly.length - 1] ?? null
     const last24 = this.summarize(this.hourly.filter((b) => b.start >= now - 24 * HOUR_MS))
-    lines.push('')
-    lines.push('Last 24 hours:')
-    lines.push(formatBucket(last24))
     const last7 = this.summarize(this.daily.filter((b) => b.start >= now - 7 * DAY_MS))
-    lines.push('')
-    lines.push('Last 7 days:')
-    lines.push(formatBucket(last7))
-    lines.push('')
-    lines.push('=== End ===')
+    const lines: string[] = ['=== Firestore Usage Report ===']
+    appendTimeSeries(lines, '== Billed ==', current, last24, last7, formatBilledBucket)
+    appendTimeSeries(lines, '== Local-only ==', current, last24, last7, formatLocalBucket)
+    lines.push('', '', '=== End ===')
     return lines.join('\n')
   }
 
@@ -189,34 +176,85 @@ function accumulate(map: Record<string, Counter>, key: string, c: Counter): void
   }
 }
 
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
 function formatHour(t: number): string {
   const d = new Date(t)
-  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  const month = MONTH_ABBR[d.getMonth()]
+  const day = d.getDate()
+  const hour = String(d.getHours()).padStart(2, '0')
+  return `${month} ${day} ${hour}:00`
 }
 
-function formatBucket(b: Bucket): string {
+function pluralize(noun: string, count: number): string {
+  return count === 1 ? noun : `${noun}s`
+}
+
+function formatDocsOps(docs: number, ops: number): string {
+  return `${docs} ${pluralize('doc', docs)} over ${ops} ${pluralize('op', ops)}`
+}
+
+function formatEntry(key: string, c: Counter): string {
+  const sep = key.indexOf('|')
+  const op = sep === -1 ? key : key.substring(0, sep)
+  const rawType = sep === -1 ? '' : key.substring(sep + 1)
+  const type = rawType.startsWith('LISTENER_') ? rawType.substring('LISTENER_'.length) : rawType
+  return `${op} ${type}: ${formatDocsOps(c.docs, c.ops)}`
+}
+
+function isBilled(key: string): boolean {
+  // Unknown types (including older lowercase keys still in localStorage)
+  // default to billed so they surface in the report rather than disappearing.
+  const type = key.substring(key.indexOf('|') + 1)
+  return !LOCAL_ONLY_READ_TYPES.has(type)
+}
+
+function appendTimeSeries(
+  lines: string[],
+  sectionLabel: string,
+  current: Bucket | null,
+  last24: Bucket,
+  last7: Bucket,
+  formatter: (b: Bucket) => string,
+): void {
+  lines.push('', '', sectionLabel)
+  if (current) {
+    lines.push('', `Current hour (${formatHour(current.start)}):`, formatter(current))
+  }
+  lines.push('', '', 'Last 24 hours:', formatter(last24))
+  lines.push('', '', 'Last 7 days:', formatter(last7))
+}
+
+function formatBilledBucket(b: Bucket): string {
+  const billedReads = Object.entries(b.reads).filter(([key]) => isBilled(key))
+  const totalReadOps = billedReads.reduce((sum, [, c]) => sum + c.ops, 0)
+  const totalReadDocs = billedReads.reduce((sum, [, c]) => sum + c.docs, 0)
+  const writeEntries = Object.entries(b.writes)
+  const totalWriteOps = writeEntries.reduce((sum, [, c]) => sum + c.ops, 0)
+  const totalWriteDocs = writeEntries.reduce((sum, [, c]) => sum + c.docs, 0)
+  const ratioSuffix = totalWriteDocs > 0
+    ? ` (R:W ${(totalReadDocs / totalWriteDocs).toFixed(1)}x)`
+    : ''
   const lines: string[] = []
-  let totalReadOps = 0, totalReadDocs = 0, totalWriteOps = 0, totalWriteDocs = 0
-  const readEntries = Object.entries(b.reads).sort((a, b) => b[1].docs - a[1].docs)
-  const writeEntries = Object.entries(b.writes).sort((a, b) => b[1].docs - a[1].docs)
-  lines.push('  Reads:')
-  for (const [key, c] of readEntries) {
-    const [op, type] = key.split('|')
-    lines.push(`    ${(op ?? '').padEnd(34)} ${(type ?? '').padEnd(28)} ${String(c.ops).padStart(5)} ops × ${String(c.docs).padStart(6)} docs`)
-    totalReadOps += c.ops
-    totalReadDocs += c.docs
+  lines.push(`  Reads: ${formatDocsOps(totalReadDocs, totalReadOps)}`)
+  for (const [key, c] of billedReads.sort((a, b) => b[1].docs - a[1].docs)) {
+    lines.push(`    ${formatEntry(key, c)}`)
   }
-  lines.push(`    TOTAL: ${totalReadOps} ops × ${totalReadDocs} docs`)
-  lines.push('  Writes:')
-  for (const [key, c] of writeEntries) {
-    const [op, type] = key.split('|')
-    lines.push(`    ${(op ?? '').padEnd(34)} ${(type ?? '').padEnd(28)} ${String(c.ops).padStart(5)} ops × ${String(c.docs).padStart(6)} docs`)
-    totalWriteOps += c.ops
-    totalWriteDocs += c.docs
+  lines.push(`  Writes: ${formatDocsOps(totalWriteDocs, totalWriteOps)}${ratioSuffix}`)
+  for (const [key, c] of writeEntries.sort((a, b) => b[1].docs - a[1].docs)) {
+    lines.push(`    ${formatEntry(key, c)}`)
   }
-  lines.push(`    TOTAL: ${totalWriteOps} ops × ${totalWriteDocs} docs`)
-  if (totalWriteDocs > 0) {
-    lines.push(`    R:W RATIO: ${(totalReadDocs / totalWriteDocs).toFixed(1)}x`)
+  return lines.join('\n')
+}
+
+function formatLocalBucket(b: Bucket): string {
+  const localReads = Object.entries(b.reads).filter(([key]) => !isBilled(key))
+  const totalDocs = localReads.reduce((sum, [, c]) => sum + c.docs, 0)
+  const totalOps = localReads.reduce((sum, [, c]) => sum + c.ops, 0)
+  const lines: string[] = []
+  lines.push(`  Reads: ${formatDocsOps(totalDocs, totalOps)}`)
+  for (const [key, c] of localReads.sort((a, b) => b[1].docs - a[1].docs)) {
+    lines.push(`    ${formatEntry(key, c)}`)
   }
   return lines.join('\n')
 }

@@ -162,7 +162,7 @@ export class NoteStore {
       // Skip local-echo snapshots, but always process the first snapshot
       // so ensureLoaded() can resolve even if there are pending writes.
       if (this.loaded && snapshot.metadata.hasPendingWrites) {
-        firestoreUsage.recordRead('NoteStore.listener', 'listener.local-echo', snapshot.docChanges().length)
+        firestoreUsage.recordRead('NoteStore.listener', 'LISTENER_LOCAL_ECHO', snapshot.docChanges().length)
         return
       }
 
@@ -171,13 +171,13 @@ export class NoteStore {
       if (isFirstSnapshot) {
         firestoreUsage.recordRead(
           'NoteStore.listener',
-          snapshot.metadata.fromCache ? 'listener.initial-cached' : 'listener.initial-fresh',
+          snapshot.metadata.fromCache ? 'LISTENER_INITIAL_CACHED' : 'LISTENER_INITIAL_FRESH',
           snapshot.docs.length,
         )
       } else {
         firestoreUsage.recordRead(
           'NoteStore.listener',
-          snapshot.metadata.fromCache ? 'listener.update-cached' : 'listener.update-fresh',
+          snapshot.metadata.fromCache ? 'LISTENER_UPDATE_CACHED' : 'LISTENER_UPDATE_FRESH',
           snapshot.docChanges().length,
         )
       }
