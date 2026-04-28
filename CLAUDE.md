@@ -126,6 +126,10 @@ Consult the following files to understand project requirements:
 - .md files under docs/
 - files name requirements.md in the source tree
 
+### Firestore Efficiency
+
+Read `docs/firestore-efficiency.md` before adding any Firestore read or write. It documents the listener-backed-cache pattern, when to wait for the listener vs. fall back to `getDoc`, why dedup checks must read persistent state (not React/Compose state), and the instrumentation requirement. Every new read/write must call `firestoreUsage.recordRead`/`recordWrite` so regressions surface in the usage report.
+
 ### Undo/Redo Considerations
 
 **Architecture**: All discrete editing operations must flow through `EditorController`, which handles undo boundary management via an operation-based system:
