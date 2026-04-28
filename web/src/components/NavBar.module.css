@@ -70,5 +70,5 @@
 }
 
 .signOutButton:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--color-icon-button-hover-bg);
 }

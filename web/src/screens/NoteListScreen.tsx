@@ -8,6 +8,9 @@ import { db, auth } from '@/firebase/config'
 import type { NoteSearchResult, SearchMatch, ContentSnippet } from '@/data/NoteSearchUtils'
 import type { SearchHistoryEntry } from '@/data/SearchHistoryRepository'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { MdIcon } from '@/components/MdIcon'
+import { useDropdown, DropdownMenuContainer, DropdownMenuPanel, MenuItem } from '@/components/DropdownMenu'
+import { useClickOutside } from '@/hooks/useClickOutside'
 import {
   ADD_NOTE, DELETE_NOTE, RESTORE_NOTE, SECTION_DELETED_NOTES,
   NO_NOTES_FOUND, EMPTY_NOTE, REFRESH, LOADING, NOTE_MENU,
@@ -20,6 +23,11 @@ import {
 import type { NoteSortMode } from '@/data/NoteFilteringUtils'
 import { firstLineOf } from '@/data/Note'
 import styles from './NoteListScreen.module.css'
+
+const IC_ADD = "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"
+const IC_SEARCH = "M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"
+const IC_REFRESH = "M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"
+const IC_ASSESSMENT = "M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"
 
 export function NoteListScreen() {
   // Start NoteStore listener so search has access to reconstructed note content
@@ -87,17 +95,21 @@ export function NoteListScreen() {
   return (
     <div className={styles.container}>
       <div className={styles.toolbar}>
-        <button className={styles.createButton} onClick={handleCreateNote}>
-          + {ADD_NOTE}
+        <button className={styles.actionButton} onClick={handleCreateNote}>
+          <MdIcon path={IC_ADD} className={styles.actionButtonIcon} />
+          {ADD_NOTE}
         </button>
         <div className={styles.toolbarRight}>
-          <button className={styles.searchButton} onClick={toggleSearch}>
+          <button className={styles.actionButton} onClick={toggleSearch}>
+            <MdIcon path={IC_SEARCH} className={styles.actionButtonIcon} />
             {SEARCH}
           </button>
-          <button className={styles.refreshButton} onClick={refresh}>
+          <button className={styles.actionButton} onClick={refresh}>
+            <MdIcon path={IC_REFRESH} className={styles.actionButtonIcon} />
             {REFRESH}
           </button>
-          <button className={styles.refreshButton} onClick={openUsageReport}>
+          <button className={styles.actionButton} onClick={openUsageReport}>
+            <MdIcon path={IC_ASSESSMENT} className={styles.actionButtonIcon} />
             {FIRESTORE_USAGE}
           </button>
         </div>
@@ -287,16 +299,7 @@ function SearchPanel({
     inputRef.current?.focus()
   }, [])
 
-  useEffect(() => {
-    if (!showHistory) return
-    function handleClickOutside(e: MouseEvent) {
-      if (historyRef.current && !historyRef.current.contains(e.target as Node)) {
-        setShowHistory(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [showHistory])
+  useClickOutside(historyRef, showHistory, () => setShowHistory(false))
 
   return (
     <div className={styles.searchPanel}>
@@ -527,41 +530,27 @@ function NoteItemMenu({
   actionIcon: string
   isDanger?: boolean
 }) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    function handleClickOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [open])
-
+  const menu = useDropdown()
   return (
-    <div className={styles.menuContainer} ref={ref}>
+    <DropdownMenuContainer innerRef={menu.ref}>
       <button
         className={styles.menuTrigger}
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={menu.toggle}
         title={NOTE_MENU}
       >
         ⋮
       </button>
-      {open && (
-        <div className={styles.menu}>
-          <button
-            className={`${styles.menuItem} ${isDanger ? styles.menuItemDanger : ''}`}
-            onClick={() => { setOpen(false); onAction() }}
-          >
-            <span className={styles.menuIcon}>{actionIcon}</span>
-            {actionLabel}
-          </button>
-        </div>
+      {menu.open && (
+        <DropdownMenuPanel>
+          <MenuItem
+            icon={actionIcon}
+            label={actionLabel}
+            danger={isDanger}
+            onClick={() => { menu.close(); onAction() }}
+          />
+        </DropdownMenuPanel>
       )}
-    </div>
+    </DropdownMenuContainer>
   )
 }
 
@@ -580,10 +569,10 @@ function UsageReportDialog({
         <h3 className={styles.usageTitle}>{FIRESTORE_USAGE_TITLE}</h3>
         <pre className={styles.usagePre}>{report}</pre>
         <div className={styles.usageActions}>
-          <button className={styles.refreshButton} onClick={onReset}>
+          <button className={styles.dialogButton} onClick={onReset}>
             {FIRESTORE_USAGE_RESET}
           </button>
-          <button className={styles.refreshButton} onClick={onClose}>
+          <button className={styles.dialogButton} onClick={onClose}>
             {FIRESTORE_USAGE_CLOSE}
           </button>
         </div>

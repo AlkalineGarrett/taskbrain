@@ -89,6 +89,11 @@
   --color-icon-default: #000000;
   --color-icon-disabled: #808080;
 
+  /* Ghost icon-button (toolbar overflow, command-bar icon buttons) */
+  --color-icon-button: #616161;
+  --color-icon-button-disabled: #BDBDBD;
+  --color-icon-button-hover-bg: rgba(0, 0, 0, 0.08);
+
   /* Editor font size (shared across editor input, overlays, directive chips) */
   --font-size-editor: 0.9375rem;
 
