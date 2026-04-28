@@ -49,7 +49,9 @@ export function useSaveCoordinator({
     // The inline editor only has this note's direct lines, not nested sub-trees
     // from view directives. saveNoteWithFullContent loads the existing tree and
     // matches by content, preserving grandchild relationships.
-    const savePromise = noteRepo.saveNoteWithFullContent(viewedNoteId, newContent)
+    const savePromise = noteStore.enqueueSave(() =>
+      noteRepo.saveNoteWithFullContent(viewedNoteId, newContent),
+    )
     noteStore.trackSave(viewedNoteId, savePromise)
     const createdIds = await savePromise
     invalidateAndRecompute()

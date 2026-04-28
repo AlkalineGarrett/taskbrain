@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
 import kotlin.concurrent.write
@@ -81,6 +83,14 @@ object NoteStore {
 
     /** In-flight saves keyed by noteId, so loaders can await before reading. */
     private val pendingSaves = mutableMapOf<String, Deferred<Unit>>()
+
+    /**
+     * Serializes all save operations so concurrent saves of different notes
+     * (e.g., A's autosave on tab switch racing B's autosave after a cross-note
+     * paste) run sequentially rather than overlapping on shared state. See
+     * [enqueueSave] for rationale.
+     */
+    private val saveQueueMutex = Mutex()
 
     /**
      * Debounced fire-and-forget save. Set via [setPersistCallback] during app init.
@@ -349,6 +359,24 @@ object NoteStore {
             }
         }
     }
+
+    /**
+     * Run [operation] after every previously enqueued save has settled.
+     *
+     * Cross-note operations (cut/paste, move) leave shared docs in flight
+     * between two trees. Two concurrent `saveNoteWithChildren` transactions
+     * computing `existingDescendantIds` / `toDelete` / `assertNotContentDrop`
+     * from the same NoteStore snapshot can clobber each other — e.g., A's
+     * save soft-deletes the moved doc after B has already reparented it.
+     * Serializing through this queue means each save reads NoteStore after
+     * the prior save's write has committed (and Firestore's local cache
+     * reflects it), so the second save sees the up-to-date tree.
+     *
+     * A failure in one operation does not block subsequent operations —
+     * [Mutex.withLock] releases the lock on either return or exception.
+     */
+    suspend fun <T> enqueueSave(operation: suspend () -> T): T =
+        saveQueueMutex.withLock { operation() }
 
     // --- Snapshot handlers ---
 

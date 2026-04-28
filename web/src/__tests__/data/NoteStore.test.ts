@@ -174,6 +174,46 @@ describe('NoteStore', () => {
     })
   })
 
+  describe('enqueueSave', () => {
+    it('runs operations sequentially in submission order', async () => {
+      const order: string[] = []
+      let resolveFirst!: () => void
+      const firstStarted = store.enqueueSave(async () => {
+        order.push('first-start')
+        await new Promise<void>(r => { resolveFirst = r })
+        order.push('first-end')
+        return 'A'
+      })
+
+      // The second op must not start until the first finishes.
+      const secondStarted = store.enqueueSave(async () => {
+        order.push('second-start')
+        order.push('second-end')
+        return 'B'
+      })
+
+      // Let both microtasks run: first-start should be the only entry.
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(order).toEqual(['first-start'])
+
+      resolveFirst()
+      await expect(firstStarted).resolves.toBe('A')
+      await expect(secondStarted).resolves.toBe('B')
+      expect(order).toEqual(['first-start', 'first-end', 'second-start', 'second-end'])
+    })
+
+    it('continues queue after a failed operation', async () => {
+      const failing = store.enqueueSave(async () => {
+        throw new Error('boom')
+      })
+      const next = store.enqueueSave(async () => 'ok')
+
+      await expect(failing).rejects.toThrow('boom')
+      await expect(next).resolves.toBe('ok')
+    })
+  })
+
   describe('snapshot stability', () => {
     it('returns same reference when no changes', () => {
       const snap1 = store.getSnapshot()

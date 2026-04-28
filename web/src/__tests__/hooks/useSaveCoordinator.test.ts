@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act, renderHook, waitFor } from '@testing-library/react'
 
-const { repoSaveSpy, updateNoteSpy, getNoteByIdSpy, trackSaveSpy, getNoteLinesByIdSpy } = vi.hoisted(() => ({
+const { repoSaveSpy, updateNoteSpy, getNoteByIdSpy, trackSaveSpy, getNoteLinesByIdSpy, enqueueSaveSpy } = vi.hoisted(() => ({
   repoSaveSpy: vi.fn(),
   updateNoteSpy: vi.fn(),
   getNoteByIdSpy: vi.fn(),
   trackSaveSpy: vi.fn(),
   getNoteLinesByIdSpy: vi.fn(),
+  enqueueSaveSpy: vi.fn(<T,>(op: () => Promise<T>) => op()),
 }))
 
 vi.mock('@/firebase/config', () => ({
@@ -27,6 +28,7 @@ vi.mock('@/data/NoteStore', () => ({
     getNoteById: getNoteByIdSpy,
     trackSave: trackSaveSpy,
     getNoteLinesById: getNoteLinesByIdSpy,
+    enqueueSave: enqueueSaveSpy,
   },
 }))
 

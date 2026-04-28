@@ -318,7 +318,9 @@ export function useEditor(noteId: string | undefined) {
         newTracked = [{ ...newTracked[0]!, noteId: targetNoteId }, ...newTracked.slice(1)]
       }
 
-      const createdIds = await repo.saveNoteWithChildren(targetNoteId, newTracked)
+      const createdIds = await noteStore.enqueueSave(() =>
+        repo.saveNoteWithChildren(targetNoteId, newTracked),
+      )
 
       // Update tracked lines with newly created IDs
       const updatedTracked = newTracked.map((line, index) => {

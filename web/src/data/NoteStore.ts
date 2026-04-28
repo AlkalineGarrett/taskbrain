@@ -70,6 +70,12 @@ export class NoteStore {
   private errorListeners = new Set<() => void>()
   private needsFixListeners = new Set<() => void>()
   private pendingSaves = new Map<string, Promise<unknown>>()
+
+  // Tail of the global save queue. Every save is appended via `enqueueSave`,
+  // so concurrent saves of different notes (e.g., A's autosave on tab switch
+  // racing B's autosave after a cross-note paste) run sequentially rather
+  // than overlapping on shared state — see `enqueueSave` for rationale.
+  private saveQueueTail: Promise<unknown> = Promise.resolve()
   private _error: string | null = null
   /**
    * Top-level note IDs whose reconstruction had to auto-heal a discrepancy
@@ -397,6 +403,26 @@ export class NoteStore {
   async awaitPendingSave(noteId: string): Promise<void> {
     const pending = this.pendingSaves.get(noteId)
     if (pending) await pending
+  }
+
+  /**
+   * Run [operation] after every previously enqueued save has settled.
+   *
+   * Cross-note operations (cut/paste, move) leave shared docs in flight
+   * between two trees. Two concurrent `saveNoteWithChildren` transactions
+   * computing `existingDescendantIds` / `toDelete` / `assertNotContentDrop`
+   * from the same NoteStore snapshot can clobber each other — e.g., A's
+   * save soft-deletes the moved doc after B has already reparented it.
+   * Serializing through this queue means each save reads NoteStore after
+   * the prior save's transaction has committed (and Firestore's local
+   * cache reflects it), so the second save sees the up-to-date tree.
+   *
+   * A failure in one operation does not block subsequent operations.
+   */
+  enqueueSave<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.saveQueueTail.catch(() => undefined).then(operation)
+    this.saveQueueTail = next.catch(() => undefined)
+    return next
   }
 
   // --- Internal reconstruction ---

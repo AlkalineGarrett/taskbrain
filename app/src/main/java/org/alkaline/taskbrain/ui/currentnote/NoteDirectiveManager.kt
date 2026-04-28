@@ -710,7 +710,7 @@ class NoteDirectiveManager(
         launchInlineSave(
             noteId = session.noteId,
             newContent = newContent,
-            saveAction = { repository.saveNoteWithFullContent(session.noteId, newContent) },
+            saveAction = { NoteStore.enqueueSave { repository.saveNoteWithFullContent(session.noteId, newContent) } },
             onSuccess = onSuccess,
             onFailure = onFailure,
         )
@@ -740,7 +740,9 @@ class NoteDirectiveManager(
             startInlineEditSession(session.noteId)
         }
 
-        val result = repository.saveNoteWithChildren(session.noteId, trackedLines, extraOpsBuilder)
+        val result = NoteStore.enqueueSave {
+            repository.saveNoteWithChildren(session.noteId, trackedLines, extraOpsBuilder)
+        }
         result.onSuccess {
             MetadataHasher.invalidateCache()
             directiveCacheManager.clearAll()
@@ -771,7 +773,7 @@ class NoteDirectiveManager(
         // direct lines, not nested sub-trees from view directives.
         // saveNoteWithFullContent loads the existing tree structure and matches
         // the editor content against it, preserving grandchild relationships.
-        repository.saveNoteWithFullContent(session.noteId, newContent).getOrThrow()
+        NoteStore.enqueueSave { repository.saveNoteWithFullContent(session.noteId, newContent) }.getOrThrow()
         MetadataHasher.invalidateCache()
     }
 
@@ -791,7 +793,7 @@ class NoteDirectiveManager(
         launchInlineSave(
             noteId = noteId,
             newContent = newContent,
-            saveAction = { repository.saveNoteWithFullContent(noteId, newContent) },
+            saveAction = { NoteStore.enqueueSave { repository.saveNoteWithFullContent(noteId, newContent) } },
             onSuccess = onSuccess,
             onFailure = onFailure,
         )

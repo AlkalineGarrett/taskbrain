@@ -3,6 +3,7 @@ import { collection, query, where, getDocs } from 'firebase/firestore'
 import { db, auth } from '@/firebase/config'
 import { type Note, noteFromFirestore } from '@/data/Note'
 import { NoteRepository } from '@/data/NoteRepository'
+import { noteStore } from '@/data/NoteStore'
 import styles from './RecoverScreen.module.css'
 
 const repo = new NoteRepository(db, auth)
@@ -181,7 +182,7 @@ export function RecoverScreen() {
         { content: title, noteId },
         ...group.notes.map(n => ({ content: n.content, noteId: null })),
       ]
-      await repo.saveNoteWithChildren(noteId, trackedLines)
+      await noteStore.enqueueSave(() => repo.saveNoteWithChildren(noteId, trackedLines))
       setGroups(prev => prev.filter((_, i) => i !== index))
     } catch (e) {
       console.error('Create note failed:', e)

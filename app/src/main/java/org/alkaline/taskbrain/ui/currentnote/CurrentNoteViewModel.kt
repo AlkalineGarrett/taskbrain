@@ -163,7 +163,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         NoteStore.setPersistCallback { noteId, content ->
             persistJobs[noteId]?.cancel()
             persistJobs[noteId] = viewModelScope.launch {
-                repository.saveNoteWithFullContent(noteId, content)
+                NoteStore.enqueueSave { repository.saveNoteWithFullContent(noteId, content) }
                 persistJobs.remove(noteId)
             }
         }
@@ -225,7 +225,9 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         trackedLines: List<NoteLine>,
         extraOpsBuilder: NoteRepository.ExtraOpsBuilder?,
     ): Result<Map<Int, String>> {
-        val result = repository.saveNoteWithChildren(noteId, trackedLines, extraOpsBuilder)
+        val result = NoteStore.enqueueSave {
+            repository.saveNoteWithChildren(noteId, trackedLines, extraOpsBuilder)
+        }
         result.fold(
             onSuccess = { newIdsMap ->
                 // Update currentNoteLines with newly assigned IDs
@@ -865,7 +867,9 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 var lastError: Throwable? = null
 
                 // Save main note (without persistCurrentNote's status side effects)
-                val mainResult = repository.saveNoteWithChildren(savedNoteId, trackedLines, extraOpsBuilder = null)
+                val mainResult = NoteStore.enqueueSave {
+                    repository.saveNoteWithChildren(savedNoteId, trackedLines, extraOpsBuilder = null)
+                }
                 mainResult.onSuccess { newIdsMap ->
                     if (newIdsMap.isNotEmpty()) {
                         val updated = currentNoteLines.toMutableList()
