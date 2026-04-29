@@ -9,9 +9,10 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import org.alkaline.taskbrain.ui.currentnote.EditorId
 import org.alkaline.taskbrain.ui.currentnote.InlineEditState
@@ -153,7 +154,18 @@ fun HangingIndentEditor(
 
     // Core state
     val lineCount = state.lines.size
-    val focusRequesters = remember(lineCount) { List(lineCount) { FocusRequester() } }
+    // Focus requesters keyed by line identity (effectiveId = first noteId or
+    // tempId), not by position. Combined with key(effectiveId) on each line
+    // composable, this lets Compose preserve focus across reorders — the
+    // focused textfield physically moves with its line, so cursor visually
+    // follows a move-line operation without an explicit refocus.
+    val focusRequestersById = remember { mutableMapOf<String, FocusRequester>() }
+    val focusRequesters = state.lines.map { line ->
+        focusRequestersById.getOrPut(line.effectiveId) { FocusRequester() }
+    }
+    // Drop entries for lines that no longer exist so the map doesn't grow
+    // unboundedly across a long edit session.
+    focusRequestersById.keys.retainAll(state.lines.mapTo(HashSet(state.lines.size)) { it.effectiveId })
     val lineLayouts = rememberLineLayouts(lineCount)
 
     // UI state
@@ -165,8 +177,10 @@ fun HangingIndentEditor(
 
     // Focus management — hidden lines have no composable, so their FocusRequesters
     // are unattached. Guard here to avoid crashing on requestFocus().
-    LaunchedEffect(externalFocusRequester, state.focusedLineIndex, state.stateVersion) {
-        if (state.stateVersion > 0 && state.focusedLineIndex in focusRequesters.indices) {
+    // Keys on focusVersion (not stateVersion) so passive state bumps — e.g. a
+    // toolbar move that doesn't represent a focus intent — don't re-grab IME.
+    LaunchedEffect(externalFocusRequester, state.focusVersion) {
+        if (state.focusVersion > 0 && state.focusedLineIndex in focusRequesters.indices) {
             val lineTexts = state.lines.map { it.text }
             val hidden = CompletedLineUtils.computeHiddenIndices(lineTexts, showCompleted)
             val effectiveHidden = CompletedLineUtils.computeEffectiveHidden(
@@ -180,6 +194,41 @@ fun HangingIndentEditor(
             if (targetLine in focusRequesters.indices && targetLine !in effectiveHidden) {
                 focusRequesters[targetLine].requestFocus()
             }
+        }
+    }
+
+    // Scroll the focused line into view on explicit request (e.g. after a
+    // move-line operation pushed the line off-screen). Leaves one line of
+    // context visible. Kept separate from the focus effect so typing/clicks
+    // don't fight scroll position.
+    val defaultLineContextPx = with(density) { (EditorConfig.FontSize.toDp() * 1.5f).toPx() }
+    // NoteTextField wraps this composable with vertical padding, so line yOffsets
+    // (positionInParent of EditorContent's Column) are offset from scrollState's
+    // coord space by that constant. Without correcting for it, the scroll math
+    // is off by VerticalPadding in both directions.
+    val scrollOffsetPx = with(density) { EditorConfig.VerticalPadding.toPx() }
+    LaunchedEffect(state.scrollIntoViewVersion) {
+        if (state.scrollIntoViewVersion == 0 || scrollState == null) return@LaunchedEffect
+        // Wait one frame so the move-induced relayout has populated lineLayouts
+        // with fresh yOffset/height before we read them.
+        withFrameNanos { }
+        val idx = state.focusedLineIndex
+        val layout = lineLayouts.getOrNull(idx) ?: return@LaunchedEffect
+        if (layout.height <= 0f) return@LaunchedEffect
+        val viewport = scrollState.viewportSize
+        if (viewport <= 0) return@LaunchedEffect
+        val lineTop = (layout.yOffset + scrollOffsetPx).toInt()
+        val lineBottom = (layout.yOffset + scrollOffsetPx + layout.height).toInt()
+        val viewTop = scrollState.value
+        val viewBottom = viewTop + viewport
+        // Fall back to a font-derived constant when the adjacent line has no
+        // recorded height (it might be hidden — completed lines are zeroed out
+        // — or at the document edge).
+        val padAbove = (lineLayouts.getOrNull(idx - 1)?.height?.takeIf { it > 0f } ?: defaultLineContextPx).toInt()
+        val padBelow = (lineLayouts.getOrNull(idx + 1)?.height?.takeIf { it > 0f } ?: defaultLineContextPx).toInt()
+        when {
+            lineTop < viewTop + padAbove -> scrollState.animateScrollTo((lineTop - padAbove).coerceAtLeast(0))
+            lineBottom > viewBottom - padBelow -> scrollState.animateScrollTo(lineBottom + padBelow - viewport)
         }
     }
 
@@ -389,15 +438,7 @@ private fun selectHiddenBlock(
     }
     val blockEnd = findHiddenBlockEnd(lineIndex, hiddenIndices, state.lines.size)
 
-    // Select the entire block
-    val selStart = state.getLineStartOffset(blockStart)
-    var selEnd = state.getLineStartOffset(blockEnd) + state.lines[blockEnd].text.length
-    if (blockEnd < state.lines.lastIndex) {
-        selEnd = state.getLineStartOffset(blockEnd + 1)
-    }
-    if (selEnd > selStart) {
-        state.setSelection(selStart, selEnd)
-    }
+    state.selectLineRange(blockStart..blockEnd)
     // Set drag anchor so extending works correctly
     gutterSelectionState.dragStartLine = blockStart
 

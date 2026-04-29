@@ -41,17 +41,50 @@ class EditorState {
     }
 
     /**
-     * Version counter that increments on any state change requiring focus update.
-     * Observed by the editor composable to trigger focus requests.
+     * Version counter that increments on any state change requiring re-render.
      */
     var stateVersion by mutableIntStateOf(0)
         private set
 
     /**
-     * Increments state version to signal that focus should be updated.
+     * Version counter that increments only on changes that should grab focus
+     * (tap, navigation, split). Distinct from stateVersion so passive updates
+     * — e.g. toolbar moves that shouldn't pop the IME — don't refocus.
+     */
+    var focusVersion by mutableIntStateOf(0)
+        private set
+
+    /**
+     * Version counter that increments when the focused line should be scrolled
+     * into view (e.g. after a move-line operation pushed it off-screen).
+     */
+    var scrollIntoViewVersion by mutableIntStateOf(0)
+        private set
+
+    /**
+     * Bumps stateVersion + focusVersion: signals that the focused line should
+     * acquire IME focus. Use for tap, arrow-key navigation, split, etc.
      */
     internal fun requestFocusUpdate() {
         stateVersion++
+        focusVersion++
+    }
+
+    /**
+     * Bumps stateVersion only: re-render without focus side-effects. Use for
+     * structural changes like move-line where the user didn't ask to start
+     * editing.
+     */
+    internal fun requestSilentUpdate() {
+        stateVersion++
+    }
+
+    /**
+     * Increments scroll-into-view version to signal that the focused line
+     * should be brought into the viewport on next layout.
+     */
+    internal fun requestScrollIntoView() {
+        scrollIntoViewVersion++
     }
 
     val text: String get() = lines.joinToString("\n") { it.text }
@@ -526,14 +559,29 @@ class EditorState {
         MoveTargetFinder.wouldOrphanChildren(lines, hasSelection, selection, focusedLineIndex)
 
     /**
+     * Sets a full-line selection from the start of [range].first through the
+     * end of [range].last (including the trailing newline if present), matching
+     * what a gutter drag produces. No-op if [range] is out of bounds.
+     */
+    fun selectLineRange(range: IntRange) {
+        if (range.first !in lines.indices || range.last !in lines.indices) return
+        val selStart = getLineStartOffset(range.first)
+        val selEnd = if (range.last < lines.lastIndex) {
+            getLineStartOffset(range.last + 1)
+        } else {
+            getLineStartOffset(range.last) + lines[range.last].text.length
+        }
+        if (selEnd > selStart) {
+            setSelection(selStart, selEnd)
+        }
+    }
+
+    /**
      * Moves lines from sourceRange to targetIndex.
      * Adjusts focused line and selection to follow the moved lines.
      * Returns the new range of the moved lines, or null if move failed.
      */
     internal fun moveLinesInternal(sourceRange: IntRange, targetIndex: Int): IntRange? {
-        // Capture noteIds before the move
-        val oldNoteIds = lines.map { it.noteIds }
-
         // Calculate the move result using pure function
         val selectionForCalc = if (hasSelection) selection else null
         val result = MoveExecutor.calculateMove(
@@ -544,33 +592,26 @@ class EditorState {
             selection = selectionForCalc
         ) ?: return null
 
-        // Calculate noteIds reordering (same logic as text reordering in MoveExecutor)
+        // Rearrange the existing LineState instances rather than rebuilding the
+        // list with new instances. Cheap, and avoids the noteId-bookkeeping
+        // round-trip we'd otherwise need on every move.
         val moveCount = sourceRange.last - sourceRange.first + 1
-        val reorderedNoteIds = mutableListOf<List<String>>()
-        for (i in oldNoteIds.indices) {
-            if (i !in sourceRange) reorderedNoteIds.add(oldNoteIds[i])
-        }
+        val movedItems = (0 until moveCount).map { lines[sourceRange.first + it] }
+        repeat(moveCount) { lines.removeAt(sourceRange.first) }
         val adjustedTarget = if (targetIndex > sourceRange.first) targetIndex - moveCount else targetIndex
-        for (i in sourceRange) {
-            reorderedNoteIds.add(adjustedTarget + (i - sourceRange.first), oldNoteIds[i])
+        movedItems.forEachIndexed { i, item ->
+            lines.add(adjustedTarget + i, item)
         }
 
-        // Apply the result to state
-        lines.clear()
-        result.newLines.forEachIndexed { index, lineText ->
-            val noteIds = reorderedNoteIds.getOrElse(index) {
-                // Reorder produced more result-lines than input; fill with a
-                // SURGICAL sentinel so the save layer allocates a fresh doc.
-                listOf(NoteIdSentinel.new(NoteIdSentinel.Origin.SURGICAL))
-            }
-            lines.add(LineState(lineText, lineText.length, noteIds))
-        }
         focusedLineIndex = result.newFocusedLineIndex
         if (result.newSelection != null) {
             selection = result.newSelection
         }
 
-        requestFocusUpdate()
+        // Silent: don't refocus the textfield — Compose can't preserve focus
+        // across the composable reorder anyway. The caller (move-line) sets a
+        // gutter selection over the moved range to give a visual indicator.
+        requestSilentUpdate()
         notifyChange()
         return result.newRange
     }

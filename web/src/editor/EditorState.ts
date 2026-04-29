@@ -29,13 +29,23 @@ export class EditorState {
 
   private lastSpaceIndentTime = 0
   private _stateVersion = 0
+  private _scrollIntoViewVersion = 0
 
   get stateVersion(): number {
     return this._stateVersion
   }
 
+  get scrollIntoViewVersion(): number {
+    return this._scrollIntoViewVersion
+  }
+
   requestFocusUpdate(): void {
     this._stateVersion++
+    this.onSelectionChange?.()
+  }
+
+  requestScrollIntoView(): void {
+    this._scrollIntoViewVersion++
     this.onSelectionChange?.()
   }
 

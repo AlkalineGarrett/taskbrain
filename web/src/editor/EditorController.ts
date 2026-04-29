@@ -347,6 +347,7 @@ export class EditorController {
     if (newRange) {
       this.undoManager.updateMoveRange(newRange)
       this.undoManager.markContentChanged()
+      s.requestScrollIntoView()
     }
     return newRange != null
   }
@@ -367,6 +368,7 @@ export class EditorController {
     if (newRange) {
       this.undoManager.updateMoveRange(newRange)
       this.undoManager.markContentChanged()
+      s.requestScrollIntoView()
     }
     return newRange != null
   }

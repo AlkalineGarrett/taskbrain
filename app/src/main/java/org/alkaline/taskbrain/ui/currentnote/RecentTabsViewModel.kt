@@ -100,6 +100,7 @@ class RecentTabsViewModel : ViewModel() {
     /** Called when user closes a tab with the X button. */
     fun closeTab(noteId: String) {
         noteCache.remove(noteId)
+        pendingDisplayTextCorrections.remove(noteId)
         viewModelScope.launch {
             repository.removeTab(noteId).onFailure { e ->
                 Log.e(TAG, "Error closing tab: $noteId", e)
@@ -111,6 +112,7 @@ class RecentTabsViewModel : ViewModel() {
     /** Called when a note is deleted. Removes its tab. */
     fun onNoteDeleted(noteId: String) {
         noteCache.remove(noteId)
+        pendingDisplayTextCorrections.remove(noteId)
         viewModelScope.launch {
             repository.removeTab(noteId).onFailure { e ->
                 Log.e(TAG, "Error removing tab for deleted note: $noteId", e)
@@ -134,6 +136,14 @@ class RecentTabsViewModel : ViewModel() {
     }
 
     /**
+     * Per-noteId memo of the last correction we wrote to Firestore so a
+     * repeated stale snapshot (e.g. while another writer keeps overwriting
+     * the same wrong value) doesn't trigger a write loop. Cleared once the
+     * tab settles to the corrected value.
+     */
+    private val pendingDisplayTextCorrections = mutableMapOf<String, String>()
+
+    /**
      * Cross-references tab displayTexts with NoteStore content and fixes stale values.
      * Persists corrections to Firestore in the background.
      */
@@ -142,13 +152,17 @@ class RecentTabsViewModel : ViewModel() {
             val note = NoteStore.getNoteById(tab.noteId) ?: return@map tab
             val freshDisplayText = TabState.extractDisplayText(note.content)
             if (freshDisplayText != tab.displayText) {
-                Log.d(TAG, "refreshDisplayTexts: stale displayText for ${tab.noteId}: " +
-                    "\"${tab.displayText}\" -> \"$freshDisplayText\"")
-                viewModelScope.launch {
-                    repository.updateTabDisplayText(tab.noteId, freshDisplayText)
+                if (pendingDisplayTextCorrections[tab.noteId] != freshDisplayText) {
+                    pendingDisplayTextCorrections[tab.noteId] = freshDisplayText
+                    Log.d(TAG, "refreshDisplayTexts: stale displayText for ${tab.noteId}: " +
+                        "\"${tab.displayText}\" -> \"$freshDisplayText\"")
+                    viewModelScope.launch {
+                        repository.updateTabDisplayText(tab.noteId, freshDisplayText)
+                    }
                 }
                 tab.copy(displayText = freshDisplayText)
             } else {
+                pendingDisplayTextCorrections.remove(tab.noteId)
                 tab
             }
         }

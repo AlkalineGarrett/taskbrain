@@ -442,47 +442,34 @@ class EditorController(
      * Consecutive moves of the same lines are grouped into one undo step.
      * @return true if the move was performed, false if at boundary
      */
-    fun moveUp(): Boolean {
-        val range = if (state.hasSelection) state.getSelectedLineRange() else state.getLogicalBlock(state.focusedLineIndex)
-        val target = state.getMoveTarget(moveUp = true, hiddenIndices = hiddenIndices) ?: return false
-
-        // Record for undo grouping (uses range BEFORE move for grouping check)
-        undoManager.recordMoveCommand(state, range)
-
-        // Perform the move
-        val newRange = state.moveLinesInternal(range, target)
-        if (newRange != null) {
-            // Update the tracked move range to the new position
-            undoManager.updateMoveRange(newRange)
-            // Mark content as changed so canUndo returns true
-            undoManager.markContentChanged()
-        }
-
-        return newRange != null
-    }
+    fun moveUp(): Boolean = performMove(moveUp = true)
 
     /**
      * Moves the current line/selection down.
      * Consecutive moves of the same lines are grouped into one undo step.
      * @return true if the move was performed, false if at boundary
      */
-    fun moveDown(): Boolean {
+    fun moveDown(): Boolean = performMove(moveUp = false)
+
+    private fun performMove(moveUp: Boolean): Boolean {
         val range = if (state.hasSelection) state.getSelectedLineRange() else state.getLogicalBlock(state.focusedLineIndex)
-        val target = state.getMoveTarget(moveUp = false, hiddenIndices = hiddenIndices) ?: return false
+        val target = state.getMoveTarget(moveUp = moveUp, hiddenIndices = hiddenIndices) ?: return false
+
+        // Lay down a gutter-style selection over the moved range before moving:
+        // Compose disposes the focused textfield during the reorder, so the
+        // text cursor disappears. The blue line-selection highlight is the
+        // visual anchor for "this is what just moved." moveLinesInternal
+        // updates the selection to follow the new line positions.
+        state.selectLineRange(range)
 
         // Record for undo grouping (uses range BEFORE move for grouping check)
         undoManager.recordMoveCommand(state, range)
 
-        // Perform the move
-        val newRange = state.moveLinesInternal(range, target)
-        if (newRange != null) {
-            // Update the tracked move range to the new position
-            undoManager.updateMoveRange(newRange)
-            // Mark content as changed so canUndo returns true
-            undoManager.markContentChanged()
-        }
-
-        return newRange != null
+        val newRange = state.moveLinesInternal(range, target) ?: return false
+        undoManager.updateMoveRange(newRange)
+        undoManager.markContentChanged()
+        state.requestScrollIntoView()
+        return true
     }
 
     /**

@@ -26,22 +26,7 @@ class GutterSelectionState {
      * @param state The editor state to update
      */
     fun selectLine(lineIndex: Int, state: EditorState) {
-        if (lineIndex !in state.lines.indices) {
-            return
-        }
-
-        val lineStart = state.getLineStartOffset(lineIndex)
-        var lineEnd = lineStart + state.lines[lineIndex].text.length
-
-        // Include the newline character if not the last line
-        if (lineIndex < state.lines.lastIndex) {
-            lineEnd = state.getLineStartOffset(lineIndex + 1)
-        }
-
-        // Only set selection if we have something to select
-        if (lineEnd > lineStart) {
-            state.setSelection(lineStart, lineEnd)
-        }
+        state.selectLineRange(lineIndex..lineIndex)
     }
 
     /**
@@ -52,24 +37,8 @@ class GutterSelectionState {
      * @param state The editor state to update
      */
     fun extendSelectionToLine(lineIndex: Int, state: EditorState) {
-        if (dragStartLine < 0 || lineIndex !in state.lines.indices) {
-            return
-        }
-
-        val startLine = minOf(dragStartLine, lineIndex)
-        val endLine = maxOf(dragStartLine, lineIndex)
-
-        val selStart = state.getLineStartOffset(startLine)
-        var selEnd = state.getLineStartOffset(endLine) + state.lines[endLine].text.length
-
-        // Include the newline at end of selection if not the last line
-        if (endLine < state.lines.lastIndex) {
-            selEnd = state.getLineStartOffset(endLine + 1)
-        }
-
-        if (selEnd > selStart) {
-            state.setSelection(selStart, selEnd)
-        }
+        if (dragStartLine < 0) return
+        state.selectLineRange(minOf(dragStartLine, lineIndex)..maxOf(dragStartLine, lineIndex))
     }
 
     /**

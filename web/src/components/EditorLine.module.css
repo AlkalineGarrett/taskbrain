@@ -93,6 +93,8 @@
   caret-color: var(--color-text);
   margin: 0;
   display: block;
+  /* Leave one line of context above/below when scrollIntoView fires (e.g. after move-line). */
+  scroll-margin-block: 1.5rem;
 }
 
 .input::selection {

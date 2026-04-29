@@ -109,6 +109,15 @@ export function EditorLine({
     }
   }, [isFocusedInState, editorState.stateVersion, autoFocusAllowed])
 
+  // Scroll the focused line into view on explicit request (e.g. after a
+  // move-line operation pushed the line off-screen). Kept separate from the
+  // focus effect so click/typing don't fight browser scroll.
+  useEffect(() => {
+    if (!isFocusedInState || !inputRef.current) return
+    inputRef.current.scrollIntoView({ block: 'nearest' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorState.scrollIntoViewVersion])
+
   const { handleKeyDown, handleChange, handleCompositionStart, handleCompositionEnd, handlePaste } =
     useEditorLineKeyboard({
       controller, editorState, lineIndex, line, content, inputRef, overlayRef,
