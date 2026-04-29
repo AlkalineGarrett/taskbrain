@@ -118,7 +118,14 @@ export function useEditorLineKeyboard({
           return
         }
         if (e.key === 'v') {
-          // Let the native paste event fire — handled by onPaste.
+          // Don't rely on the native paste event — clipboard-manager
+          // extensions and macOS keyboard shortcuts can suppress it. Read
+          // the clipboard explicitly via the async API, same as the paste
+          // button. The onPaste handler still covers right-click → Paste.
+          e.preventDefault()
+          void controller.pasteFromClipboard().catch((err) => {
+            window.alert(`Paste failed: ${err instanceof Error ? err.message : String(err)}`)
+          })
           return
         }
         if (e.key === 's') {

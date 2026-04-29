@@ -54,25 +54,7 @@ export function CommandBar({
 
   const handlePasteClick = async () => {
     try {
-      try {
-        const items = await navigator.clipboard.read()
-        for (const item of items) {
-          const text = item.types.includes('text/plain')
-            ? await (await item.getType('text/plain')).text()
-            : ''
-          const html = item.types.includes('text/html')
-            ? await (await item.getType('text/html')).text()
-            : null
-          if (text || html) {
-            controller.paste(text, html)
-            return
-          }
-        }
-      } catch {
-        // read() unavailable or denied — fall through to readText()
-      }
-      const text = await navigator.clipboard.readText()
-      if (text) controller.paste(text, null)
+      await controller.pasteFromClipboard()
     } catch (e) {
       window.alert(`Paste failed: ${e instanceof Error ? e.message : String(e)}`)
     }

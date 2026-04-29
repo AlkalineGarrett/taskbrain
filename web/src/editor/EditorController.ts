@@ -244,6 +244,34 @@ export class EditorController {
     })
   }
 
+  /**
+   * Read the system clipboard and paste. Used by both cmd+v and the paste
+   * button — cmd+v can't always rely on the native paste event firing
+   * (clipboard-manager extensions and macOS shortcuts can suppress it), so
+   * we read explicitly via the async clipboard API.
+   */
+  async pasteFromClipboard(): Promise<void> {
+    try {
+      const items = await navigator.clipboard.read()
+      for (const item of items) {
+        const text = item.types.includes('text/plain')
+          ? await (await item.getType('text/plain')).text()
+          : ''
+        const html = item.types.includes('text/html')
+          ? await (await item.getType('text/html')).text()
+          : null
+        if (text || html) {
+          this.paste(text, html)
+          return
+        }
+      }
+    } catch {
+      // read() unavailable or denied — fall through to readText()
+    }
+    const text = await navigator.clipboard.readText()
+    if (text) this.paste(text, null)
+  }
+
   cutSelection(): string | null {
     if (!this.state.hasSelection) return null
     return this.executeOperation(OperationType.CUT, () => {
