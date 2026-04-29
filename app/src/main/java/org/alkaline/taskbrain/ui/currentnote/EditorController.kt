@@ -816,7 +816,8 @@ class EditorController(
      * Splits a line at a content boundary: writes [beforeContent] to the existing line
      * (preserving prefix), inserts a new line below with [afterContent] and a continued
      * prefix (per [preserveCheckedAfter]), and distributes noteIds across the split.
-     * splitNoteIds stamps SPLIT sentinels on any content-bearing side without an id.
+     * splitNoteIds stamps a sentinel on any side without an id — SPLIT for
+     * content-bearing halves, TYPED for fresh empty halves (Enter at edge).
      *
      * Caller must wrap with prepareForStructuralChange / continueAfterStructuralChange
      * + clearSelection.

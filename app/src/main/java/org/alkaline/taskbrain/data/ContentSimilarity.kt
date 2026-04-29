@@ -128,13 +128,18 @@ fun splitNoteIds(
         beforeContentLen >= afterContentLen -> noteIds to emptyList()
         else -> emptyList<String>() to noteIds
     }
-    // Sentinel marks a fresh doc's origin so save-time attribution
-    // ("where did this come from?") stays consistent.
-    return stampSplitSentinelIfNeeded(before) to stampSplitSentinelIfNeeded(after)
+    // Sentinel origin distinguishes "Enter at line edge created a fresh empty
+    // line" (typed) from "true mid-line split where one fragment had no id to
+    // inherit" (split). The empty-content half is fresh; the content-bearing
+    // half came from a real split.
+    return stampSentinelIfNeeded(before, beforeHasContent) to stampSentinelIfNeeded(after, afterHasContent)
 }
 
-private fun stampSplitSentinelIfNeeded(ids: List<String>): List<String> =
-    if (ids.isEmpty()) listOf(NoteIdSentinel.new(NoteIdSentinel.Origin.SPLIT)) else ids
+private fun stampSentinelIfNeeded(ids: List<String>, hasContent: Boolean): List<String> {
+    if (ids.isNotEmpty()) return ids
+    val origin = if (hasContent) NoteIdSentinel.Origin.SPLIT else NoteIdSentinel.Origin.TYPED
+    return listOf(NoteIdSentinel.new(origin))
+}
 
 /**
  * Distributes noteIds to before/after halves based on how much of each noteId's

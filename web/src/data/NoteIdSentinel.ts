@@ -4,9 +4,9 @@
  * A plain `null` noteId is ambiguous — it can mean "new line the user just typed"
  * (expected) or "some lossy path dropped the id" (bug). Sentinel ids disambiguate:
  *
- *  - `@typed_xxx`     — user typed a fresh line (Enter, first keystroke on empty line)
+ *  - `@typed_xxx`     — user typed a fresh line (Enter at edge, first keystroke on empty line)
  *  - `@paste_xxx`     — pasted from clipboard
- *  - `@split_xxx`     — line split via Enter mid-line
+ *  - `@split_xxx`     — content-bearing fragment from a true mid-line split
  *  - `@agent_xxx`     — produced by the AI agent
  *  - `@directive_xxx` — produced by a directive runtime
  *  - `@surgical_xxx`  — middle line of a multi-line replace-range

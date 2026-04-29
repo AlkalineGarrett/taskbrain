@@ -7,7 +7,7 @@ import { executePaste } from '../../editor/PasteHandler'
 import { parseInternalLines } from '../../editor/ClipboardParser'
 import { SELECTION_NONE } from '../../editor/EditorSelection'
 import { matchLinesToIds } from '../../data/NoteRepository'
-import { isSentinelNoteId } from '../../data/NoteIdSentinel'
+import { isSentinelNoteId, originOfSentinel } from '../../data/NoteIdSentinel'
 import type { NoteLine } from '../../data/Note'
 
 /** True iff the line has no real Firestore id — either empty or only sentinels. */
@@ -173,10 +173,10 @@ describe('splitLine preserves noteIds', () => {
 
     expect(controller.state.lines[0]!.text).toBe('Hello')
     expect(controller.state.lines[0]!.noteIds).toEqual(['note1'])
-    // Empty lines are first-class docs now: the new empty half gets a SPLIT
-    // sentinel so save allocates a fresh doc.
+    // Enter at edge creates a fresh empty line — TYPED sentinel, not SPLIT.
     expect(hasNoRealNoteId(controller.state.lines[1]!.noteIds)).toBe(true)
     expect(controller.state.lines[1]!.noteIds).toHaveLength(1)
+    expect(originOfSentinel(controller.state.lines[1]!.noteIds[0]!)).toBe('typed')
   })
 
   it('gives original empty line a fresh id when splitting at beginning', () => {
@@ -189,11 +189,11 @@ describe('splitLine preserves noteIds', () => {
 
     controller.splitLine(0)
 
-    // Original line is now empty — gets a SPLIT sentinel so save allocates a
-    // fresh doc for the empty line.
+    // Enter at edge leaves the original line fresh-empty — TYPED sentinel.
     expect(controller.state.lines[0]!.text).toBe('')
     expect(hasNoRealNoteId(controller.state.lines[0]!.noteIds)).toBe(true)
     expect(controller.state.lines[0]!.noteIds).toHaveLength(1)
+    expect(originOfSentinel(controller.state.lines[0]!.noteIds[0]!)).toBe('typed')
     // New line has the content, should keep noteIds
     expect(controller.state.lines[1]!.text).toBe('Hello')
     expect(controller.state.lines[1]!.noteIds).toEqual(['note1'])

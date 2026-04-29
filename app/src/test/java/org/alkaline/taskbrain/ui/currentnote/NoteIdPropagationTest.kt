@@ -173,9 +173,11 @@ class NoteIdPropagationTest {
         assertEquals("Hello", state.lines[0].text)
         assertEquals(listOf("note1"), state.lines[0].noteIds)
         // Empty lines are first-class docs now: the new empty half gets a
-        // SPLIT sentinel so save allocates a fresh doc for it.
+        // TYPED sentinel (Enter at edge is fresh-typing, not a true split) so
+        // save allocates a fresh doc for it.
         assertTrue(state.lines[1].hasNoRealNoteId())
         assertEquals(1, state.lines[1].noteIds.size)
+        assertEquals("typed", NoteIdSentinel.originOf(state.lines[1].noteIds[0]))
     }
 
     @Test
@@ -191,11 +193,12 @@ class NoteIdPropagationTest {
 
         controller.splitLine(0)
 
-        // Original line is now empty — gets a SPLIT sentinel so save allocates
-        // a fresh doc for the empty line (it's no longer a containedNotes "" entry).
+        // Original line is now empty — gets a TYPED sentinel (Enter at edge is
+        // fresh-typing, not a true split) so save allocates a fresh doc for it.
         assertEquals("", state.lines[0].text)
         assertTrue(state.lines[0].hasNoRealNoteId())
         assertEquals(1, state.lines[0].noteIds.size)
+        assertEquals("typed", NoteIdSentinel.originOf(state.lines[0].noteIds[0]))
         // New line has the content, should keep the original noteId
         assertEquals("Hello", state.lines[1].text)
         assertEquals(listOf("note1"), state.lines[1].noteIds)

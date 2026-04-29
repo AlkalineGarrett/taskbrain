@@ -116,16 +116,19 @@ export function splitNoteIds(
     [before, after] = distributeNoteIdsByOverlap(noteIds, beforeContentLen, noteIdContentLengths)
   } else if (beforeContentLen >= afterContentLen) { before = noteIds; after = [] }
   else { before = []; after = noteIds }
-  // Sentinel marks a fresh doc's origin so save-time attribution
-  // ("where did this come from?") stays consistent.
+  // Sentinel origin distinguishes "Enter at line edge created a fresh empty
+  // line" (typed) from "true mid-line split where one fragment had no id to
+  // inherit" (split). The empty-content half is fresh; the content-bearing
+  // half came from a real split.
   return [
-    stampSplitSentinelIfNeeded(before),
-    stampSplitSentinelIfNeeded(after),
+    stampSentinelIfNeeded(before, beforeHasContent),
+    stampSentinelIfNeeded(after, afterHasContent),
   ]
 }
 
-function stampSplitSentinelIfNeeded(ids: string[]): string[] {
-  return ids.length === 0 ? [newSentinelNoteId('split')] : ids
+function stampSentinelIfNeeded(ids: string[], hasContent: boolean): string[] {
+  if (ids.length > 0) return ids
+  return [newSentinelNoteId(hasContent ? 'split' : 'typed')]
 }
 
 function distributeNoteIdsByOverlap(
