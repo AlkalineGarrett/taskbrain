@@ -24,6 +24,7 @@ import { LOADING_NOTE, DELETE_NOTE, DELETE_NOTE_CONFIRM_TITLE, DELETE_NOTE_CONFI
 import { db, auth } from '@/firebase/config'
 import { findDirectives } from '@/dsl/directives/DirectiveFinder'
 import { ActiveEditorContext } from '@/editor/ActiveEditorContext'
+import { UndoActionsContext } from '@/editor/UndoActionsContext'
 import { ParentShowCompletedContext } from '@/editor/ParentShowCompletedContext'
 import { InlineSessionManager } from '@/editor/InlineSessionManager'
 import styles from './NoteEditorScreen.module.css'
@@ -90,6 +91,8 @@ export function NoteEditorScreen() {
     deactivateSession,
     invalidateAndRecompute,
   })
+
+  const undoActionsValue = useMemo(() => ({ handleUndo, handleRedo }), [handleUndo, handleRedo])
 
   const { saveAll, saveStatus, anyDirty } = useSaveCoordinator({
     noteId,
@@ -211,6 +214,7 @@ export function NoteEditorScreen() {
         </div>
       )}
 
+      <UndoActionsContext.Provider value={undoActionsValue}>
       <ActiveEditorContext.Provider value={activeEditorCtx}>
       <ParentShowCompletedContext.Provider value={showCompleted}>
       <div className={styles.editorArea}>
@@ -262,6 +266,7 @@ export function NoteEditorScreen() {
       </div>
       </ParentShowCompletedContext.Provider>
       </ActiveEditorContext.Provider>
+      </UndoActionsContext.Provider>
 
     </div>
   )

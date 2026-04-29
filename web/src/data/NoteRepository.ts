@@ -384,6 +384,23 @@ export class NoteRepository {
           `saveNoteWithChildren(${noteId}): skipped ${skippedUnchanged} unchanged docs of ${linesToSave.length}, writing ${txnDocCount}`,
         )
       }
+      if (typeof localStorage !== 'undefined' && localStorage.getItem('taskbrainDebugSaves') === '1') {
+        const lineDump = linesToSave.map((l, i) => {
+          const eid = effectiveId(i)
+          const skipped = i === 0 ? rootUnchanged : descendantSkipped.has(i)
+          return `  [${i}] eid=${eid} content=${JSON.stringify(l.content.slice(0, 40))} ` +
+            `parentLine=${parentOfLine[i]} children=[${childrenOfLine[i]!.join(',')}] skip=${skipped}`
+        }).join('\n')
+        const existingContained = existingDescendantIds.size > 0
+          ? Array.from(existingDescendantIds).slice(0, 20).join(',') + (existingDescendantIds.size > 20 ? `+${existingDescendantIds.size - 20}` : '')
+          : '(none)'
+        console.log(
+          `[debugSave] saveNoteWithChildren(${noteId})\n` +
+          lineDump + '\n' +
+          `  existingDescendants=[${existingContained}]\n` +
+          `  toDelete=[${Array.from(toDelete).join(',')}]`
+        )
+      }
       return runTransaction(this.db, async (transaction) => {
         // Update root
         if (!rootUnchanged) {

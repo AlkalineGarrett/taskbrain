@@ -3,6 +3,7 @@ import type { EditorController } from '@/editor/EditorController'
 import type { EditorState } from '@/editor/EditorState'
 import type { LineState } from '@/editor/LineState'
 import { isOnFirstVisualRow, isOnLastVisualRow } from '@/editor/TextMeasure'
+import { useUndoActions } from '@/editor/UndoActionsContext'
 
 interface UseEditorLineKeyboardOptions {
   controller: EditorController
@@ -43,6 +44,7 @@ export function useEditorLineKeyboard({
   overlayRef,
 }: UseEditorLineKeyboardOptions): EditorLineKeyboardHandlers {
   const composingRef = useRef(false)
+  const { handleUndo, handleRedo } = useUndoActions()
   const handleChange = useCallback(
     (e: ChangeEvent<HTMLTextAreaElement>) => {
       // If there's a cross-line selection, ignore native onChange — typing is handled in handleKeyDown.
@@ -93,13 +95,13 @@ export function useEditorLineKeyboard({
       if (e.metaKey || e.ctrlKey) {
         if (e.key === 'z') {
           e.preventDefault()
-          if (e.shiftKey) controller.redo()
-          else controller.undo()
+          if (e.shiftKey) handleRedo()
+          else handleUndo()
           return
         }
         if (e.key === 'y') {
           e.preventDefault()
-          controller.redo()
+          handleRedo()
           return
         }
         if (e.key === 'a') {
@@ -291,7 +293,7 @@ export function useEditorLineKeyboard({
           break
       }
     },
-    [controller, editorState, lineIndex, content, line, syncCursorAfterNativeNav, overlayRef],
+    [controller, editorState, lineIndex, content, line, syncCursorAfterNativeNav, overlayRef, handleUndo, handleRedo],
   )
 
   const handlePaste = useCallback(

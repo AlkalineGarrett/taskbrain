@@ -272,6 +272,12 @@ export class UndoManager {
   ): UndoSnapshot | null {
     this.suppressCallbacks = true
     try {
+      // Reset any pending-edit state so the post-redo beginEditingLine
+      // captures a fresh snapshot of the new state — without this, a stale
+      // pendingSnapshot from before the redo would be reused as the undo
+      // target for subsequent typing.
+      this.commitPendingUndoState(lines, focusedLineIndex)
+
       if (this.redoStack.length === 0) return null
 
       const currentSnapshot = this.captureSnapshot(lines, focusedLineIndex)
