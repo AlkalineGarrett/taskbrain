@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { EditorState } from '@/editor/EditorState'
 import { EditorController } from '@/editor/EditorController'
 import { UndoManager, type UndoManagerState } from '@/editor/UndoManager'
-import type { NoteLine } from '@/data/Note'
+import { toEditorLines, type EditorLineInput } from '@/data/Note'
 import { NoteRepository } from '@/data/NoteRepository'
 import { NoteStatsRepository } from '@/data/NoteStatsRepository'
 import { noteStore } from '@/data/NoteStore'
@@ -20,12 +20,12 @@ const statsRepo = new NoteStatsRepository(db, auth)
 
 /**
  * Editor-specific state cache for instant tab switching.
- * Only stores unsaved edits and noteId mappings — canonical content
- * comes from NoteStore (always fresh via collection listener).
+ * Stores the editor's lines (text + noteIds together, sourced from a single
+ * `editorState.lines` snapshot) so a cached restore can't drift into id/text
+ * misalignment after edits that add, remove, or reorder lines.
  */
 interface EditorCacheEntry {
-  trackedLines: NoteLine[]
-  editorTexts: string[]
+  editorLines: EditorLineInput[]
   dirty: boolean
 }
 const editorStateCache = new Map<string, EditorCacheEntry>()
@@ -55,9 +55,6 @@ export function useEditor(noteId: string | undefined) {
       }
     } catch { /* sessionStorage may be unavailable */ }
   }, [])
-
-  // Track line IDs for Firestore mapping
-  const trackedLinesRef = useRef<NoteLine[]>([])
 
   // Force re-render when editor state changes
   const [, setRenderVersion] = useState(0)
@@ -100,10 +97,14 @@ export function useEditor(noteId: string | undefined) {
   useEffect(() => {
     return () => {
       const prevId = currentNoteIdRef.current
-      if (prevId && trackedLinesRef.current.length > 0) {
+      if (prevId && editorState.lines.length > 0) {
+        // Snapshot text + noteIds together from `editorState.lines` so cached
+        // restores can't drift into id/text misalignment after edits.
         editorStateCache.set(prevId, {
-          trackedLines: trackedLinesRef.current,
-          editorTexts: editorState.lines.map((l) => l.text),
+          editorLines: editorState.lines.map((l) => ({
+            text: l.text,
+            noteIds: [...l.noteIds],
+          })),
           dirty: dirtyRef.current,
         })
       }
@@ -120,26 +121,13 @@ export function useEditor(noteId: string | undefined) {
 
     let cancelled = false
 
-    const populateEditor = (lines: NoteLine[], wasCached: boolean, cachedDirty: boolean, cachedTexts?: string[]) => {
+    const populateEditor = (
+      editorLines: EditorLineInput[],
+      initialDirty: boolean,
+    ) => {
       if (cancelled) return
-      if (cachedTexts) {
-        // Use cached editor texts (preserves unsaved edits) — noteIds come from tracked lines
-        const noteLines = cachedTexts.map((text, i) => ({
-          text,
-          noteIds: lines[i]?.noteId ? [lines[i]!.noteId!] : [],
-        }))
-        editorState.initFromNoteLines(noteLines)
-      } else {
-        // Fresh load — noteIds come from loaded NoteLine data
-        const noteLines = lines.map((l) => ({
-          text: l.content,
-          noteIds: l.noteId ? [l.noteId] : [],
-        }))
-        editorState.initFromNoteLines(noteLines)
-      }
+      editorState.initFromNoteLines(editorLines)
       editorState.requestFocusUpdate()
-
-      trackedLinesRef.current = lines
 
       // Restore persisted undo state or set fresh baseline
       controller.resetUndoHistory()
@@ -156,7 +144,7 @@ export function useEditor(noteId: string | undefined) {
         undoManager.setBaseline(editorState.lines, editorState.focusedLineIndex)
       }
 
-      setDirty(wasCached ? cachedDirty : false)
+      setDirty(initialDirty)
       setLoading(false)
       setLoadedNoteId(noteId)
     }
@@ -183,11 +171,11 @@ export function useEditor(noteId: string | undefined) {
 
     if (cached?.dirty) {
       // Restore unsaved edits immediately for instant display
-      populateEditor(cached.trackedLines, true, true, cached.editorTexts)
+      populateEditor(cached.editorLines, true)
       setShowLoading(false)
       scheduleRecordView()
 
-      // Refresh tracked line IDs from NoteStore once any inflight save echoes
+      // Refresh editor line IDs from NoteStore once any inflight save echoes
       // through (the fire-and-forget switch-away save may have created new
       // child notes with IDs we don't have yet). If NoteStore is stale, we
       // skip silently — the next save's reconcile path recovers IDs.
@@ -203,7 +191,7 @@ export function useEditor(noteId: string | undefined) {
           if (noteStore.isLoaded()) {
             console.warn(
               `[useEditor] cached-dirty refresh: note ${noteId} missing from ` +
-              `loaded NoteStore. Tracked line IDs will be stale until next save.\n` +
+              `loaded NoteStore. Editor line IDs will be stale until next save.\n` +
               `Stack:\n${new Error().stack ?? '(unavailable)'}`,
             )
           }
@@ -212,7 +200,6 @@ export function useEditor(noteId: string | undefined) {
         const freshContent = storeLines.map((l) => l.content).join('\n')
         const currentContent = editorState.lines.map((l) => l.text).join('\n')
         if (freshContent === currentContent) {
-          trackedLinesRef.current = storeLines
           editorState.updateNoteIds(
             storeLines.map((l) => (l.noteId ? [l.noteId] : [])),
           )
@@ -238,7 +225,7 @@ export function useEditor(noteId: string | undefined) {
           const storeLines = rawNote ? noteStore.getNoteLinesById(noteId) : undefined
           if (rawNote && storeLines) {
             setShowCompleted(rawNote.showCompleted ?? true)
-            populateEditor(storeLines, false, false)
+            populateEditor(toEditorLines(storeLines), false)
             setShowLoading(false)
             scheduleRecordView()
             return
@@ -247,7 +234,7 @@ export function useEditor(noteId: string | undefined) {
 
         const { lines, showCompleted } = await repo.loadNoteWithChildren(noteId)
         setShowCompleted(showCompleted)
-        populateEditor(lines, false, false)
+        populateEditor(toEditorLines(lines), false)
         setShowLoading(false)
         scheduleRecordView()
       } catch (e) {
@@ -286,13 +273,8 @@ export function useEditor(noteId: string | undefined) {
       const storeLines = noteStore.getNoteLinesById(noteId)
       if (!storeLines) return
 
-      const noteLines = storeLines.map((l) => ({
-        text: l.content,
-        noteIds: l.noteId ? [l.noteId] : [],
-      }))
-      editorState.initFromNoteLines(noteLines, true)
+      editorState.initFromNoteLines(toEditorLines(storeLines), true)
       editorState.requestFocusUpdate()
-      trackedLinesRef.current = storeLines
       setShowCompleted(storeNote.showCompleted ?? true)
       setDirty(false)
       setRenderVersion((v) => v + 1)
@@ -322,16 +304,18 @@ export function useEditor(noteId: string | undefined) {
         repo.saveNoteWithChildren(targetNoteId, newTracked),
       )
 
-      // Update tracked lines with newly created IDs
-      const updatedTracked = newTracked.map((line, index) => {
-        const newId = createdIds.get(index)
-        return newId ? { ...line, noteId: newId } : line
-      })
-      trackedLinesRef.current = updatedTracked
+      // After a note switch during the save, `editorState` now holds the new
+      // note's lines — writing this save's ids onto it would cross-pollinate.
+      // Saved ids are in Firestore; next load picks them up.
+      if (currentNoteIdRef.current !== targetNoteId) return
 
       // Push updated noteIds back into editor state so the UI reflects new IDs
       editorState.updateNoteIds(
-        updatedTracked.map((l) => (l.noteId ? [l.noteId] : []))
+        newTracked.map((line, index) => {
+          const newId = createdIds.get(index)
+          const id = newId ?? line.noteId
+          return id ? [id] : []
+        }),
       )
 
       setDirty(false)

@@ -230,8 +230,12 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         }
         result.fold(
             onSuccess = { newIdsMap ->
-                // Update currentNoteLines with newly assigned IDs
-                if (newIdsMap.isNotEmpty()) {
+                // After a note switch during the save, `currentNoteLines` now
+                // holds the new note's lines — writing this save's ids onto it
+                // would cross-pollinate. Saved ids are in Firestore; next load
+                // picks them up.
+                val stillCurrent = currentNoteId == noteId
+                if (stillCurrent && newIdsMap.isNotEmpty()) {
                     val updated = currentNoteLines.toMutableList()
                     for ((index, newId) in newIdsMap) {
                         if (index < updated.size) {
@@ -242,13 +246,17 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                     _newlyAssignedNoteIds.tryEmit(newIdsMap)
                 }
                 alarmManager.syncAlarmLineContent(trackedLines)
-                _saveStatus.value = UnifiedSaveStatus.Saved(noteId)
-                _saveCompleted.tryEmit(Unit)
-                markAsSaved()
+                if (stillCurrent) {
+                    _saveStatus.value = UnifiedSaveStatus.Saved(noteId)
+                    _saveCompleted.tryEmit(Unit)
+                    markAsSaved()
+                }
             },
             onFailure = { e ->
                 Log.e(TAG, "Error saving note", e)
-                _saveStatus.value = UnifiedSaveStatus.PartialError(listOf(noteId), e)
+                if (currentNoteId == noteId) {
+                    _saveStatus.value = UnifiedSaveStatus.PartialError(listOf(noteId), e)
+                }
             }
         )
         return result
@@ -616,7 +624,9 @@ class CurrentNoteViewModel @JvmOverloads constructor(
 
             result.onSuccess {
                 alarmManager.syncAlarmNoteIds(trackedLines)
-                directiveManager.onSaveCompleted(content)
+                if (currentNoteId == savedNoteId) {
+                    directiveManager.onSaveCompleted(content)
+                }
             }
         }
     }
@@ -870,8 +880,11 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 val mainResult = NoteStore.enqueueSave {
                     repository.saveNoteWithChildren(savedNoteId, trackedLines, extraOpsBuilder = null)
                 }
+                // See persistCurrentNote: skip current-note mutations after a
+                // mid-save tab switch; saved ids are persisted in Firestore.
+                val stillCurrent = currentNoteId == savedNoteId
                 mainResult.onSuccess { newIdsMap ->
-                    if (newIdsMap.isNotEmpty()) {
+                    if (stillCurrent && newIdsMap.isNotEmpty()) {
                         val updated = currentNoteLines.toMutableList()
                         for ((index, newId) in newIdsMap) {
                             if (index < updated.size) {
@@ -883,7 +896,9 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                     }
                     alarmManager.syncAlarmLineContent(trackedLines)
                     alarmManager.syncAlarmNoteIds(trackedLines)
-                    directiveManager.onSaveCompleted(content)
+                    if (stillCurrent) {
+                        directiveManager.onSaveCompleted(content)
+                    }
                 }.onFailure { e ->
                     failedNoteIds.add(savedNoteId)
                     lastError = e
@@ -902,19 +917,22 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 }
 
                 if (failedNoteIds.isEmpty()) {
-                    _saveStatus.value = UnifiedSaveStatus.Saved(savedNoteId)
-                    _saveCompleted.tryEmit(Unit)
-                    markAsSaved()
-                    // Bring _loadStatus up to date with the just-saved content so
-                    // the external change handler's content-equality check
-                    // suppresses our own save echo. currentNoteLines has the
-                    // freshly assigned noteIds at this point.
-                    _loadStatus.value = LoadStatus.Success(savedNoteId, currentNoteLines)
+                    if (stillCurrent) {
+                        _saveStatus.value = UnifiedSaveStatus.Saved(savedNoteId)
+                        _saveCompleted.tryEmit(Unit)
+                        markAsSaved()
+                        // Bring _loadStatus up to date with the just-saved content so
+                        // the external change handler's content-equality check
+                        // suppresses our own save echo. currentNoteLines has the
+                        // freshly assigned noteIds at this point.
+                        _loadStatus.value = LoadStatus.Success(savedNoteId, currentNoteLines)
+                    }
                     // The save wrote the healed containedNotes — clear the
                     // needs-fix flag optimistically so the UI flips back now
-                    // instead of waiting for the Firestore echo.
+                    // instead of waiting for the Firestore echo. Safe to do
+                    // even if the user switched away.
                     NoteStore.markNoteFixed(savedNoteId)
-                } else {
+                } else if (stillCurrent) {
                     _saveStatus.value = UnifiedSaveStatus.PartialError(failedNoteIds, lastError!!)
                 }
             } finally {

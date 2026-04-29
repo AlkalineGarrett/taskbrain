@@ -26,6 +26,19 @@ export interface NoteLine {
   noteId: string | null
 }
 
+/** Shape consumed by `EditorState.initFromNoteLines`. */
+export interface EditorLineInput {
+  text: string
+  noteIds: string[]
+}
+
+export function toEditorLines(lines: NoteLine[]): EditorLineInput[] {
+  return lines.map(l => ({
+    text: l.content,
+    noteIds: l.noteId ? [l.noteId] : [],
+  }))
+}
+
 export function firstLineOf(content: string): string {
   return content.split('\n', 1)[0] ?? ''
 }

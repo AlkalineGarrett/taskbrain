@@ -1,4 +1,4 @@
-import type { Note } from '@/data/Note'
+import { toEditorLines, type Note } from '@/data/Note'
 import { noteStore } from '@/data/NoteStore'
 import { InlineEditSession } from './InlineEditSession'
 
@@ -83,11 +83,7 @@ export class InlineSessionManager {
       return
     }
 
-    const noteLines = storeLines.map(nl => ({
-      text: nl.content,
-      noteIds: nl.noteId ? [nl.noteId] : [],
-    }))
-    session.editorState.initFromNoteLines(noteLines, true)
+    session.editorState.initFromNoteLines(toEditorLines(storeLines), true)
     session.syncOriginalContent(newContent)
     session.updateHiddenIndices()
   }

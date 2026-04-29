@@ -3,7 +3,7 @@ import { EditorState } from '../../editor/EditorState'
 import { EditorController } from '../../editor/EditorController'
 import { UndoManager } from '../../editor/UndoManager'
 import { matchLinesToIds } from '../../data/NoteRepository'
-import type { NoteLine } from '../../data/Note'
+import { toEditorLines, type NoteLine } from '../../data/Note'
 
 /**
  * Fake in-memory note repository that mimics Firestore's save/load contract.
@@ -96,10 +96,7 @@ async function simulateLoad(
   const undoManager = new UndoManager()
   const controller = new EditorController(state, undoManager)
 
-  state.initFromNoteLines(lines.map((l) => ({
-    text: l.content,
-    noteIds: l.noteId ? [l.noteId] : [],
-  })))
+  state.initFromNoteLines(toEditorLines(lines))
   state.requestFocusUpdate()
   undoManager.setBaseline(state.lines, state.focusedLineIndex)
 
