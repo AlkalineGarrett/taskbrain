@@ -5,6 +5,7 @@ import { type Note, noteFromFirestore } from '@/data/Note'
 import { NoteRepository } from '@/data/NoteRepository'
 import { noteStore } from '@/data/NoteStore'
 import { NoteState } from '@/data/NoteState'
+import { newSentinelNoteId } from '@/data/NoteIdSentinel'
 import styles from './RecoverScreen.module.css'
 
 const repo = new NoteRepository(db, auth)
@@ -207,7 +208,7 @@ export function RecoverScreen() {
       const noteId = await repo.createNote()
       const trackedLines = [
         { content: title, noteId },
-        ...group.notes.map(n => ({ content: n.content, noteId: null })),
+        ...group.notes.map(n => ({ content: n.content, noteId: newSentinelNoteId('recover') })),
       ]
       // Fresh note — no pre-existing edit-session anchor.
       await noteStore.enqueueSave(() => repo.saveNoteWithChildren(noteId, trackedLines, null))

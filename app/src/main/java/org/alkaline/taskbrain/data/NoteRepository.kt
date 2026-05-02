@@ -494,25 +494,15 @@ class NoteRepository(
         assertNoteStoreLoaded("saveNoteWithChildren", noteId)
         warnIfDescendantsLikelyStale("saveNoteWithChildren", noteId)
 
-        // Identity invariant: every descendant line must arrive with a real
-        // id or a sentinel. Null is no longer legal — session-init paths
-        // await the listener via [loadNoteLinesAwait]; the recover-by-content
-        // layer is gone. Surface drift immediately rather than silently
-        // allocating fresh docs that would orphan real ones.
+        // [NoteLine.noteId] is non-nullable, so every descendant arrives with
+        // a real id or a sentinel — no null possible. Tally sentinel origins
+        // for diagnostics.
         val sentinelByOrigin = HashMap<String, Int>()
         for (idx in 1 until trackedLines.size) {
             val id = trackedLines[idx].noteId
-            when {
-                id == null -> error(
-                    "saveNoteWithChildren($noteId): null descendant noteId at line " +
-                        "$idx (content='${trackedLines[idx].content.take(40)}'). All " +
-                        "editor session-init paths must produce structurally-valid " +
-                        "lines via NoteRepository.loadNoteLinesAwait.",
-                )
-                NoteIdSentinel.isSentinel(id) -> {
-                    val origin = NoteIdSentinel.originOf(id) ?: "unknown"
-                    sentinelByOrigin.merge(origin, 1) { a, b -> a + b }
-                }
+            if (NoteIdSentinel.isSentinel(id)) {
+                val origin = NoteIdSentinel.originOf(id) ?: "unknown"
+                sentinelByOrigin.merge(origin, 1) { a, b -> a + b }
             }
         }
         if (sentinelByOrigin.isNotEmpty()) {
@@ -521,11 +511,6 @@ class NoteRepository(
 
         val parentRef = noteRef(noteId)
         val rootContent = trackedLines[0].content.trimStart('\t')
-
-        // Editor session-init paths now await the listener (then fall back to
-        // a Firestore read) before constructing tracked lines, so descendant
-        // [NoteLine.noteId] is never null at save entry — only real ids or
-        // sentinels marking new docs that need allocation.
         val linesToSave = trackedLines
 
         // Pre-allocate refs for lines that need a fresh Firestore doc —
@@ -959,7 +944,11 @@ class NoteRepository(
     ): List<NoteLine> {
         if (existingLines.isEmpty()) {
             return newLinesContent.mapIndexed { index, content ->
-                NoteLine(content, if (index == 0) parentNoteId else null)
+                NoteLine(
+                    content,
+                    if (index == 0) parentNoteId
+                    else NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED),
+                )
             }
         }
 
@@ -986,7 +975,11 @@ class NoteRepository(
         }
 
         return newLinesContent.mapIndexed { index, content ->
-            NoteLine(content, withParent[index].firstOrNull())
+            NoteLine(
+                content,
+                withParent[index].firstOrNull()
+                    ?: NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED),
+            )
         }
     }
 

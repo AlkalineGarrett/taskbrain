@@ -11,7 +11,7 @@
  * state back to Firestore.
  */
 
-import type { Note } from './Note'
+import type { Note, NoteLine } from './Note'
 import { isLive } from './NoteState'
 
 /**
@@ -105,13 +105,13 @@ export function reconstructNoteLines(
   note: Note,
   rawNotes: Map<string, Note>,
   childrenByParent: Map<string, Note[]>,
-): [{ content: string; noteId: string | null }[], boolean] {
+): [NoteLine[], boolean] {
   const hasRealChildren = (childrenByParent.get(note.id)?.length ?? 0) > 0
   if (note.containedNotes.length === 0 && !hasRealChildren) {
     return [[{ content: note.content, noteId: note.id }], false]
   }
 
-  const lines: { content: string; noteId: string | null }[] = [
+  const lines: NoteLine[] = [
     { content: note.content, noteId: note.id },
   ]
   const visited = new Set<string>([note.id])
@@ -140,7 +140,7 @@ function renderChildrenOf(
   parent: Note,
   rawNotes: Map<string, Note>,
   childrenByParent: Map<string, Note[]>,
-  lines: { content: string; noteId: string | null }[],
+  lines: NoteLine[],
   childDepth: number,
   visited: Set<string>,
 ): boolean {

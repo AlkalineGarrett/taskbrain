@@ -39,7 +39,7 @@ export class InlineEditSession {
     const texts: string[] = new Array(lines.length)
     const editorLines = lines.map((l, i) => {
       texts[i] = l.content
-      return { text: l.content, noteIds: l.noteId ? [l.noteId] : [] }
+      return { text: l.content, noteIds: [l.noteId] }
     })
     this.originalContent = texts.join('\n')
     this.editorState.initFromNoteLines(editorLines)

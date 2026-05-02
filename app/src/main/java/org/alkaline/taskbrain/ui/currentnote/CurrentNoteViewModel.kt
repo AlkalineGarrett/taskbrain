@@ -529,7 +529,13 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 Throwable("updateTrackedLines stack")
             )
             currentNoteLines = newLinesContent.mapIndexed { index, content ->
-                NoteLine(content, if (index == 0) currentNoteId else null)
+                NoteLine(
+                    content,
+                    if (index == 0) currentNoteId
+                    else org.alkaline.taskbrain.data.NoteIdSentinel.new(
+                        org.alkaline.taskbrain.data.NoteIdSentinel.Origin.TYPED,
+                    ),
+                )
             }
             return
         }
@@ -560,7 +566,13 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         }
 
         currentNoteLines = newLinesContent.mapIndexed { index, content ->
-            NoteLine(content, withParent[index].firstOrNull())
+            NoteLine(
+                content,
+                withParent[index].firstOrNull()
+                    ?: org.alkaline.taskbrain.data.NoteIdSentinel.new(
+                        org.alkaline.taskbrain.data.NoteIdSentinel.Origin.TYPED,
+                    ),
+            )
         }
     }
 

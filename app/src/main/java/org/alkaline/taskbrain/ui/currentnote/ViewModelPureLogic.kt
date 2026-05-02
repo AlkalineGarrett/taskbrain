@@ -31,7 +31,10 @@ internal suspend fun findAlarmNoteIdUpdates(
 ): List<AlarmNoteIdUpdate> {
     val updates = mutableListOf<AlarmNoteIdUpdate>()
     for (line in trackedLines) {
-        val lineNoteId = line.noteId ?: continue
+        // Sentinel ids mark not-yet-allocated lines; alarm bindings only
+        // apply to lines with real Firestore doc ids.
+        if (NoteIdSentinel.isSentinel(line.noteId)) continue
+        val lineNoteId = line.noteId
         for (occurrence in AlarmMarkers.findDirectiveOccurrences(line.content)) {
             val alarmId = occurrence.id
             val currentNoteId = getAlarmNoteId(alarmId) ?: continue
@@ -84,7 +87,8 @@ internal fun extractAlarmIds(trackedLines: List<NoteLine>): ExtractedAlarmIds {
  */
 internal fun extractAlarmIdsFromContent(contentLines: List<String>): ExtractedAlarmIds {
     if (contentLines.isEmpty()) return ExtractedAlarmIds.EMPTY
-    return extractAlarmIds(contentLines.map { NoteLine(content = it) })
+    // Synthetic sentinel: extractAlarmIds reads `content` only.
+    return extractAlarmIds(contentLines.map { NoteLine(it, NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED)) })
 }
 
 // ==================== Recurring alarm instance resolution ====================

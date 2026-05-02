@@ -29,6 +29,7 @@ export type NoteIdSentinelOrigin =
   | 'agent'
   | 'directive'
   | 'surgical'
+  | 'recover'
 
 /** Create a fresh sentinel noteId tagged with the given origin. */
 export function newSentinelNoteId(origin: NoteIdSentinelOrigin): string {

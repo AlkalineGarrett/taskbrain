@@ -198,7 +198,10 @@ Poofgttt,,, and!! Works? Editing a line
 
         // Mock loadNoteWithChildren - returns the host note content as NoteLines
         val hostNoteLines = hostNoteContent.lines().mapIndexed { idx, line ->
-            NoteLine(content = line, noteId = if (idx == 0) hostNoteId else null)
+            NoteLine(
+                content = line,
+                noteId = if (idx == 0) hostNoteId else "$hostNoteId-l$idx",
+            )
         }
         coEvery { mockRepository.loadNoteWithChildren(hostNoteId) } coAnswers {
             delay(loadDelayMs)

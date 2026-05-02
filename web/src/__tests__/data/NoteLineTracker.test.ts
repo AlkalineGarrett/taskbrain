@@ -1,25 +1,30 @@
 import { describe, it, expect } from 'vitest'
 import { matchLinesToIds } from '../../data/NoteRepository'
 import type { NoteLine } from '../../data/Note'
+import { isSentinelNoteId } from '../../data/NoteIdSentinel'
 
 const parentId = 'parent_123'
 
-function tracked(lines: NoteLine[], newContent: string): NoteLine[] {
-  return matchLinesToIds(parentId, lines, newContent.split('\n'))
+/** Test-fixture shape: `null` is a wildcard for "fresh allocation expected"
+ *  used in [toEqual] checks. NoteLine itself disallows null at runtime;
+ *  [unsentinelize] folds sentinel-shaped ids back to null for these
+ *  structural assertions. */
+type FixtureLine = { content: string; noteId: string | null }
+
+function tracked(lines: FixtureLine[], newContent: string): NoteLine[] {
+  // Test inputs only contain real ids; the FixtureLine `null` slot is just
+  // for assertion-side wildcards.
+  return matchLinesToIds(parentId, lines as NoteLine[], newContent.split('\n'))
 }
 
-function lines(...pairs: [string, string | null][]): NoteLine[] {
+function lines(...pairs: [string, string | null][]): FixtureLine[] {
   return pairs.map(([content, noteId]) => ({ content, noteId }))
 }
 
-/** Replaces sentinel-shaped (`@origin_token`) noteIds in [actual] with `null`
- *  so test fixtures can use `null` as a "fresh allocation expected" wildcard
- *  in `toEqual` checks. New lines now arrive as fresh sentinels rather than
- *  null at save entry, but the structural test assertion is unchanged. */
-function unsentinelize(actual: NoteLine[]): NoteLine[] {
+function unsentinelize(actual: NoteLine[]): FixtureLine[] {
   return actual.map((l) => ({
     content: l.content,
-    noteId: l.noteId && /^@/.test(l.noteId) ? null : l.noteId,
+    noteId: isSentinelNoteId(l.noteId) ? null : l.noteId,
   }))
 }
 

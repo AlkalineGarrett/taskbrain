@@ -551,22 +551,6 @@ export class NoteRepository {
 
     const parentRef = this.noteRef(noteId)
     const rootContent = trackedLines[0]!.content.replace(/^\t+/, '')
-
-    // Identity invariant: every descendant line must arrive with a real id
-    // (loaded from a Firestore doc) or a sentinel ("new line, allocate
-    // fresh"). Null is no longer legal — session-init paths await the
-    // listener via [loadNoteLinesAwait] and the recover-by-content layer
-    // is gone. Surface drift immediately.
-    for (let i = 1; i < trackedLines.length; i++) {
-      if (trackedLines[i]!.noteId === null) {
-        throw new Error(
-          `saveNoteWithChildren(${noteId}): null descendant noteId at line ${i} ` +
-          `(content='${trackedLines[i]!.content.slice(0, 40)}'). All editor ` +
-          `session-init paths must produce structurally-valid lines via ` +
-          `NoteRepository.loadNoteLinesAwait.`,
-        )
-      }
-    }
     const linesToSave = trackedLines
 
     // Pre-allocate refs for sentinel lines — they mark "new doc, needs
@@ -1242,7 +1226,7 @@ function buildContentDropDiagnostics(
   for (let i = 0; i < originalTrackedLines.length; i++) {
     const line = originalTrackedLines[i]!
     const preview = line.content.slice(0, 60).replace(/\n/g, '\\n')
-    lines.push(`  [${i}] noteId=${line.noteId ?? 'null'} content='${preview}'`)
+    lines.push(`  [${i}] noteId=${line.noteId} content='${preview}'`)
   }
 
   lines.push('--- NoteStore state ---')
@@ -1293,7 +1277,7 @@ export function matchLinesToIds(
   })
 
   // Build set of noteIds known to this tree so we can detect foreign (reparented) IDs
-  const existingNoteIdSet = new Set(existingLines.map(l => l.noteId).filter((id): id is string => id != null))
+  const existingNoteIdSet = new Set(existingLines.map(l => l.noteId))
 
   const newIds: (string | null)[] = new Array(newLinesContent.length).fill(null) as (string | null)[]
   const oldConsumed = new Array(existingLines.length).fill(false) as boolean[]
@@ -1408,7 +1392,7 @@ function buildMatchLinesToIdsDiagnostics(
   for (let i = 0; i < Math.min(existingLines.length, 40); i++) {
     const line = existingLines[i]!
     const preview = line.content.slice(0, 60).replace(/\n/g, '\\n')
-    lines.push(`  [${i}] noteId=${line.noteId ?? 'null'} content='${preview}'`)
+    lines.push(`  [${i}] noteId=${line.noteId} content='${preview}'`)
   }
   if (existingLines.length > 40) lines.push(`  ... (${existingLines.length - 40} more)`)
 

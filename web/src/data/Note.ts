@@ -45,9 +45,15 @@ export interface Note {
   containedNotesBase: string[] | null
 }
 
+/**
+ * A line within a note tree at save time. [noteId] is always present —
+ * either a real Firestore doc id or a sentinel ("new line, allocate fresh").
+ * The save planner enforces this at runtime; the type system captures it
+ * here so upstream paths can't silently produce nulls.
+ */
 export interface NoteLine {
   content: string
-  noteId: string | null
+  noteId: string
 }
 
 /** Shape consumed by `EditorState.initFromNoteLines`. */
@@ -57,10 +63,7 @@ export interface EditorLineInput {
 }
 
 export function toEditorLines(lines: NoteLine[]): EditorLineInput[] {
-  return lines.map(l => ({
-    text: l.content,
-    noteIds: l.noteId ? [l.noteId] : [],
-  }))
+  return lines.map(l => ({ text: l.content, noteIds: [l.noteId] }))
 }
 
 export function firstLineOf(content: string): string {

@@ -210,9 +210,7 @@ export function useEditor(noteId: string | undefined) {
         const freshContent = storeLines.map((l) => l.content).join('\n')
         const currentContent = editorState.lines.map((l) => l.text).join('\n')
         if (freshContent === currentContent) {
-          editorState.updateNoteIds(
-            storeLines.map((l) => (l.noteId ? [l.noteId] : [])),
-          )
+          editorState.updateNoteIds(storeLines.map((l) => [l.noteId]))
           setDirty(false)
         }
       })()
@@ -324,11 +322,7 @@ export function useEditor(noteId: string | undefined) {
     const applyResult = (createdIds: Map<number, string>) => {
       if (currentNoteIdRef.current !== targetNoteId) return
       editorState.updateNoteIds(
-        newTracked.map((line, index) => {
-          const newId = createdIds.get(index)
-          const id = newId ?? line.noteId
-          return id ? [id] : []
-        }),
+        newTracked.map((line, index) => [createdIds.get(index) ?? line.noteId]),
       )
       captureLocalBase(targetNoteId)
       setDirty(false)

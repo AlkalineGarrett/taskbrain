@@ -82,8 +82,8 @@ in `firestore.rules` and are deployed manually via the Firebase console.
 - New empty lines get a TYPED/SPLIT sentinel noteId at edit time so save can allocate fresh docs for them
 
 **Line identity invariant (strict structural):**
-- Every descendant line at save entry carries either a real Firestore doc id or a sentinel ("new line, allocate fresh"). There is no third class — null arrival is a fatal `IllegalStateException` / `Error` (see `planSaveNoteWithChildren` / `planSave`). Identity is structural, never recovered by content match.
-- Editor sessions are initialized only from structurally-valid tracked lines. Inline-edit / view-directive sessions resolve real ids via `NoteRepository.loadNoteLinesAwait` (awaits the listener, falls back to a Firestore one-shot read on timeout). Synthesizing lines from a content string with null/empty descendant ids is forbidden.
+- `NoteLine.noteId` is non-nullable (`String` on Android, `string` on web). Every line carries either a real Firestore doc id or a sentinel ("new line, allocate fresh"). The type system enforces this — null arrival is impossible without an `as any` / unsafe cast. Identity is structural, never recovered by content match.
+- Editor sessions are initialized only from structurally-valid tracked lines. Inline-edit / view-directive sessions resolve real ids via `NoteRepository.loadNoteLinesAwait` (awaits the listener, falls back to a Firestore one-shot read on timeout). Synthesizing lines from a content string is forbidden.
 - Sentinels are never content-matched against existing siblings during save — they always allocate fresh docs. Aliasing a typed line to an existing line because their content matches would silently merge two distinct lines into one Firestore doc.
 
 **Note structure in Firestore:**

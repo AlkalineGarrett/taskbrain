@@ -5,6 +5,7 @@ import kotlinx.coroutines.test.runTest
 import org.alkaline.taskbrain.data.Alarm
 import org.alkaline.taskbrain.data.AlarmMarkers
 import org.alkaline.taskbrain.data.AlarmStatus
+import org.alkaline.taskbrain.data.NoteIdSentinel
 import org.alkaline.taskbrain.data.NoteLine
 import org.alkaline.taskbrain.ui.currentnote.util.SymbolBadge
 import org.junit.Assert.assertEquals
@@ -51,7 +52,7 @@ class ViewModelPureLogicTest {
     @Test
     fun `findAlarmNoteIdUpdates skips lines without noteId`() = runTest {
         val lines = listOf(
-            NoteLine("Task [alarm(\"alarm1\")]", null)
+            NoteLine("Task [alarm(\"alarm1\")]", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED))
         )
         val updates = findAlarmNoteIdUpdates(lines) { "note1" }
         assertTrue(updates.isEmpty())
@@ -155,8 +156,8 @@ class ViewModelPureLogicTest {
     fun `plus deduplicates alarm IDs across parent and supplemental`() {
         val parent = extractAlarmIds(listOf(NoteLine("Task [alarm(\"a1\")]", "note1")))
         val supplemental = extractAlarmIds(listOf(
-            NoteLine("Child [alarm(\"a2\")]"),
-            NoteLine("Child [alarm(\"a1\")]")  // duplicate with parent
+            NoteLine("Child [alarm(\"a2\")]", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED)),
+            NoteLine("Child [alarm(\"a1\")]", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED))  // duplicate with parent
         ))
         val combined = parent + supplemental
         assertEquals(listOf("a1", "a2"), combined.alarmIds)
@@ -164,10 +165,10 @@ class ViewModelPureLogicTest {
 
     @Test
     fun `plus combines recurring IDs from both sources`() {
-        val parent = extractAlarmIds(listOf(NoteLine("No alarms here")))
+        val parent = extractAlarmIds(listOf(NoteLine("No alarms here", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED))))
         val supplemental = extractAlarmIds(listOf(
-            NoteLine("Child [recurringAlarm(\"rec1\")]"),
-            NoteLine("Child [alarm(\"a1\")]")
+            NoteLine("Child [recurringAlarm(\"rec1\")]", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED)),
+            NoteLine("Child [alarm(\"a1\")]", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED))
         ))
         val combined = parent + supplemental
         assertEquals(listOf("a1"), combined.alarmIds)
