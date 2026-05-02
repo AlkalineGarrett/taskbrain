@@ -286,14 +286,14 @@ class EditorStateTest {
     @Test
     fun `getLineStartOffset for first line is zero`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3")
+        state.initFromText("line1\nline2\nline3")
         assertEquals(0, state.getLineStartOffset(0))
     }
 
     @Test
     fun `getLineStartOffset for second line`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3")
+        state.initFromText("line1\nline2\nline3")
         // "line1" (5) + newline (1) = 6
         assertEquals(6, state.getLineStartOffset(1))
     }
@@ -301,7 +301,7 @@ class EditorStateTest {
     @Test
     fun `getLineStartOffset for third line`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3")
+        state.initFromText("line1\nline2\nline3")
         // "line1" (5) + newline (1) + "line2" (5) + newline (1) = 12
         assertEquals(12, state.getLineStartOffset(2))
     }
@@ -309,7 +309,7 @@ class EditorStateTest {
     @Test
     fun `getLineStartOffset with varying line lengths`() {
         val state = EditorState()
-        state.updateFromText("a\nbb\nccc")
+        state.initFromText("a\nbb\nccc")
         assertEquals(0, state.getLineStartOffset(0))
         assertEquals(2, state.getLineStartOffset(1)) // "a" + newline
         assertEquals(5, state.getLineStartOffset(2)) // "a\nbb\n"
@@ -320,7 +320,7 @@ class EditorStateTest {
     @Test
     fun `getLineAndLocalOffset at start of first line`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2")
+        state.initFromText("line1\nline2")
         val (lineIndex, localOffset) = state.getLineAndLocalOffset(0)
         assertEquals(0, lineIndex)
         assertEquals(0, localOffset)
@@ -329,7 +329,7 @@ class EditorStateTest {
     @Test
     fun `getLineAndLocalOffset in middle of first line`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2")
+        state.initFromText("line1\nline2")
         val (lineIndex, localOffset) = state.getLineAndLocalOffset(3)
         assertEquals(0, lineIndex)
         assertEquals(3, localOffset)
@@ -338,7 +338,7 @@ class EditorStateTest {
     @Test
     fun `getLineAndLocalOffset at end of first line`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2")
+        state.initFromText("line1\nline2")
         val (lineIndex, localOffset) = state.getLineAndLocalOffset(5)
         assertEquals(0, lineIndex)
         assertEquals(5, localOffset)
@@ -347,7 +347,7 @@ class EditorStateTest {
     @Test
     fun `getLineAndLocalOffset at start of second line`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2")
+        state.initFromText("line1\nline2")
         val (lineIndex, localOffset) = state.getLineAndLocalOffset(6)
         assertEquals(1, lineIndex)
         assertEquals(0, localOffset)
@@ -356,7 +356,7 @@ class EditorStateTest {
     @Test
     fun `getLineAndLocalOffset in middle of second line`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2")
+        state.initFromText("line1\nline2")
         val (lineIndex, localOffset) = state.getLineAndLocalOffset(8)
         assertEquals(1, lineIndex)
         assertEquals(2, localOffset)
@@ -365,7 +365,7 @@ class EditorStateTest {
     @Test
     fun `getLineAndLocalOffset at end of text`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2")
+        state.initFromText("line1\nline2")
         val (lineIndex, localOffset) = state.getLineAndLocalOffset(11)
         assertEquals(1, lineIndex)
         assertEquals(5, localOffset)
@@ -374,7 +374,7 @@ class EditorStateTest {
     @Test
     fun `getLineAndLocalOffset beyond text length`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2")
+        state.initFromText("line1\nline2")
         val (lineIndex, localOffset) = state.getLineAndLocalOffset(100)
         assertEquals(1, lineIndex)
         assertEquals(5, localOffset) // Clamped to end
@@ -385,14 +385,14 @@ class EditorStateTest {
     @Test
     fun `getLineSelection returns null when no selection`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2")
+        state.initFromText("line1\nline2")
         assertNull(state.getLineSelection(0))
     }
 
     @Test
     fun `getLineSelection for line fully within selection`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3")
+        state.initFromText("line1\nline2\nline3")
         state.setSelection(0, 17) // Select all
         val selection = state.getLineSelection(1)
         assertEquals(0 until 5, selection) // Entire "line2"
@@ -401,7 +401,7 @@ class EditorStateTest {
     @Test
     fun `getLineSelection for line partially selected at start`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2")
+        state.initFromText("line1\nline2")
         state.setSelection(0, 3) // Select "lin" from first line
         val selection = state.getLineSelection(0)
         assertEquals(0 until 3, selection)
@@ -410,7 +410,7 @@ class EditorStateTest {
     @Test
     fun `getLineSelection for line partially selected at end`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2")
+        state.initFromText("line1\nline2")
         state.setSelection(3, 6) // Select "e1" + newline area
         val selection = state.getLineSelection(0)
         assertEquals(3 until 5, selection)
@@ -419,7 +419,7 @@ class EditorStateTest {
     @Test
     fun `getLineSelection returns null for unselected line`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3")
+        state.initFromText("line1\nline2\nline3")
         state.setSelection(0, 3) // Select only in first line
         assertNull(state.getLineSelection(2)) // Third line not selected
     }
@@ -427,7 +427,7 @@ class EditorStateTest {
     @Test
     fun `getLineSelection spanning multiple lines`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3")
+        state.initFromText("line1\nline2\nline3")
         state.setSelection(3, 14) // From "e1" to "li" of line3
 
         val sel0 = state.getLineSelection(0)
@@ -444,14 +444,14 @@ class EditorStateTest {
     @Test
     fun `getSelectedText returns empty when no selection`() {
         val state = EditorState()
-        state.updateFromText("hello world")
+        state.initFromText("hello world")
         assertEquals("", state.getSelectedText())
     }
 
     @Test
     fun `getSelectedText returns selected text`() {
         val state = EditorState()
-        state.updateFromText("hello world")
+        state.initFromText("hello world")
         state.setSelection(0, 5)
         assertEquals("hello", state.getSelectedText())
     }
@@ -459,7 +459,7 @@ class EditorStateTest {
     @Test
     fun `getSelectedText with reversed selection`() {
         val state = EditorState()
-        state.updateFromText("hello world")
+        state.initFromText("hello world")
         state.setSelection(5, 0) // Reversed
         assertEquals("hello", state.getSelectedText())
     }
@@ -467,7 +467,7 @@ class EditorStateTest {
     @Test
     fun `getSelectedText spanning lines`() {
         val state = EditorState()
-        state.updateFromText("hello\nworld")
+        state.initFromText("hello\nworld")
         state.setSelection(3, 9) // "lo\nwor"
         assertEquals("lo\nwor", state.getSelectedText())
     }
@@ -475,7 +475,7 @@ class EditorStateTest {
     @Test
     fun `getSelectedText extends to include newline for full line selection`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3")
+        state.initFromText("line1\nline2\nline3")
         // Select "line2" (positions 6-11, ends right before newline)
         state.setSelection(6, 11)
         // Should extend to include the trailing newline
@@ -485,7 +485,7 @@ class EditorStateTest {
     @Test
     fun `getSelectedText extends for multiple full lines`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3\nline4")
+        state.initFromText("line1\nline2\nline3\nline4")
         // Select "line2\nline3" (positions 6-17, ends right before newline)
         state.setSelection(6, 17)
         // Should extend to include the trailing newline
@@ -495,7 +495,7 @@ class EditorStateTest {
     @Test
     fun `getSelectedText does not extend when first line not fully selected`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3")
+        state.initFromText("line1\nline2\nline3")
         // Select "ine2" (positions 7-11, starts mid-line)
         state.setSelection(7, 11)
         // Should NOT extend because first line is not fully selected
@@ -505,7 +505,7 @@ class EditorStateTest {
     @Test
     fun `getSelectedText does not extend when selection ends mid-line`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3")
+        state.initFromText("line1\nline2\nline3")
         // Select "line2\nlin" (positions 6-15, ends mid-line)
         state.setSelection(6, 15)
         // Should NOT extend because it doesn't end at line boundary
@@ -515,7 +515,7 @@ class EditorStateTest {
     @Test
     fun `getSelectedText does not extend at end of document`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2")
+        state.initFromText("line1\nline2")
         // Select "line2" (positions 6-11, at end of document)
         state.setSelection(6, 11)
         // Should NOT extend because there's no newline to include
@@ -527,14 +527,14 @@ class EditorStateTest {
     @Test
     fun `text property joins lines with newlines`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3")
+        state.initFromText("line1\nline2\nline3")
         assertEquals("line1\nline2\nline3", state.text)
     }
 
     @Test
     fun `text property for single line`() {
         val state = EditorState()
-        state.updateFromText("single line")
+        state.initFromText("single line")
         assertEquals("single line", state.text)
     }
 
@@ -544,12 +544,12 @@ class EditorStateTest {
         assertEquals("", state.text)
     }
 
-    // ==================== EditorState.updateFromText ====================
+    // ==================== EditorState.initFromText (test helper) =================
 
     @Test
-    fun `updateFromText creates lines correctly`() {
+    fun `initFromText creates lines correctly`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3")
+        state.initFromText("line1\nline2\nline3")
         assertEquals(3, state.lines.size)
         assertEquals("line1", state.lines[0].text)
         assertEquals("line2", state.lines[1].text)
@@ -557,19 +557,19 @@ class EditorStateTest {
     }
 
     @Test
-    fun `updateFromText handles empty lines`() {
+    fun `initFromText handles empty lines`() {
         val state = EditorState()
-        state.updateFromText("line1\n\nline3")
+        state.initFromText("line1\n\nline3")
         assertEquals(3, state.lines.size)
         assertEquals("", state.lines[1].text)
     }
 
     @Test
-    fun `updateFromText clamps focusedLineIndex`() {
+    fun `initFromText resets focusedLineIndex`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3")
+        state.initFromText("line1\nline2\nline3")
         state.focusedLineIndex = 2
-        state.updateFromText("single line")
+        state.initFromText("single line")
         assertEquals(0, state.focusedLineIndex)
     }
 
@@ -578,7 +578,7 @@ class EditorStateTest {
     @Test
     fun `deleteSelection removes selected text`() {
         val state = EditorState()
-        state.updateFromText("hello world")
+        state.initFromText("hello world")
         state.setSelection(0, 5)
         val newCursor = state.deleteSelectionInternal()
         assertEquals(" world", state.text)
@@ -588,7 +588,7 @@ class EditorStateTest {
     @Test
     fun `deleteSelection with selection in middle`() {
         val state = EditorState()
-        state.updateFromText("hello world")
+        state.initFromText("hello world")
         state.setSelection(5, 11)
         state.deleteSelectionInternal()
         assertEquals("hello", state.text)
@@ -597,7 +597,7 @@ class EditorStateTest {
     @Test
     fun `deleteSelection spanning multiple lines`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3")
+        state.initFromText("line1\nline2\nline3")
         state.setSelection(3, 14) // "e1\nline2\nli"
         state.deleteSelectionInternal()
         assertEquals("linne3", state.text)
@@ -606,7 +606,7 @@ class EditorStateTest {
     @Test
     fun `deleteSelection returns -1 when no selection`() {
         val state = EditorState()
-        state.updateFromText("hello world")
+        state.initFromText("hello world")
         val result = state.deleteSelectionInternal()
         assertEquals(-1, result)
         assertEquals("hello world", state.text)
@@ -615,7 +615,7 @@ class EditorStateTest {
     @Test
     fun `deleteSelection clears selection after delete`() {
         val state = EditorState()
-        state.updateFromText("hello world")
+        state.initFromText("hello world")
         state.setSelection(0, 5)
         state.deleteSelectionInternal()
         assertFalse(state.hasSelection)
@@ -624,7 +624,7 @@ class EditorStateTest {
     @Test
     fun `deleteSelection removes empty lines created by deletion`() {
         val state = EditorState()
-        state.updateFromText("line1\nhello\nline3")
+        state.initFromText("line1\nhello\nline3")
         // Select "hello" (the entire content of line2)
         state.setSelection(6, 11)
         state.deleteSelectionInternal()
@@ -636,7 +636,7 @@ class EditorStateTest {
     @Test
     fun `deleteSelection keeps last line even if empty`() {
         val state = EditorState()
-        state.updateFromText("line1\nhello")
+        state.initFromText("line1\nhello")
         // Select "hello" (the entire content of line2, which is the last line)
         state.setSelection(6, 11)
         state.deleteSelectionInternal()
@@ -648,7 +648,7 @@ class EditorStateTest {
     @Test
     fun `deleteSelection removes empty line at cursor position only`() {
         val state = EditorState()
-        state.updateFromText("line1\na\nb\nline4")
+        state.initFromText("line1\na\nb\nline4")
         // Select "a\nb" - this creates one empty line at the join point
         state.setSelection(6, 9)
         state.deleteSelectionInternal()
@@ -661,7 +661,7 @@ class EditorStateTest {
     fun `deleteSelection preserves pre-existing empty lines`() {
         val state = EditorState()
         // Document with an intentional empty line (spacer)
-        state.updateFromText("line1\n\nline3\nhello\nline5")
+        state.initFromText("line1\n\nline3\nhello\nline5")
         // Select "hello" (line 4 content, positions 13-18)
         state.setSelection(13, 18)
         state.deleteSelectionInternal()
@@ -675,7 +675,7 @@ class EditorStateTest {
     @Test
     fun `deleteSelection extends to newline for full line selection`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3")
+        state.initFromText("line1\nline2\nline3")
         // Select "line2" (positions 6-11, a full line)
         state.setSelection(6, 11)
         state.deleteSelectionInternal()
@@ -687,7 +687,7 @@ class EditorStateTest {
     @Test
     fun `deleteSelection extends for multiple full lines`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3\nline4")
+        state.initFromText("line1\nline2\nline3\nline4")
         // Select "line2\nline3" (positions 6-17, two full lines)
         state.setSelection(6, 17)
         state.deleteSelectionInternal()
@@ -699,7 +699,7 @@ class EditorStateTest {
     @Test
     fun `deleteSelection does not extend when first line partial`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3")
+        state.initFromText("line1\nline2\nline3")
         // Select "ine2" (positions 7-11, partial first line)
         state.setSelection(7, 11)
         state.deleteSelectionInternal()
@@ -712,7 +712,7 @@ class EditorStateTest {
     @Test
     fun `replaceSelection replaces selected text`() {
         val state = EditorState()
-        state.updateFromText("hello world")
+        state.initFromText("hello world")
         state.setSelection(0, 5)
         val newCursor = state.replaceSelectionInternal("goodbye")
         assertEquals("goodbye world", state.text)
@@ -722,7 +722,7 @@ class EditorStateTest {
     @Test
     fun `replaceSelection with empty replacement deletes selection`() {
         val state = EditorState()
-        state.updateFromText("hello world")
+        state.initFromText("hello world")
         state.setSelection(5, 11)
         state.replaceSelectionInternal("")
         assertEquals("hello", state.text)
@@ -731,7 +731,7 @@ class EditorStateTest {
     @Test
     fun `replaceSelection spanning multiple lines`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3")
+        state.initFromText("line1\nline2\nline3")
         state.setSelection(0, 12) // "line1\nline2\n"
         state.replaceSelectionInternal("new\n")
         assertEquals("new\nline3", state.text)
@@ -740,7 +740,7 @@ class EditorStateTest {
     @Test
     fun `replaceSelection clears selection after replace`() {
         val state = EditorState()
-        state.updateFromText("hello world")
+        state.initFromText("hello world")
         state.setSelection(0, 5)
         state.replaceSelectionInternal("hi")
         assertFalse(state.hasSelection)
@@ -749,7 +749,7 @@ class EditorStateTest {
     @Test
     fun `replaceSelection removes empty lines when replacing with empty string`() {
         val state = EditorState()
-        state.updateFromText("line1\nhello\nline3")
+        state.initFromText("line1\nhello\nline3")
         // Select "hello" (the entire content of line2)
         state.setSelection(6, 11)
         state.replaceSelectionInternal("")
@@ -761,7 +761,7 @@ class EditorStateTest {
     @Test
     fun `replaceSelection keeps last line even if empty`() {
         val state = EditorState()
-        state.updateFromText("line1\nhello")
+        state.initFromText("line1\nhello")
         // Select "hello" (the entire content of last line)
         state.setSelection(6, 11)
         state.replaceSelectionInternal("")
@@ -774,7 +774,7 @@ class EditorStateTest {
     fun `replaceSelection preserves pre-existing empty lines`() {
         val state = EditorState()
         // Document with an intentional empty line (spacer)
-        state.updateFromText("line1\n\nline3\nhello\nline5")
+        state.initFromText("line1\n\nline3\nhello\nline5")
         // Select "hello" and replace with empty string
         state.setSelection(13, 18)
         state.replaceSelectionInternal("")
@@ -789,7 +789,7 @@ class EditorStateTest {
     @Test
     fun `selectAll selects entire text`() {
         val state = EditorState()
-        state.updateFromText("hello world")
+        state.initFromText("hello world")
         state.selectAll()
         assertTrue(state.hasSelection)
         assertEquals(0, state.selection.start)
@@ -799,7 +799,7 @@ class EditorStateTest {
     @Test
     fun `selectAll on multiline text`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3")
+        state.initFromText("line1\nline2\nline3")
         state.selectAll()
         assertEquals(0, state.selection.min)
         assertEquals(17, state.selection.max)
@@ -818,7 +818,7 @@ class EditorStateTest {
     @Test
     fun `clearSelection removes selection`() {
         val state = EditorState()
-        state.updateFromText("hello world")
+        state.initFromText("hello world")
         state.setSelection(0, 5)
         assertTrue(state.hasSelection)
         state.clearSelection()
@@ -830,7 +830,7 @@ class EditorStateTest {
     @Test
     fun `indent adds tab to current line`() {
         val state = EditorState()
-        state.updateFromText("hello")
+        state.initFromText("hello")
         state.indentInternal()
         assertEquals("\thello", state.text)
     }
@@ -838,7 +838,7 @@ class EditorStateTest {
     @Test
     fun `unindent removes tab from current line`() {
         val state = EditorState()
-        state.updateFromText("\thello")
+        state.initFromText("\thello")
         state.unindentInternal()
         assertEquals("hello", state.text)
     }
@@ -846,7 +846,7 @@ class EditorStateTest {
     @Test
     fun `toggleBullet adds bullet to current line`() {
         val state = EditorState()
-        state.updateFromText("item")
+        state.initFromText("item")
         state.toggleBulletInternal()
         assertEquals("• item", state.text)
     }
@@ -854,7 +854,7 @@ class EditorStateTest {
     @Test
     fun `toggleCheckbox adds checkbox to current line`() {
         val state = EditorState()
-        state.updateFromText("task")
+        state.initFromText("task")
         state.toggleCheckboxInternal()
         assertEquals("☐ task", state.text)
     }
@@ -864,7 +864,7 @@ class EditorStateTest {
     @Test
     fun `handleSpaceWithSelection returns false when no selection`() {
         val state = EditorState()
-        state.updateFromText("hello world")
+        state.initFromText("hello world")
         val result = state.handleSpaceWithSelectionInternal()
         assertFalse(result)
         assertEquals("hello world", state.text) // Text unchanged
@@ -873,7 +873,7 @@ class EditorStateTest {
     @Test
     fun `handleSpaceWithSelection indents selected lines`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3")
+        state.initFromText("line1\nline2\nline3")
         // Select "line2" (positions 6-11)
         state.setSelection(6, 11)
         val result = state.handleSpaceWithSelectionInternal()
@@ -885,7 +885,7 @@ class EditorStateTest {
     @Test
     fun `handleSpaceWithSelection indents multiple selected lines`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3\nline4")
+        state.initFromText("line1\nline2\nline3\nline4")
         // Select across line2 and line3 (positions 6-17)
         state.setSelection(6, 17)
         val result = state.handleSpaceWithSelectionInternal()
@@ -897,7 +897,7 @@ class EditorStateTest {
     @Test
     fun `handleSpaceWithSelection preserves selection after indent`() {
         val state = EditorState()
-        state.updateFromText("line1\nline2\nline3")
+        state.initFromText("line1\nline2\nline3")
         // Select "line2" (positions 6-11)
         state.setSelection(6, 11)
         state.handleSpaceWithSelectionInternal()
@@ -910,7 +910,7 @@ class EditorStateTest {
     @Test
     fun `indentInternal skips hidden lines in selection`() {
         val state = EditorState()
-        state.updateFromText("a\n\u2611 done\nb")
+        state.initFromText("a\n\u2611 done\nb")
         // Select all text
         state.setSelection(0, state.text.length)
         state.indentInternal(hiddenIndices = setOf(1))
@@ -922,7 +922,7 @@ class EditorStateTest {
     @Test
     fun `unindentInternal skips hidden lines in selection`() {
         val state = EditorState()
-        state.updateFromText("\ta\n\u2611 done\n\tb")
+        state.initFromText("\ta\n\u2611 done\n\tb")
         // Select all text
         state.setSelection(0, state.text.length)
         state.unindentInternal(hiddenIndices = setOf(1))
@@ -934,7 +934,7 @@ class EditorStateTest {
     @Test
     fun `handleSpaceWithSelection double space unindents`() {
         val state = EditorState()
-        state.updateFromText("line1\n\tline2\nline3")
+        state.initFromText("line1\n\tline2\nline3")
         // Select just line2 content: "\tline2" is at positions 6-12
         // (line1=0-4, \n=5, \t=6, line2=7-11, \n=12)
         state.setSelection(6, 12)
@@ -953,7 +953,7 @@ class EditorStateTest {
     @Test
     fun `toggleBulletInternal applies to all selected lines`() {
         val state = EditorState()
-        state.updateFromText("abc\ndef\nghi")
+        state.initFromText("abc\ndef\nghi")
         state.setSelection(0, state.text.length)
         state.toggleBulletInternal()
         assertEquals("• abc", state.lines[0].text)
@@ -964,7 +964,7 @@ class EditorStateTest {
     @Test
     fun `toggleCheckboxInternal applies to all selected lines`() {
         val state = EditorState()
-        state.updateFromText("abc\ndef\nghi")
+        state.initFromText("abc\ndef\nghi")
         state.setSelection(0, state.text.length)
         state.toggleCheckboxInternal()
         assertEquals("☐ abc", state.lines[0].text)
@@ -975,7 +975,7 @@ class EditorStateTest {
     @Test
     fun `toggleBulletInternal preserves selection across multiple lines`() {
         val state = EditorState()
-        state.updateFromText("abc\ndef")
+        state.initFromText("abc\ndef")
         state.setSelection(0, 7)
         state.toggleBulletInternal()
         assertTrue(state.hasSelection)

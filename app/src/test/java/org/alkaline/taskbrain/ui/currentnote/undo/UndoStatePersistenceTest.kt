@@ -1,5 +1,6 @@
 package org.alkaline.taskbrain.ui.currentnote.undo
 
+import org.alkaline.taskbrain.ui.currentnote.initFromText
 import com.google.firebase.Timestamp
 import org.alkaline.taskbrain.ui.currentnote.EditorState
 import org.json.JSONObject
@@ -386,9 +387,9 @@ class UndoStatePersistenceTest {
         val editorState = EditorState()
 
         // Create some history
-        editorState.updateFromText("initial")
+        editorState.initFromText("initial")
         undoManager.beginEditingLine(editorState, 0)
-        editorState.updateFromText("modified")
+        editorState.initFromText("modified")
         undoManager.commitPendingUndoState(editorState)
 
         // Export

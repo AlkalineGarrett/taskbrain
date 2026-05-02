@@ -11,7 +11,7 @@ class InlineEditSessionTest {
 
     private fun createSession(noteId: String = "note1", content: String = "Line 1\nLine 2"): InlineEditSession {
         val editorState = EditorState()
-        editorState.updateFromText(content)
+        editorState.initFromText(content)
         val controller = EditorController(editorState)
         return InlineEditSession(
             noteId = noteId,
@@ -283,7 +283,7 @@ class InlineEditStateTest {
     fun `activateExistingSession registers session as active`() {
         val inlineState = InlineEditState()
         val editorState = EditorState()
-        editorState.updateFromText("Hello\nWorld")
+        editorState.initFromText("Hello\nWorld")
         val controller = EditorController(editorState)
         val session = InlineEditSession(
             noteId = "note1",
@@ -303,7 +303,7 @@ class InlineEditStateTest {
     fun `activateExistingSession reuses same EditorState`() {
         val inlineState = InlineEditState()
         val editorState = EditorState()
-        editorState.updateFromText("Content")
+        editorState.initFromText("Content")
         val controller = EditorController(editorState)
         val session = InlineEditSession(
             noteId = "note1",

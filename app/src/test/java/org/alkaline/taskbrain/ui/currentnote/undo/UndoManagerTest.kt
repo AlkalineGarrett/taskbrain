@@ -1,5 +1,6 @@
 package org.alkaline.taskbrain.ui.currentnote.undo
 
+import org.alkaline.taskbrain.ui.currentnote.initFromText
 import com.google.firebase.Timestamp
 import org.alkaline.taskbrain.data.Alarm
 import org.alkaline.taskbrain.ui.currentnote.EditorController
@@ -39,10 +40,10 @@ class UndoManagerTest {
 
     @Test
     fun `canUndo is true after committing changed state`() {
-        editorState.updateFromText("initial")
+        editorState.initFromText("initial")
         undoManager.beginEditingLine(editorState, 0)
 
-        editorState.updateFromText("modified")
+        editorState.initFromText("modified")
         undoManager.commitPendingUndoState(editorState)
 
         assertTrue(undoManager.canUndo)
@@ -50,7 +51,7 @@ class UndoManagerTest {
 
     @Test
     fun `canUndo is false if no content change`() {
-        editorState.updateFromText("initial")
+        editorState.initFromText("initial")
         undoManager.beginEditingLine(editorState, 0)
 
         // No change to content
@@ -63,10 +64,10 @@ class UndoManagerTest {
 
     @Test
     fun `undo returns snapshot to restore`() {
-        editorState.updateFromText("initial")
+        editorState.initFromText("initial")
         undoManager.beginEditingLine(editorState, 0)
 
-        editorState.updateFromText("modified")
+        editorState.initFromText("modified")
         undoManager.commitPendingUndoState(editorState)
 
         val snapshot = undoManager.undo(editorState)
@@ -76,17 +77,17 @@ class UndoManagerTest {
 
     @Test
     fun `undo returns null when stack is empty`() {
-        editorState.updateFromText("content")
+        editorState.initFromText("content")
         val snapshot = undoManager.undo(editorState)
         assertNull(snapshot)
     }
 
     @Test
     fun `after undo canRedo is true`() {
-        editorState.updateFromText("initial")
+        editorState.initFromText("initial")
         undoManager.beginEditingLine(editorState, 0)
 
-        editorState.updateFromText("modified")
+        editorState.initFromText("modified")
         undoManager.commitPendingUndoState(editorState)
 
         undoManager.undo(editorState)
@@ -96,16 +97,16 @@ class UndoManagerTest {
     @Test
     fun `multiple undos walk back through history`() {
         // State 1
-        editorState.updateFromText("state1")
+        editorState.initFromText("state1")
         undoManager.beginEditingLine(editorState, 0)
 
         // State 2
-        editorState.updateFromText("state2")
+        editorState.initFromText("state2")
         undoManager.commitPendingUndoState(editorState)
         undoManager.beginEditingLine(editorState, 0)
 
         // State 3
-        editorState.updateFromText("state3")
+        editorState.initFromText("state3")
         undoManager.commitPendingUndoState(editorState)
 
         // Undo to state2
@@ -113,7 +114,7 @@ class UndoManagerTest {
         assertEquals(listOf("state2"), snapshot1!!.lineContents)
 
         // Simulate restoring state2
-        editorState.updateFromText("state2")
+        editorState.initFromText("state2")
 
         // Undo to state1
         val snapshot2 = undoManager.undo(editorState)
@@ -124,14 +125,14 @@ class UndoManagerTest {
 
     @Test
     fun `redo returns snapshot to restore`() {
-        editorState.updateFromText("initial")
+        editorState.initFromText("initial")
         undoManager.beginEditingLine(editorState, 0)
 
-        editorState.updateFromText("modified")
+        editorState.initFromText("modified")
         undoManager.commitPendingUndoState(editorState)
 
         undoManager.undo(editorState)
-        editorState.updateFromText("initial")
+        editorState.initFromText("initial")
 
         val snapshot = undoManager.redo(editorState)
         assertNotNull(snapshot)
@@ -140,17 +141,17 @@ class UndoManagerTest {
 
     @Test
     fun `redo returns null when stack is empty`() {
-        editorState.updateFromText("content")
+        editorState.initFromText("content")
         val snapshot = undoManager.redo(editorState)
         assertNull(snapshot)
     }
 
     @Test
     fun `clearRedoStack clears redo history`() {
-        editorState.updateFromText("initial")
+        editorState.initFromText("initial")
         undoManager.beginEditingLine(editorState, 0)
 
-        editorState.updateFromText("modified")
+        editorState.initFromText("modified")
         undoManager.commitPendingUndoState(editorState)
 
         undoManager.undo(editorState)
@@ -164,11 +165,11 @@ class UndoManagerTest {
 
     @Test
     fun `beginEditingLine captures pending snapshot`() {
-        editorState.updateFromText("line1\nline2")
+        editorState.initFromText("line1\nline2")
         undoManager.beginEditingLine(editorState, 0)
 
         // Modify and focus different line
-        editorState.updateFromText("modified\nline2")
+        editorState.initFromText("modified\nline2")
         undoManager.commitPendingUndoState(editorState)
         undoManager.beginEditingLine(editorState, 1)
 
@@ -177,7 +178,7 @@ class UndoManagerTest {
 
     @Test
     fun `beginEditingLine on same line does not create new snapshot`() {
-        editorState.updateFromText("content")
+        editorState.initFromText("content")
         undoManager.beginEditingLine(editorState, 0)
         undoManager.beginEditingLine(editorState, 0) // Same line
 
@@ -190,7 +191,7 @@ class UndoManagerTest {
 
     @Test
     fun `bullet command creates separate undo step`() {
-        editorState.updateFromText("item")
+        editorState.initFromText("item")
         undoManager.recordCommand(editorState, CommandType.BULLET)
         editorState.toggleBulletInternal()
         undoManager.commitAfterCommand(editorState, CommandType.BULLET)
@@ -202,7 +203,7 @@ class UndoManagerTest {
 
     @Test
     fun `checkbox command creates separate undo step`() {
-        editorState.updateFromText("task")
+        editorState.initFromText("task")
         undoManager.recordCommand(editorState, CommandType.CHECKBOX)
         editorState.toggleCheckboxInternal()
         undoManager.commitAfterCommand(editorState, CommandType.CHECKBOX)
@@ -212,7 +213,7 @@ class UndoManagerTest {
 
     @Test
     fun `consecutive indent commands are grouped`() {
-        editorState.updateFromText("item")
+        editorState.initFromText("item")
 
         // First indent
         undoManager.recordCommand(editorState, CommandType.INDENT)
@@ -239,7 +240,7 @@ class UndoManagerTest {
 
     @Test
     fun `consecutive unindent commands are grouped`() {
-        editorState.updateFromText("\t\t\titem")
+        editorState.initFromText("\t\t\titem")
 
         // Multiple unindents
         undoManager.recordCommand(editorState, CommandType.UNINDENT)
@@ -258,7 +259,7 @@ class UndoManagerTest {
 
     @Test
     fun `indent and unindent sequence is grouped`() {
-        editorState.updateFromText("\titem")
+        editorState.initFromText("\titem")
 
         // Indent then unindent to different level (net +1 indent)
         undoManager.recordCommand(editorState, CommandType.INDENT)
@@ -281,7 +282,7 @@ class UndoManagerTest {
 
     @Test
     fun `bullet breaks indent sequence`() {
-        editorState.updateFromText("item")
+        editorState.initFromText("item")
 
         // First indent
         undoManager.recordCommand(editorState, CommandType.INDENT)
@@ -297,7 +298,7 @@ class UndoManagerTest {
         val snapshot1 = undoManager.undo(editorState)
         assertEquals(listOf("\titem"), snapshot1!!.lineContents)
 
-        editorState.updateFromText("\titem")
+        editorState.initFromText("\titem")
 
         assertTrue(undoManager.canUndo)
         val snapshot2 = undoManager.undo(editorState)
@@ -308,10 +309,10 @@ class UndoManagerTest {
 
     @Test
     fun `recordAlarmCreation attaches alarm to last undo entry`() {
-        editorState.updateFromText("initial")
+        editorState.initFromText("initial")
         undoManager.beginEditingLine(editorState, 0)
 
-        editorState.updateFromText("task with alarm")
+        editorState.initFromText("task with alarm")
         undoManager.commitPendingUndoState(editorState)
 
         val alarmSnapshot = AlarmSnapshot(
@@ -330,10 +331,10 @@ class UndoManagerTest {
 
     @Test
     fun `updateLastUndoAlarmId updates alarm ID`() {
-        editorState.updateFromText("initial")
+        editorState.initFromText("initial")
         undoManager.beginEditingLine(editorState, 0)
 
-        editorState.updateFromText("task")
+        editorState.initFromText("task")
         undoManager.commitPendingUndoState(editorState)
 
         val alarmSnapshot = AlarmSnapshot(
@@ -356,7 +357,7 @@ class UndoManagerTest {
         // Simulates: user creates alarm on empty document with no prior edits
         // The alarm creation should still be undoable
 
-        editorState.updateFromText("task line")
+        editorState.initFromText("task line")
         // Begin editing but don't commit - pending snapshot exists but undo stack is empty
         undoManager.beginEditingLine(editorState, 0)
 
@@ -384,10 +385,10 @@ class UndoManagerTest {
 
     @Test
     fun `reset clears all history`() {
-        editorState.updateFromText("initial")
+        editorState.initFromText("initial")
         undoManager.beginEditingLine(editorState, 0)
 
-        editorState.updateFromText("modified")
+        editorState.initFromText("modified")
         undoManager.commitPendingUndoState(editorState)
 
         undoManager.undo(editorState)
@@ -408,9 +409,9 @@ class UndoManagerTest {
 
         // Create 5 undo entries
         for (i in 1..5) {
-            editorState.updateFromText("state$i")
+            editorState.initFromText("state$i")
             smallManager.beginEditingLine(editorState, 0)
-            editorState.updateFromText("state${i + 1}")
+            editorState.initFromText("state${i + 1}")
             smallManager.commitPendingUndoState(editorState)
         }
 
@@ -427,10 +428,10 @@ class UndoManagerTest {
 
     @Test
     fun `snapshot captures all lines`() {
-        editorState.updateFromText("line1\nline2\nline3")
+        editorState.initFromText("line1\nline2\nline3")
         undoManager.beginEditingLine(editorState, 0)
 
-        editorState.updateFromText("modified1\nmodified2")
+        editorState.initFromText("modified1\nmodified2")
         undoManager.commitPendingUndoState(editorState)
 
         val snapshot = undoManager.undo(editorState)
@@ -439,13 +440,13 @@ class UndoManagerTest {
 
     @Test
     fun `snapshot captures cursor position`() {
-        editorState.updateFromText("hello")
+        editorState.initFromText("hello")
         editorState.focusedLineIndex = 0
         editorState.lines[0].updateFull("hello", 3) // Cursor at position 3
 
         undoManager.beginEditingLine(editorState, 0)
 
-        editorState.updateFromText("modified")
+        editorState.initFromText("modified")
         undoManager.commitPendingUndoState(editorState)
 
         val snapshot = undoManager.undo(editorState)
@@ -454,12 +455,12 @@ class UndoManagerTest {
 
     @Test
     fun `snapshot captures focused line index`() {
-        editorState.updateFromText("line1\nline2\nline3")
+        editorState.initFromText("line1\nline2\nline3")
         editorState.focusedLineIndex = 1
 
         undoManager.beginEditingLine(editorState, 1)
 
-        editorState.updateFromText("line1\nmodified\nline3")
+        editorState.initFromText("line1\nmodified\nline3")
         undoManager.commitPendingUndoState(editorState)
 
         val snapshot = undoManager.undo(editorState)
@@ -470,10 +471,10 @@ class UndoManagerTest {
 
     @Test
     fun `exportState captures complete state`() {
-        editorState.updateFromText("initial")
+        editorState.initFromText("initial")
         undoManager.beginEditingLine(editorState, 0)
 
-        editorState.updateFromText("modified")
+        editorState.initFromText("modified")
         undoManager.commitPendingUndoState(editorState)
 
         // Before undo: undoStack=1, redoStack=0
@@ -492,9 +493,9 @@ class UndoManagerTest {
     @Test
     fun `importState restores complete state`() {
         // Create some history
-        editorState.updateFromText("initial")
+        editorState.initFromText("initial")
         undoManager.beginEditingLine(editorState, 0)
-        editorState.updateFromText("modified")
+        editorState.initFromText("modified")
         undoManager.commitPendingUndoState(editorState)
 
         // Export
@@ -520,7 +521,7 @@ class UndoManagerTest {
         // which matches the actual EditorController.splitLine implementation.
 
         // Initial state: indented bullet line
-        editorState.updateFromText("\t• ")
+        editorState.initFromText("\t• ")
         editorState.focusedLineIndex = 0
         editorState.lines[0].updateFull("\t• ", 3) // Cursor at end
 
@@ -549,7 +550,7 @@ class UndoManagerTest {
         assertEquals(7, snapshot1.cursorPosition)
 
         // Simulate restoring that state
-        editorState.updateFromText("\t• item")
+        editorState.initFromText("\t• item")
         editorState.focusedLineIndex = 0
 
         // Second undo: should restore to before typing
@@ -575,7 +576,7 @@ class UndoManagerTest {
         // simulate that here.
 
         // Initial state
-        editorState.updateFromText("\t• item")
+        editorState.initFromText("\t• item")
         editorState.focusedLineIndex = 0
         editorState.lines[0].updateFull("\t• item", 7) // Cursor at end
 
@@ -617,15 +618,15 @@ class UndoManagerTest {
         // actual EditorController.splitLine implementation.
 
         // Start with empty line
-        editorState.updateFromText("")
+        editorState.initFromText("")
         undoManager.beginEditingLine(editorState, 0)
 
         // User types "hello"
-        editorState.updateFromText("hello")
+        editorState.initFromText("hello")
 
         // User hits Enter - commits typing, captures pre-split state
         undoManager.prepareForStructuralChange(editorState)
-        editorState.updateFromText("hello\n")
+        editorState.initFromText("hello\n")
         editorState.focusedLineIndex = 1
         undoManager.continueAfterStructuralChange(1)
 
@@ -638,7 +639,7 @@ class UndoManagerTest {
         assertTrue(undoManager.canUndo)
 
         // Restore state
-        editorState.updateFromText("hello")
+        editorState.initFromText("hello")
 
         // Second undo: removes typing
         val snapshot2 = undoManager.undo(editorState)
@@ -650,9 +651,9 @@ class UndoManagerTest {
 
     @Test
     fun `importState restores alarm snapshots`() {
-        editorState.updateFromText("initial")
+        editorState.initFromText("initial")
         undoManager.beginEditingLine(editorState, 0)
-        editorState.updateFromText("modified")
+        editorState.initFromText("modified")
         undoManager.commitPendingUndoState(editorState)
 
         val alarm = AlarmSnapshot(
@@ -683,24 +684,24 @@ class UndoManagerTest {
         // Expected: typing before Enter = one undo step, Enter + typing after = one undo step
 
         // Initial state
-        editorState.updateFromText("")
+        editorState.initFromText("")
         undoManager.beginEditingLine(editorState, 0)
 
         // User types "hello" on line 1
-        editorState.updateFromText("hello")
+        editorState.initFromText("hello")
 
         // User hits Enter - using prepareForStructuralChange (commits prior typing)
         undoManager.prepareForStructuralChange(editorState)
 
         // Perform the split
-        editorState.updateFromText("hello\n")
+        editorState.initFromText("hello\n")
         editorState.focusedLineIndex = 1
 
         // Continue pending state on new line (groups Enter + subsequent typing)
         undoManager.continueAfterStructuralChange(1)
 
         // User types "world" on line 2
-        editorState.updateFromText("hello\nworld")
+        editorState.initFromText("hello\nworld")
 
         // First undo: should restore to "hello" (before Enter, undoes Enter + "world")
         val snapshot1 = undoManager.undo(editorState)
@@ -708,7 +709,7 @@ class UndoManagerTest {
         assertEquals(listOf("hello"), snapshot1!!.lineContents)
 
         // Restore state
-        editorState.updateFromText("hello")
+        editorState.initFromText("hello")
 
         // Second undo: should restore to "" (before typing "hello")
         assertTrue(undoManager.canUndo)
@@ -724,15 +725,15 @@ class UndoManagerTest {
         // Simulates: user types on line 1, hits Enter, immediately undoes
         // Expected: first undo restores to before Enter (with typed text)
 
-        editorState.updateFromText("")
+        editorState.initFromText("")
         undoManager.beginEditingLine(editorState, 0)
 
         // User types "hello"
-        editorState.updateFromText("hello")
+        editorState.initFromText("hello")
 
         // User hits Enter
         undoManager.prepareForStructuralChange(editorState)
-        editorState.updateFromText("hello\n")
+        editorState.initFromText("hello\n")
         editorState.focusedLineIndex = 1
         undoManager.continueAfterStructuralChange(1)
 
@@ -741,7 +742,7 @@ class UndoManagerTest {
         assertNotNull(snapshot1)
         assertEquals(listOf("hello"), snapshot1!!.lineContents)
 
-        editorState.updateFromText("hello")
+        editorState.initFromText("hello")
 
         // Second undo restores to before typing
         val snapshot2 = undoManager.undo(editorState)
@@ -755,41 +756,41 @@ class UndoManagerTest {
         // User types "a", Enter, types "b", Enter, types "c"
         // Should have 3 undo points: a, a+b, a+b+c
 
-        editorState.updateFromText("")
+        editorState.initFromText("")
         undoManager.beginEditingLine(editorState, 0)
 
         // Type "a"
-        editorState.updateFromText("a")
+        editorState.initFromText("a")
 
         // First Enter
         undoManager.prepareForStructuralChange(editorState)
-        editorState.updateFromText("a\n")
+        editorState.initFromText("a\n")
         editorState.focusedLineIndex = 1
         undoManager.continueAfterStructuralChange(1)
 
         // Type "b"
-        editorState.updateFromText("a\nb")
+        editorState.initFromText("a\nb")
 
         // Second Enter
         undoManager.prepareForStructuralChange(editorState)
-        editorState.updateFromText("a\nb\n")
+        editorState.initFromText("a\nb\n")
         editorState.focusedLineIndex = 2
         undoManager.continueAfterStructuralChange(2)
 
         // Type "c"
-        editorState.updateFromText("a\nb\nc")
+        editorState.initFromText("a\nb\nc")
 
         // First undo: removes Enter2 + "c", restores to a\nb
         val snapshot1 = undoManager.undo(editorState)
         assertEquals(listOf("a", "b"), snapshot1!!.lineContents)
 
-        editorState.updateFromText("a\nb")
+        editorState.initFromText("a\nb")
 
         // Second undo: removes Enter1 + "b", restores to a
         val snapshot2 = undoManager.undo(editorState)
         assertEquals(listOf("a"), snapshot2!!.lineContents)
 
-        editorState.updateFromText("a")
+        editorState.initFromText("a")
 
         // Third undo: removes "a", restores to empty
         val snapshot3 = undoManager.undo(editorState)
@@ -805,18 +806,18 @@ class UndoManagerTest {
         // User types, then backspaces to merge lines
         // Merge should be its own undo step
 
-        editorState.updateFromText("line1\nline2")
+        editorState.initFromText("line1\nline2")
         editorState.focusedLineIndex = 1
         undoManager.beginEditingLine(editorState, 1)
 
         // User types on line 2
-        editorState.updateFromText("line1\nline2 modified")
+        editorState.initFromText("line1\nline2 modified")
 
         // User backspaces at start to merge - captureStateBeforeChange creates immediate undo point
         undoManager.captureStateBeforeChange(editorState)
 
         // Perform merge
-        editorState.updateFromText("line1line2 modified")
+        editorState.initFromText("line1line2 modified")
         editorState.focusedLineIndex = 0
 
         // Begin editing merged line
@@ -826,7 +827,7 @@ class UndoManagerTest {
         val snapshot1 = undoManager.undo(editorState)
         assertEquals(listOf("line1", "line2 modified"), snapshot1!!.lineContents)
 
-        editorState.updateFromText("line1\nline2 modified")
+        editorState.initFromText("line1\nline2 modified")
 
         // Second undo: restores to before typing
         val snapshot2 = undoManager.undo(editorState)
@@ -840,18 +841,18 @@ class UndoManagerTest {
         // Merge happens, then user types on merged line
         // Merge and subsequent typing should be separate undo steps
 
-        editorState.updateFromText("line1\nline2")
+        editorState.initFromText("line1\nline2")
         editorState.focusedLineIndex = 1
         undoManager.beginEditingLine(editorState, 1)
 
         // Merge immediately (no prior typing on line 2)
         undoManager.captureStateBeforeChange(editorState)
-        editorState.updateFromText("line1line2")
+        editorState.initFromText("line1line2")
         editorState.focusedLineIndex = 0
         undoManager.beginEditingLine(editorState, 0)
 
         // User types after merge
-        editorState.updateFromText("line1line2 extra")
+        editorState.initFromText("line1line2 extra")
 
         // Commit the typing
         undoManager.commitPendingUndoState(editorState)
@@ -860,7 +861,7 @@ class UndoManagerTest {
         val snapshot1 = undoManager.undo(editorState)
         assertEquals(listOf("line1line2"), snapshot1!!.lineContents)
 
-        editorState.updateFromText("line1line2")
+        editorState.initFromText("line1line2")
 
         // Second undo: undoes the merge
         val snapshot2 = undoManager.undo(editorState)
@@ -875,7 +876,7 @@ class UndoManagerTest {
 
     @Test
     fun `setBaseline captures current state`() {
-        editorState.updateFromText("loaded content")
+        editorState.initFromText("loaded content")
         editorState.focusedLineIndex = 0
         editorState.lines[0].updateFull("loaded content", 7) // cursor at position 7
 
@@ -891,7 +892,7 @@ class UndoManagerTest {
 
     @Test
     fun `canUndo is false right after setBaseline - nothing to undo yet`() {
-        editorState.updateFromText("baseline content")
+        editorState.initFromText("baseline content")
         undoManager.setBaseline(editorState)
 
         // No undo history and we're at baseline - nothing to undo
@@ -900,12 +901,12 @@ class UndoManagerTest {
 
     @Test
     fun `undo returns baseline after making an edit`() {
-        editorState.updateFromText("baseline content")
+        editorState.initFromText("baseline content")
         undoManager.setBaseline(editorState)
 
         // Make an edit (must go through beginEditingLine/commit flow)
         undoManager.beginEditingLine(editorState, 0)
-        editorState.updateFromText("modified content")
+        editorState.initFromText("modified content")
         undoManager.commitPendingUndoState(editorState)
 
         // Now canUndo should be true
@@ -920,26 +921,26 @@ class UndoManagerTest {
     @Test
     fun `baseline is floor - multiple undos stop at baseline`() {
         // Set baseline
-        editorState.updateFromText("baseline")
+        editorState.initFromText("baseline")
         undoManager.setBaseline(editorState)
 
         // Create some history
         undoManager.beginEditingLine(editorState, 0)
-        editorState.updateFromText("edit1")
+        editorState.initFromText("edit1")
         undoManager.commitPendingUndoState(editorState)
         undoManager.beginEditingLine(editorState, 0)
-        editorState.updateFromText("edit2")
+        editorState.initFromText("edit2")
         undoManager.commitPendingUndoState(editorState)
 
         // First undo: edit2 -> edit1
         val snapshot1 = undoManager.undo(editorState)
         assertEquals(listOf("edit1"), snapshot1!!.lineContents)
-        editorState.updateFromText("edit1")
+        editorState.initFromText("edit1")
 
         // Second undo: edit1 -> baseline
         val snapshot2 = undoManager.undo(editorState)
         assertEquals(listOf("baseline"), snapshot2!!.lineContents)
-        editorState.updateFromText("baseline")
+        editorState.initFromText("baseline")
 
         // Third undo: canUndo is now false because we're at baseline
         assertFalse("canUndo should be false when at baseline", undoManager.canUndo)
@@ -952,12 +953,12 @@ class UndoManagerTest {
         // This is the critical safety test - loaded content should never be lost
 
         // Simulate note loading with content
-        editorState.updateFromText("Important user data\nLine 2\nLine 3")
+        editorState.initFromText("Important user data\nLine 2\nLine 3")
         undoManager.setBaseline(editorState)
         undoManager.beginEditingLine(editorState, 0)
 
         // User makes edits
-        editorState.updateFromText("Modified data")
+        editorState.initFromText("Modified data")
         undoManager.commitPendingUndoState(editorState)
 
         // Undo all the way - should stop at baseline, never empty
@@ -969,7 +970,7 @@ class UndoManagerTest {
                 snapshot!!.lineContents.isNotEmpty())
             assertTrue("Undo should never lose all content",
                 snapshot.lineContents.any { it.isNotEmpty() })
-            editorState.updateFromText(snapshot.lineContents.joinToString("\n"))
+            editorState.initFromText(snapshot.lineContents.joinToString("\n"))
             undoCount++
         }
 
@@ -980,7 +981,7 @@ class UndoManagerTest {
 
     @Test
     fun `reset clears baseline`() {
-        editorState.updateFromText("baseline")
+        editorState.initFromText("baseline")
         undoManager.setBaseline(editorState)
         assertTrue(undoManager.hasBaseline)
 
@@ -992,7 +993,7 @@ class UndoManagerTest {
 
     @Test
     fun `exportState includes baseline`() {
-        editorState.updateFromText("baseline content")
+        editorState.initFromText("baseline content")
         undoManager.setBaseline(editorState)
 
         val exported = undoManager.exportState()
@@ -1003,7 +1004,7 @@ class UndoManagerTest {
 
     @Test
     fun `importState restores baseline`() {
-        editorState.updateFromText("baseline content")
+        editorState.initFromText("baseline content")
         undoManager.setBaseline(editorState)
 
         val exported = undoManager.exportState()
@@ -1032,7 +1033,7 @@ class UndoManagerTest {
         // Expected: should restore to loaded content, not empty
 
         // Step 1: Note loads with content, baseline set
-        editorState.updateFromText("Original note content")
+        editorState.initFromText("Original note content")
         undoManager.setBaseline(editorState)
         undoManager.beginEditingLine(editorState, 0)
 
@@ -1044,7 +1045,7 @@ class UndoManagerTest {
         undoManager.captureStateBeforeChange(editorState)
 
         // Paste happens
-        editorState.updateFromText("PASTED CONTENT")
+        editorState.initFromText("PASTED CONTENT")
         undoManager.beginEditingLine(editorState, 0)
 
         // Step 3: User undoes
@@ -1061,7 +1062,7 @@ class UndoManagerTest {
         // an undo point so we can undo back to the state before paste.
 
         // Note loads with content, baseline set
-        editorState.updateFromText("Original content")
+        editorState.initFromText("Original content")
         undoManager.setBaseline(editorState)
         undoManager.beginEditingLine(editorState, 0)
 
@@ -1069,7 +1070,7 @@ class UndoManagerTest {
         undoManager.captureStateBeforeChange(editorState)
 
         // Paste happens
-        editorState.updateFromText("Pasted stuff")
+        editorState.initFromText("Pasted stuff")
         undoManager.beginEditingLine(editorState, 0)
 
         // Undo should restore original content
@@ -1081,7 +1082,7 @@ class UndoManagerTest {
 
     @Test
     fun `baseline cursor position is restored`() {
-        editorState.updateFromText("content")
+        editorState.initFromText("content")
         editorState.focusedLineIndex = 0
         editorState.lines[0].updateFull("content", 4) // cursor at position 4
 
@@ -1089,7 +1090,7 @@ class UndoManagerTest {
 
         // Make a proper edit through the undo system
         undoManager.beginEditingLine(editorState, 0)
-        editorState.updateFromText("modified")
+        editorState.initFromText("modified")
         undoManager.commitPendingUndoState(editorState)
 
         // Undo
@@ -1101,13 +1102,13 @@ class UndoManagerTest {
 
     @Test
     fun `baseline with multiline content`() {
-        editorState.updateFromText("line1\nline2\nline3")
+        editorState.initFromText("line1\nline2\nline3")
         editorState.focusedLineIndex = 1
         undoManager.setBaseline(editorState)
 
         // Make a proper edit through the undo system
         undoManager.beginEditingLine(editorState, 1)
-        editorState.updateFromText("single line")
+        editorState.initFromText("single line")
         undoManager.commitPendingUndoState(editorState)
 
         // Undo
@@ -1123,17 +1124,17 @@ class UndoManagerTest {
     @Test
     fun `redo after baseline undo works correctly`() {
         // Set baseline
-        editorState.updateFromText("baseline")
+        editorState.initFromText("baseline")
         undoManager.setBaseline(editorState)
 
         // Make a proper edit through the undo system
         undoManager.beginEditingLine(editorState, 0)
-        editorState.updateFromText("modified")
+        editorState.initFromText("modified")
         undoManager.commitPendingUndoState(editorState)
 
         // Undo to baseline
         undoManager.undo(editorState)
-        editorState.updateFromText("baseline")
+        editorState.initFromText("baseline")
 
         // Redo should restore modified state
         assertTrue(undoManager.canRedo)
@@ -1144,22 +1145,22 @@ class UndoManagerTest {
     @Test
     fun `new edits after baseline undo clear redo stack`() {
         // Set baseline
-        editorState.updateFromText("baseline")
+        editorState.initFromText("baseline")
         undoManager.setBaseline(editorState)
 
         // Make a proper edit through the undo system
         undoManager.beginEditingLine(editorState, 0)
-        editorState.updateFromText("modified")
+        editorState.initFromText("modified")
         undoManager.commitPendingUndoState(editorState)
 
         // Undo to baseline
         undoManager.undo(editorState)
-        editorState.updateFromText("baseline")
+        editorState.initFromText("baseline")
         assertTrue(undoManager.canRedo)
 
         // Make new edit - should clear redo
         undoManager.beginEditingLine(editorState, 0)
-        editorState.updateFromText("new edit")
+        editorState.initFromText("new edit")
         undoManager.commitPendingUndoState(editorState)
 
         assertFalse(undoManager.canRedo)
@@ -1168,12 +1169,12 @@ class UndoManagerTest {
     @Test
     fun `canUndo becomes false after undoing to baseline`() {
         // Set baseline
-        editorState.updateFromText("baseline")
+        editorState.initFromText("baseline")
         undoManager.setBaseline(editorState)
 
         // Make an edit
         undoManager.beginEditingLine(editorState, 0)
-        editorState.updateFromText("edited")
+        editorState.initFromText("edited")
         undoManager.commitPendingUndoState(editorState)
 
         assertTrue("Should be able to undo the edit", undoManager.canUndo)
@@ -1189,17 +1190,17 @@ class UndoManagerTest {
     @Test
     fun `undo returns null when already at baseline`() {
         // Set baseline
-        editorState.updateFromText("baseline")
+        editorState.initFromText("baseline")
         undoManager.setBaseline(editorState)
 
         // Make an edit
         undoManager.beginEditingLine(editorState, 0)
-        editorState.updateFromText("edited")
+        editorState.initFromText("edited")
         undoManager.commitPendingUndoState(editorState)
 
         // Undo to baseline
         undoManager.undo(editorState)
-        editorState.updateFromText("baseline")
+        editorState.initFromText("baseline")
 
         // Try to undo again - should return null
         val snapshot = undoManager.undo(editorState)
@@ -1211,26 +1212,26 @@ class UndoManagerTest {
         // If current state already matches the undo target, don't add to redo
         // (this prevents accumulating useless redo entries)
 
-        editorState.updateFromText("baseline")
+        editorState.initFromText("baseline")
         undoManager.setBaseline(editorState)
 
         // Make an edit
         undoManager.beginEditingLine(editorState, 0)
-        editorState.updateFromText("edited")
+        editorState.initFromText("edited")
         undoManager.commitPendingUndoState(editorState)
 
         // Undo to baseline
         undoManager.undo(editorState)
-        editorState.updateFromText("baseline")
+        editorState.initFromText("baseline")
 
         // Redo stack should have exactly 1 entry (the "edited" state)
         assertTrue(undoManager.canRedo)
 
         // Now if we redo and undo again, redo stack should still have 1 entry
         undoManager.redo(editorState)
-        editorState.updateFromText("edited")
+        editorState.initFromText("edited")
         undoManager.undo(editorState)
-        editorState.updateFromText("baseline")
+        editorState.initFromText("baseline")
 
         // Should still be able to redo
         assertTrue(undoManager.canRedo)
@@ -1239,22 +1240,22 @@ class UndoManagerTest {
     @Test
     fun `new edit after baseline resets isAtBaseline flag`() {
         // Set baseline
-        editorState.updateFromText("baseline")
+        editorState.initFromText("baseline")
         undoManager.setBaseline(editorState)
 
         // Make an edit
         undoManager.beginEditingLine(editorState, 0)
-        editorState.updateFromText("edit1")
+        editorState.initFromText("edit1")
         undoManager.commitPendingUndoState(editorState)
 
         // Undo to baseline
         undoManager.undo(editorState)
-        editorState.updateFromText("baseline")
+        editorState.initFromText("baseline")
         assertFalse("At baseline, canUndo should be false", undoManager.canUndo)
 
         // Make a new edit - this should reset the isAtBaseline flag
         undoManager.beginEditingLine(editorState, 0)
-        editorState.updateFromText("edit2")
+        editorState.initFromText("edit2")
         undoManager.commitPendingUndoState(editorState)
 
         // Now canUndo should be true again
@@ -1267,7 +1268,7 @@ class UndoManagerTest {
 
     @Test
     fun `exportState includes isAtBaseline flag`() {
-        editorState.updateFromText("baseline")
+        editorState.initFromText("baseline")
         undoManager.setBaseline(editorState)
 
         // Right after setBaseline, isAtBaseline is true (nothing to undo yet)
@@ -1276,7 +1277,7 @@ class UndoManagerTest {
 
         // Make edit - isAtBaseline becomes false
         undoManager.beginEditingLine(editorState, 0)
-        editorState.updateFromText("edited")
+        editorState.initFromText("edited")
         undoManager.commitPendingUndoState(editorState)
 
         exported = undoManager.exportState()
@@ -1284,7 +1285,7 @@ class UndoManagerTest {
 
         // Undo to baseline - isAtBaseline becomes true again
         undoManager.undo(editorState)
-        editorState.updateFromText("baseline")
+        editorState.initFromText("baseline")
 
         exported = undoManager.exportState()
         assertTrue("isAtBaseline should be true after undoing to baseline", exported.isAtBaseline)
@@ -1292,15 +1293,15 @@ class UndoManagerTest {
 
     @Test
     fun `importState restores isAtBaseline flag`() {
-        editorState.updateFromText("baseline")
+        editorState.initFromText("baseline")
         undoManager.setBaseline(editorState)
 
         // Make edit and undo to baseline
         undoManager.beginEditingLine(editorState, 0)
-        editorState.updateFromText("edited")
+        editorState.initFromText("edited")
         undoManager.commitPendingUndoState(editorState)
         undoManager.undo(editorState)
-        editorState.updateFromText("baseline")
+        editorState.initFromText("baseline")
 
         // Export state (should have isAtBaseline = true)
         val exported = undoManager.exportState()
@@ -1321,14 +1322,14 @@ class UndoManagerTest {
         // This test verifies the fix for a bug where setBaseline was called
         // before editorState was populated, resulting in an empty baseline.
         //
-        // The fix requires calling editorState.updateFromText() BEFORE setBaseline().
+        // The fix requires calling editorState.initFromText() BEFORE setBaseline().
         // If someone removes that call, this test should fail.
 
         val loadedContent = "Important user data\nLine 2\nLine 3"
 
         // Simulate the CORRECT loading sequence:
         // 1. Update editorState with loaded content FIRST
-        editorState.updateFromText(loadedContent)
+        editorState.initFromText(loadedContent)
         // 2. THEN set baseline
         undoManager.setBaseline(editorState)
 
@@ -1380,7 +1381,7 @@ class UndoManagerTest {
         // After this, undo should be available.
 
         // Step 1: Simulate note loading (from CurrentNoteScreen)
-        editorState.updateFromText("baseline content")
+        editorState.initFromText("baseline content")
         undoManager.setBaseline(editorState)
         undoManager.beginEditingLine(editorState, editorState.focusedLineIndex)
         // requestFocusUpdate() would be called here, but it doesn't affect undo manager
@@ -1408,7 +1409,7 @@ class UndoManagerTest {
         // Similar test but with focus change instead of Enter
 
         // Step 1: Load
-        editorState.updateFromText("line1\nline2")
+        editorState.initFromText("line1\nline2")
         undoManager.setBaseline(editorState)
         undoManager.beginEditingLine(editorState, 0)
 
@@ -1433,7 +1434,7 @@ class UndoManagerTest {
         // when user presses Enter via IME (which goes through updateLineContent)
 
         // Step 1: Load
-        editorState.updateFromText("baseline content")
+        editorState.initFromText("baseline content")
         val controller = EditorController(editorState)
         controller.undoManager.setBaseline(editorState)
         controller.undoManager.beginEditingLine(editorState, editorState.focusedLineIndex)
@@ -1465,7 +1466,7 @@ class UndoManagerTest {
         // User focuses line with cursor at position 3, types "abc"
         // Undo should restore cursor to position 3
 
-        editorState.updateFromText("hello")
+        editorState.initFromText("hello")
         editorState.focusedLineIndex = 0
         editorState.lines[0].updateFull("hello", 3) // Cursor at position 3
 
@@ -1487,7 +1488,7 @@ class UndoManagerTest {
         // User presses Enter
         // Undo should restore cursor to position 5 on line 0
 
-        editorState.updateFromText("hello")
+        editorState.initFromText("hello")
         editorState.focusedLineIndex = 0
         editorState.lines[0].updateFull("hello", 5) // Cursor at end
 
@@ -1520,7 +1521,7 @@ class UndoManagerTest {
         // 4. Undo should restore cursor to position where it was when Enter was pressed
 
         // Step 1: Note loads with cursor at position 0 (default)
-        editorState.updateFromText("hello")
+        editorState.initFromText("hello")
         editorState.focusedLineIndex = 0
         editorState.lines[0].updateFull("hello", 0) // Cursor at 0 (default after load)
 
@@ -1562,7 +1563,7 @@ class UndoManagerTest {
         // User presses Enter, splitting into "hello" and " world"
         // Undo should restore cursor to position 5
 
-        editorState.updateFromText("hello world")
+        editorState.initFromText("hello world")
         editorState.focusedLineIndex = 0
         editorState.lines[0].updateFull("hello world", 5) // Cursor after "hello"
 
@@ -1589,7 +1590,7 @@ class UndoManagerTest {
         // User toggles bullet (becomes "• item")
         // Undo should restore cursor to position 2
 
-        editorState.updateFromText("item")
+        editorState.initFromText("item")
         editorState.focusedLineIndex = 0
         editorState.lines[0].updateFull("item", 2) // Cursor at position 2
 
@@ -1609,7 +1610,7 @@ class UndoManagerTest {
         // User indents (becomes "\titem")
         // Undo should restore cursor to position 3
 
-        editorState.updateFromText("item")
+        editorState.initFromText("item")
         editorState.focusedLineIndex = 0
         editorState.lines[0].updateFull("item", 3)
 
@@ -1629,7 +1630,7 @@ class UndoManagerTest {
         // User backspaces to merge
         // Undo should restore cursor to start of line 2 (position 0)
 
-        editorState.updateFromText("line1\nline2")
+        editorState.initFromText("line1\nline2")
         editorState.focusedLineIndex = 1
         editorState.lines[1].updateFull("line2", 0) // Cursor at start of line 2
 
@@ -1656,7 +1657,7 @@ class UndoManagerTest {
         // User pastes "XYZ" (becomes "heXYZllo")
         // Undo should restore cursor to position 2
 
-        editorState.updateFromText("hello")
+        editorState.initFromText("hello")
         editorState.focusedLineIndex = 0
         editorState.lines[0].updateFull("hello", 2)
 
@@ -1677,7 +1678,7 @@ class UndoManagerTest {
     fun `redo restores cursor to position after original action`() {
         // After undo, redo should restore cursor to where it was after the action
 
-        editorState.updateFromText("hello")
+        editorState.initFromText("hello")
         editorState.focusedLineIndex = 0
         editorState.lines[0].updateFull("hello", 2)
 
@@ -1689,7 +1690,7 @@ class UndoManagerTest {
 
         // Undo
         undoManager.undo(editorState)
-        editorState.updateFromText("hello")
+        editorState.initFromText("hello")
         editorState.lines[0].updateFull("hello", 2)
 
         // Redo
@@ -1703,7 +1704,7 @@ class UndoManagerTest {
     fun `undo multiline edit restores cursor to correct line and position`() {
         // User edits on line 2, undo should restore focus to line 2
 
-        editorState.updateFromText("line0\nline1\nline2")
+        editorState.initFromText("line0\nline1\nline2")
         editorState.focusedLineIndex = 2
         editorState.lines[2].updateFull("line2", 3) // Cursor at position 3 on line 2
 
@@ -1724,7 +1725,7 @@ class UndoManagerTest {
         // Edge case: if the restored line is shorter than the saved cursor position,
         // cursor should be coerced to end of line
 
-        editorState.updateFromText("short")
+        editorState.initFromText("short")
         editorState.focusedLineIndex = 0
         editorState.lines[0].updateFull("short", 5)
 
@@ -1751,7 +1752,7 @@ class UndoManagerTest {
         // an undo point that allows restoring the original directive text.
 
         // Setup: line with a directive "[42]"
-        editorState.updateFromText("some text [42] more text")
+        editorState.initFromText("some text [42] more text")
         val controller = EditorController(editorState)
         controller.undoManager.setBaseline(editorState)
         controller.undoManager.beginEditingLine(editorState, 0)
@@ -1780,7 +1781,7 @@ class UndoManagerTest {
     fun `directive edit undo restores original content`() {
         // After undoing a directive edit, the original directive text should be restored
 
-        editorState.updateFromText("result: [100]")
+        editorState.initFromText("result: [100]")
         val controller = EditorController(editorState)
         controller.undoManager.setBaseline(editorState)
         controller.undoManager.beginEditingLine(editorState, 0)
@@ -1802,7 +1803,7 @@ class UndoManagerTest {
         // Each confirmDirectiveEdit() call should create its own undo step,
         // unlike indent commands which are grouped.
 
-        editorState.updateFromText("values: [1] and [2]")
+        editorState.initFromText("values: [1] and [2]")
         val controller = EditorController(editorState)
         controller.undoManager.setBaseline(editorState)
         controller.undoManager.beginEditingLine(editorState, 0)
@@ -1830,7 +1831,7 @@ class UndoManagerTest {
         // Note: State IS captured before the range validation, so undo may be available
         // but undoing will just restore the same content (a no-op).
 
-        editorState.updateFromText("short")
+        editorState.initFromText("short")
         val controller = EditorController(editorState)
         controller.undoManager.setBaseline(editorState)
         controller.undoManager.beginEditingLine(editorState, 0)
@@ -1850,7 +1851,7 @@ class UndoManagerTest {
 
     @Test
     fun `directive edit with negative start offset does nothing`() {
-        editorState.updateFromText("[42]")
+        editorState.initFromText("[42]")
         val controller = EditorController(editorState)
         controller.undoManager.setBaseline(editorState)
         controller.undoManager.beginEditingLine(editorState, 0)
@@ -1864,7 +1865,7 @@ class UndoManagerTest {
 
     @Test
     fun `directive edit with start greater than end does nothing`() {
-        editorState.updateFromText("[42]")
+        editorState.initFromText("[42]")
         val controller = EditorController(editorState)
         controller.undoManager.setBaseline(editorState)
         controller.undoManager.beginEditingLine(editorState, 0)
@@ -1878,7 +1879,7 @@ class UndoManagerTest {
 
     @Test
     fun `directive edit on nonexistent line does nothing`() {
-        editorState.updateFromText("only one line")
+        editorState.initFromText("only one line")
         val controller = EditorController(editorState)
         controller.undoManager.setBaseline(editorState)
         controller.undoManager.beginEditingLine(editorState, 0)
@@ -1892,7 +1893,7 @@ class UndoManagerTest {
 
     @Test
     fun `directive edit redo restores edited content`() {
-        editorState.updateFromText("test [42] here")
+        editorState.initFromText("test [42] here")
         val controller = EditorController(editorState)
         controller.undoManager.setBaseline(editorState)
         controller.undoManager.beginEditingLine(editorState, 0)
@@ -1916,7 +1917,7 @@ class UndoManagerTest {
     fun `directive edit after typing creates two undo steps`() {
         // Typing before a directive edit should be a separate undo step
 
-        editorState.updateFromText("[42]")
+        editorState.initFromText("[42]")
         val controller = EditorController(editorState)
         controller.undoManager.setBaseline(editorState)
         controller.undoManager.beginEditingLine(editorState, 0)
@@ -1942,7 +1943,7 @@ class UndoManagerTest {
         // confirmDirectiveEdit should commit any pending typing first,
         // so typing before the directive edit can be undone separately.
 
-        editorState.updateFromText("start")
+        editorState.initFromText("start")
         val controller = EditorController(editorState)
         controller.undoManager.setBaseline(editorState)
         controller.undoManager.beginEditingLine(editorState, 0)
@@ -1970,7 +1971,7 @@ class UndoManagerTest {
     fun `directive edit on line with prefix preserves prefix`() {
         // Directive edits work on content (without prefix), so prefixes should be preserved
 
-        editorState.updateFromText("• item [42] text")
+        editorState.initFromText("• item [42] text")
         val controller = EditorController(editorState)
         controller.undoManager.setBaseline(editorState)
         controller.undoManager.beginEditingLine(editorState, 0)
@@ -1998,7 +1999,7 @@ class UndoManagerTest {
         // This means: first undo restores to before the directive edit attempt,
         // second undo restores to before the typing.
 
-        editorState.updateFromText("original")
+        editorState.initFromText("original")
         val controller = EditorController(editorState)
         controller.undoManager.setBaseline(editorState)
         controller.undoManager.beginEditingLine(editorState, 0)
@@ -2025,7 +2026,7 @@ class UndoManagerTest {
 
     @Test
     fun `checkbox toggle restores cursor position`() {
-        editorState.updateFromText("task item")
+        editorState.initFromText("task item")
         editorState.focusedLineIndex = 0
         editorState.lines[0].updateFull("task item", 4) // Cursor at position 4
 
@@ -2044,7 +2045,7 @@ class UndoManagerTest {
         // Verify cursor position is correct through multiple undo operations
 
         // Initial state: cursor at position 2
-        editorState.updateFromText("ab")
+        editorState.initFromText("ab")
         editorState.focusedLineIndex = 0
         editorState.lines[0].updateFull("ab", 2)
         undoManager.setBaseline(editorState)
@@ -2064,7 +2065,7 @@ class UndoManagerTest {
         assertEquals(3, snapshot1!!.cursorPosition)
         assertEquals(listOf("abc"), snapshot1.lineContents)
 
-        editorState.updateFromText("abc")
+        editorState.initFromText("abc")
         editorState.lines[0].updateFull("abc", 3)
 
         // Second undo: should restore cursor to 2

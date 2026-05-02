@@ -17,7 +17,7 @@ class SelectionCoordinatorTest {
     @Before
     fun setup() {
         parentState = EditorState()
-        parentState.updateFromText("Parent line 1\nParent line 2\nParent line 3")
+        parentState.initFromText("Parent line 1\nParent line 2\nParent line 3")
         parentController = EditorController(parentState)
         coordinator = SelectionCoordinator(parentState, parentController)
         inlineEditState = InlineEditState()
@@ -26,7 +26,7 @@ class SelectionCoordinatorTest {
 
     private fun createViewSession(noteId: String, content: String): InlineEditSession {
         val state = EditorState()
-        state.updateFromText(content)
+        state.initFromText(content)
         val controller = EditorController(state)
         val session = InlineEditSession(
             noteId = noteId,

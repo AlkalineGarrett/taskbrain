@@ -16,7 +16,7 @@ class EditorControllerTest {
     fun `findVisibleNeighbor returns fromIndex when already visible`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("a\nb\nc")
+        state.initFromText("a\nb\nc")
         // No hidden indices: any in-bounds index is its own neighbor.
         assertEquals(0, controller.findVisibleNeighbor(0, -1))
         assertEquals(2, controller.findVisibleNeighbor(2, 1))
@@ -26,7 +26,7 @@ class EditorControllerTest {
     fun `findVisibleNeighbor walks down past hidden lines`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("a\nh1\nh2\nb")
+        state.initFromText("a\nh1\nh2\nb")
         controller.hiddenIndices = setOf(1, 2)
         assertEquals(3, controller.findVisibleNeighbor(1, 1))
     }
@@ -35,7 +35,7 @@ class EditorControllerTest {
     fun `findVisibleNeighbor walks up past hidden lines`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("a\nh1\nh2\nb")
+        state.initFromText("a\nh1\nh2\nb")
         controller.hiddenIndices = setOf(1, 2)
         assertEquals(0, controller.findVisibleNeighbor(2, -1))
     }
@@ -44,7 +44,7 @@ class EditorControllerTest {
     fun `findVisibleNeighbor returns null when walk runs off the top`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("h0\nh1\nb")
+        state.initFromText("h0\nh1\nb")
         controller.hiddenIndices = setOf(0, 1)
         assertNull(controller.findVisibleNeighbor(1, -1))
     }
@@ -53,7 +53,7 @@ class EditorControllerTest {
     fun `findVisibleNeighbor returns null when walk runs off the bottom`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("a\nh1\nh2")
+        state.initFromText("a\nh1\nh2")
         controller.hiddenIndices = setOf(1, 2)
         assertNull(controller.findVisibleNeighbor(1, 1))
     }
@@ -62,7 +62,7 @@ class EditorControllerTest {
     fun `findVisibleNeighbor returns null when fromIndex is out of bounds`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("a\nb")
+        state.initFromText("a\nb")
         // Mirrors how deleteBackward calls findVisibleNeighbor(-1, -1) at line 0.
         assertNull(controller.findVisibleNeighbor(-1, -1))
         assertNull(controller.findVisibleNeighbor(2, 1))
@@ -74,7 +74,7 @@ class EditorControllerTest {
     fun `deleteBackward skips hidden lines when merging`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("a\nhidden1\nhidden2\nb")
+        state.initFromText("a\nhidden1\nhidden2\nb")
         controller.hiddenIndices = setOf(1, 2)
         // Focus line 3 ("b") with cursor at position 0 (start of line)
         state.focusedLineIndex = 3
@@ -91,7 +91,7 @@ class EditorControllerTest {
     fun `deleteForward skips hidden lines when merging`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("a\nhidden1\nhidden2\nb")
+        state.initFromText("a\nhidden1\nhidden2\nb")
         controller.hiddenIndices = setOf(1, 2)
         // Focus line 0 ("a") with cursor at end
         state.focusedLineIndex = 0
@@ -109,7 +109,7 @@ class EditorControllerTest {
         val state = EditorState()
         val undoManager = UndoManager()
         val controller = EditorController(state, undoManager)
-        state.updateFromText("hello")
+        state.initFromText("hello")
         // Set up initial undo baseline
         undoManager.beginEditingLine(state, 0)
 
@@ -134,7 +134,7 @@ class EditorControllerTest {
     fun `toggleCheckbox tracks single line`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("${LinePrefixes.CHECKBOX_UNCHECKED}a\n${LinePrefixes.CHECKBOX_UNCHECKED}b")
+        state.initFromText("${LinePrefixes.CHECKBOX_UNCHECKED}a\n${LinePrefixes.CHECKBOX_UNCHECKED}b")
         state.focusedLineIndex = 0
 
         controller.toggleCheckbox()
@@ -147,7 +147,7 @@ class EditorControllerTest {
     fun `toggleCheckbox tracks all selected lines`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("${LinePrefixes.CHECKBOX_UNCHECKED}a\n${LinePrefixes.CHECKBOX_UNCHECKED}b\n${LinePrefixes.CHECKBOX_UNCHECKED}c")
+        state.initFromText("${LinePrefixes.CHECKBOX_UNCHECKED}a\n${LinePrefixes.CHECKBOX_UNCHECKED}b\n${LinePrefixes.CHECKBOX_UNCHECKED}c")
         state.setSelection(0, state.text.length)
 
         controller.toggleCheckbox()
@@ -161,7 +161,7 @@ class EditorControllerTest {
     fun `toggleCheckbox does not track lines that were not unchecked`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("${LinePrefixes.CHECKBOX_UNCHECKED}a\nplain\n${LinePrefixes.CHECKBOX_UNCHECKED}c")
+        state.initFromText("${LinePrefixes.CHECKBOX_UNCHECKED}a\nplain\n${LinePrefixes.CHECKBOX_UNCHECKED}c")
         state.setSelection(0, state.text.length)
 
         controller.toggleCheckbox()
@@ -177,7 +177,7 @@ class EditorControllerTest {
     fun `sortCompletedToBottom moves checked lines after unchecked`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("Title\n${LinePrefixes.CHECKBOX_CHECKED}done\n${LinePrefixes.CHECKBOX_UNCHECKED}todo")
+        state.initFromText("Title\n${LinePrefixes.CHECKBOX_CHECKED}done\n${LinePrefixes.CHECKBOX_UNCHECKED}todo")
 
         val changed = controller.sortCompletedToBottom()
 
@@ -191,7 +191,7 @@ class EditorControllerTest {
     fun `sortCompletedToBottom returns false when already sorted`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("Title\n${LinePrefixes.CHECKBOX_UNCHECKED}todo\n${LinePrefixes.CHECKBOX_CHECKED}done")
+        state.initFromText("Title\n${LinePrefixes.CHECKBOX_UNCHECKED}todo\n${LinePrefixes.CHECKBOX_CHECKED}done")
 
         assertFalse(controller.sortCompletedToBottom())
     }
@@ -200,7 +200,7 @@ class EditorControllerTest {
     fun `sortCompletedToBottom permutes noteIds alongside text`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("Title\n${LinePrefixes.CHECKBOX_CHECKED}done\n${LinePrefixes.CHECKBOX_UNCHECKED}todo")
+        state.initFromText("Title\n${LinePrefixes.CHECKBOX_CHECKED}done\n${LinePrefixes.CHECKBOX_UNCHECKED}todo")
         state.lines[0].noteIds = listOf("title-id")
         state.lines[1].noteIds = listOf("done-id")
         state.lines[2].noteIds = listOf("todo-id")
@@ -216,7 +216,7 @@ class EditorControllerTest {
     fun `sortCompletedToBottom clears recentlyCheckedIndices`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("Title\n${LinePrefixes.CHECKBOX_UNCHECKED}a")
+        state.initFromText("Title\n${LinePrefixes.CHECKBOX_UNCHECKED}a")
         state.focusedLineIndex = 1
         controller.toggleCheckbox()
         assertTrue(controller.recentlyCheckedIndices.isNotEmpty())
@@ -232,7 +232,7 @@ class EditorControllerTest {
     fun `asterisk space converts to bullet prefix`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("")
+        state.initFromText("")
 
         controller.updateLineContent(0, "* ", 2)
 
@@ -245,7 +245,7 @@ class EditorControllerTest {
     fun `asterisk space converts to bullet with trailing content`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("")
+        state.initFromText("")
 
         controller.updateLineContent(0, "* hello", 7)
 
@@ -257,7 +257,7 @@ class EditorControllerTest {
     fun `brackets space converts to unchecked checkbox prefix`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("")
+        state.initFromText("")
 
         controller.updateLineContent(0, "[] ", 3)
 
@@ -272,7 +272,7 @@ class EditorControllerTest {
     fun `brackets x space converts to checked checkbox prefix`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("")
+        state.initFromText("")
 
         controller.updateLineContent(0, "[x] ", 4)
 
@@ -287,7 +287,7 @@ class EditorControllerTest {
     fun `brackets without trailing space does not convert`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("")
+        state.initFromText("")
 
         controller.updateLineContent(0, "[]", 2)
 
@@ -298,7 +298,7 @@ class EditorControllerTest {
     fun `brackets x without trailing space does not convert`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("")
+        state.initFromText("")
 
         controller.updateLineContent(0, "[x]", 3)
 
@@ -309,7 +309,7 @@ class EditorControllerTest {
     fun `does not convert when line already has bullet prefix`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("${LinePrefixes.BULLET}text")
+        state.initFromText("${LinePrefixes.BULLET}text")
 
         controller.updateLineContent(0, "* more", 6)
 
@@ -320,7 +320,7 @@ class EditorControllerTest {
     fun `does not convert when line already has checkbox prefix`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("${LinePrefixes.CHECKBOX_UNCHECKED}text")
+        state.initFromText("${LinePrefixes.CHECKBOX_UNCHECKED}text")
 
         controller.updateLineContent(0, "* more", 6)
 
@@ -331,7 +331,7 @@ class EditorControllerTest {
     fun `converts asterisk space on indented line`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("\t")
+        state.initFromText("\t")
 
         controller.updateLineContent(0, "* hello", 7)
 
@@ -344,7 +344,7 @@ class EditorControllerTest {
     fun `converts brackets space on indented line`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("\t")
+        state.initFromText("\t")
 
         controller.updateLineContent(0, "[] ", 3)
 
@@ -356,7 +356,7 @@ class EditorControllerTest {
     fun `converts brackets x space on indented line`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("\t")
+        state.initFromText("\t")
 
         controller.updateLineContent(0, "[x] ", 4)
 
@@ -373,7 +373,7 @@ class EditorControllerTest {
     fun `isContentOffsetInSelection returns false when no selection`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("hello world")
+        state.initFromText("hello world")
 
         assertFalse(controller.isContentOffsetInSelection(0, 5))
     }
@@ -382,7 +382,7 @@ class EditorControllerTest {
     fun `isContentOffsetInSelection returns true for tap inside selection on same line`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("hello world")
+        state.initFromText("hello world")
         state.setSelection(2, 8)
 
         assertTrue(controller.isContentOffsetInSelection(0, 5))
@@ -392,7 +392,7 @@ class EditorControllerTest {
     fun `isContentOffsetInSelection returns false for tap outside selection`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("hello world")
+        state.initFromText("hello world")
         state.setSelection(2, 5)
 
         assertFalse(controller.isContentOffsetInSelection(0, 8))
@@ -404,7 +404,7 @@ class EditorControllerTest {
         // route the same boundary tap to the menu toggle.
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("hello world")
+        state.initFromText("hello world")
         state.setSelection(2, 5)
 
         assertTrue(controller.isContentOffsetInSelection(0, 2))
@@ -417,7 +417,7 @@ class EditorControllerTest {
         // which sits inside selection [4, 7].
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("${LinePrefixes.BULLET}hello")
+        state.initFromText("${LinePrefixes.BULLET}hello")
         state.setSelection(4, 7)
 
         assertTrue(controller.isContentOffsetInSelection(0, 3))
@@ -428,7 +428,7 @@ class EditorControllerTest {
     fun `isContentOffsetInSelection works on a later line`() {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText("first\nsecond\nthird")
+        state.initFromText("first\nsecond\nthird")
         // "first\n" = 6 chars; line 1 starts at offset 6. Select [8, 11] inside "second".
         state.setSelection(8, 11)
 

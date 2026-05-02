@@ -1,5 +1,6 @@
 package org.alkaline.taskbrain.ui.currentnote.undo
 
+import org.alkaline.taskbrain.ui.currentnote.initFromText
 import org.alkaline.taskbrain.ui.currentnote.EditorController
 import org.alkaline.taskbrain.ui.currentnote.EditorState
 import org.junit.Assert.assertEquals
@@ -26,7 +27,7 @@ class UnifiedUndoManagerTest {
     ): Pair<EditorState, EditorController> {
         val state = EditorState()
         val controller = EditorController(state)
-        state.updateFromText(initialText)
+        state.initFromText(initialText)
         controller.undoManager.setBaseline(state)
         unified.registerEditor(contextId, controller)
         return state to controller
@@ -35,7 +36,7 @@ class UnifiedUndoManagerTest {
     /** Simulates an edit: update text, mark changed, commit. */
     private fun edit(state: EditorState, controller: EditorController, newText: String) {
         controller.undoManager.beginEditingLine(state, 0)
-        state.updateFromText(newText)
+        state.initFromText(newText)
         controller.undoManager.markContentChanged()
         controller.commitUndoState()
     }
@@ -113,11 +114,11 @@ class UnifiedUndoManagerTest {
         // After undo, stateA still has "a-v1" text (undo returns snapshot but
         // UnifiedUndoManager delegates restore to caller). For redo to work,
         // simulate that the caller restored the state.
-        stateA.updateFromText("a-v0")
+        stateA.initFromText("a-v0")
 
         val undo2 = unified.undo("main") { }
         assertNotNull(undo2)
-        stateMain.updateFromText("main-v0")
+        stateMain.initFromText("main-v0")
 
         // Redo should restore main first (it was undone last)
         val redo1 = unified.redo("main") { }
@@ -125,7 +126,7 @@ class UnifiedUndoManagerTest {
         assertEquals("main", redo1!!.contextId)
 
         // Redo should restore inline A next
-        stateMain.updateFromText("main-v1")
+        stateMain.initFromText("main-v1")
         val redo2 = unified.redo("main") { }
         assertNotNull(redo2)
         assertEquals("inlineA", redo2!!.contextId)
@@ -193,7 +194,7 @@ class UnifiedUndoManagerTest {
 
         // Undo from inlineA context (no activation needed)
         unified.undo("inlineA") { }
-        stateA.updateFromText("a-v0")
+        stateA.initFromText("a-v0")
 
         val activations = mutableListOf<String>()
 
@@ -238,7 +239,7 @@ class UnifiedUndoManagerTest {
 
         // Start editing but don't commit
         controller.undoManager.beginEditingLine(state, 0)
-        state.updateFromText("v1")
+        state.initFromText("v1")
         controller.undoManager.markContentChanged()
 
         assertTrue(unified.canUndo)
@@ -263,7 +264,7 @@ class UnifiedUndoManagerTest {
         assertTrue(unified.canRedo)
 
         // Restore state after undo, then make a new edit
-        state.updateFromText("v0")
+        state.initFromText("v0")
         edit(state, controller, "v2")
 
         assertFalse(unified.canRedo)

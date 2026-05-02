@@ -719,52 +719,6 @@ class EditorState {
         if (changed) notifyChange()
     }
 
-    @Deprecated(
-        "Lossy: reconciles noteIds by content match and silently drops any line whose " +
-            "content doesn't match an old line. Use initFromNoteLines(…, preserveCursor = true) " +
-            "to re-seed from a structured NoteLine list, or use one of the surgical mutation " +
-            "helpers (replaceFirstLineContent, replaceDirectiveText, …) to modify specific lines.",
-        level = DeprecationLevel.WARNING,
-    )
-    internal fun updateFromText(newText: String) {
-        val oldNoteIds = lines.map { it.noteIds }
-        val oldContents = lines.map { it.text }
-        val newLines = newText.split("\n")
-
-        val unmatched = mutableListOf<Pair<Int, String>>()
-        val reconciled = org.alkaline.taskbrain.data.reconcileLineNoteIds(
-            oldContents = oldContents,
-            oldNoteIds = oldNoteIds,
-            newContents = newLines,
-            onUnmatchedNonEmpty = { idx, content -> unmatched.add(idx to content) },
-        )
-        val withParent = org.alkaline.taskbrain.data.enforceParentNoteId(reconciled, parentNoteId)
-
-        if (parentNoteId.isEmpty() && newLines.isNotEmpty() && newLines[0].isNotEmpty()) {
-            android.util.Log.w(
-                "LineReconciliation",
-                "EditorState.updateFromText: parentNoteId is empty — line[0] will not get parent enforcement. " +
-                    "newLines.size=${newLines.size}, oldLines.size=${oldContents.size}, " +
-                    "first='${newLines[0].take(60)}'"
-            )
-        }
-        if (unmatched.isNotEmpty()) {
-            android.util.Log.w(
-                "LineReconciliation",
-                "EditorState.updateFromText: ${unmatched.size} non-empty new line(s) lost noteIds " +
-                    "(no exact or similarity match). " +
-                    "oldLines.size=${oldContents.size}, newLines.size=${newLines.size}. " +
-                    "First: ${unmatched.take(3).joinToString { "[${it.first}] '${it.second.take(40)}'" }}"
-            )
-        }
-
-        lines.clear()
-        newLines.forEachIndexed { index, lineText ->
-            lines.add(LineState(lineText, lineText.length, withParent[index]))
-        }
-        focusedLineIndex = focusedLineIndex.coerceIn(0, lines.lastIndex.coerceAtLeast(0))
-    }
-
     /**
      * Initializes the editor from note lines with their associated noteIds.
      * Used when loading a note from Firestore.

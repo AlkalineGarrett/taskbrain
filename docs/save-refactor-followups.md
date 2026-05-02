@@ -1,6 +1,6 @@
 # Save-refactor follow-ups
 
-Deferred items, known limitations, and follow-up work from Phases 0–7 of the
+Deferred items, known limitations, and follow-up work from Phases 0–8 of the
 save-path refactor. Review after the plan completes; not all of these are
 worth doing.
 
@@ -26,13 +26,13 @@ Organized by phase, with priority hints:
   on Android — needs an async refactor to fully remove. The Phase 0 fix
   closed the `CurrentNoteViewModel.loadContent` path; this one stays. **Low.**
 
-## Phase 8 (planned cleanup, not yet done)
+## Phase 8 (done — kept here for context)
 
-- **Migrate `updateFromText` tests and delete the function.** ~50 test usages
-  on Android; the production code no longer calls it. Mechanical migration:
-  replace `editorState.updateFromText(text)` with `editorState.initFromNoteLines(...)`
-  in tests, then delete the function. **Medium.** This is the last
-  pre-planned item; everything else below is genuinely opportunistic.
+- **`updateFromText` migration and deletion** — completed. ~340 mechanical
+  call-site replacements moved tests to a new `EditorState.initFromText`
+  test helper (in `EditorStateTestHelpers.kt`); 4 redundant reconciliation
+  tests in `NoteIdPropagationTest` were dropped (covered by
+  `LineReconciliationTest`); production `updateFromText` is gone.
 
 ## Phase 1 (schema)
 
