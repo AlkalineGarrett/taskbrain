@@ -12,6 +12,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import org.alkaline.taskbrain.data.NoteLine
+import org.alkaline.taskbrain.data.NoteState
 import org.alkaline.taskbrain.data.NoteStore
 
 /**
@@ -87,7 +88,7 @@ fun rememberEditorAndContent(
             ?: emptyList()
     }
     val initialContent = initialNoteLines.joinToString("\n") { it.content }
-    val initialIsDeleted = cachedContent?.isDeleted ?: (storeContent?.state == "deleted")
+    val initialIsDeleted = cachedContent?.isDeleted ?: (storeContent?.state == NoteState.DELETED)
     val initialShowCompleted = storeContent?.showCompleted ?: true
 
     val isNoteDeletedState = remember(displayedNoteId) { mutableStateOf(initialIsDeleted) }

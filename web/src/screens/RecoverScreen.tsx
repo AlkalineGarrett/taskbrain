@@ -176,6 +176,7 @@ export function RecoverScreen() {
   const [titles, setTitles] = useState<Map<number, string>>(new Map())
   const [loading, setLoading] = useState(true)
   const [busyIndex, setBusyIndex] = useState<number | null>(null)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   useEffect(() => {
     void loadNotes()
@@ -200,6 +201,7 @@ export function RecoverScreen() {
     const group = groups[index]
     if (!group) return
     setBusyIndex(index)
+    setErrorMessage(null)
     try {
       const title = titles.get(index) ?? ''
       const noteId = await repo.createNote()
@@ -212,7 +214,7 @@ export function RecoverScreen() {
       setGroups(prev => prev.filter((_, i) => i !== index))
     } catch (e) {
       console.error('Create note failed:', e)
-      alert('Create note failed: ' + (e instanceof Error ? e.message : String(e)))
+      setErrorMessage('Create note failed: ' + (e instanceof Error ? e.message : String(e)))
     } finally {
       setBusyIndex(null)
     }
@@ -222,12 +224,13 @@ export function RecoverScreen() {
     const group = groups[index]
     if (!group) return
     setBusyIndex(index)
+    setErrorMessage(null)
     try {
       await noteStore.enqueueSave(() => repo.restoreCutDeletedNotes(group.notes.map(n => n.id)))
       setGroups(prev => prev.filter((_, i) => i !== index))
     } catch (e) {
       console.error('Restore parked cuts failed:', e)
-      alert('Restore failed: ' + (e instanceof Error ? e.message : String(e)))
+      setErrorMessage('Restore failed: ' + (e instanceof Error ? e.message : String(e)))
     } finally {
       setBusyIndex(null)
     }
@@ -243,6 +246,13 @@ export function RecoverScreen() {
       <p className={styles.subtitle}>
         Orphaned notes (broken parent chains), batch-deleted notes, and parked cuts (lines cut but never pasted), sorted by most recent.
       </p>
+
+      {errorMessage && (
+        <div className={styles.errorBanner}>
+          <span>{errorMessage}</span>
+          <button className={styles.errorDismiss} onClick={() => setErrorMessage(null)}>Dismiss</button>
+        </div>
+      )}
 
       {groups.length === 0 && <p>No recoverable notes found.</p>}
 

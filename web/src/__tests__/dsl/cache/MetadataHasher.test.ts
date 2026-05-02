@@ -27,6 +27,9 @@ function makeNote(id: string, overrides: Partial<Note> = {}): Note {
     rootNoteId: null,
     showCompleted: true,
     onceCache: {},
+    version: 0,
+    lastWriterOpId: null,
+    containedNotesBase: null,
     ...overrides,
   }
 }

@@ -1,5 +1,5 @@
 import { firstLineOf, type Note } from './Note'
-import { isLive } from './NoteState'
+import { isLive, NoteState } from './NoteState'
 import type { NoteStats } from './NoteStats'
 
 export type NoteSortMode = 'recent' | 'frequent' | 'consistent' | 'alphabetical'
@@ -122,7 +122,7 @@ export function filterAndSortNotesByMode(
 }
 
 export function filterDeletedNotes(notes: Note[]): Note[] {
-  return notes.filter((n) => isTopLevel(n) && n.state === 'deleted')
+  return notes.filter((n) => isTopLevel(n) && n.state === NoteState.DELETED)
 }
 
 export function filterAndSortDeletedNotes(notes: Note[]): Note[] {

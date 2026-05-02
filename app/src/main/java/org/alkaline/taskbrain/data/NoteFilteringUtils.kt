@@ -19,9 +19,7 @@ object NoteFilteringUtils {
     private const val MS_PER_DAY = 24L * 60L * 60L * 1000L
 
     fun filterTopLevelNotes(notes: List<Note>): List<Note> {
-        return notes.filter { note ->
-            note.parentNoteId == null && note.state != "deleted"
-        }
+        return notes.filter { note -> note.parentNoteId == null && isLive(note.state) }
     }
 
     fun sortByUpdatedAtDescending(notes: List<Note>): List<Note> {
@@ -79,7 +77,7 @@ object NoteFilteringUtils {
 
     fun filterDeletedNotes(notes: List<Note>): List<Note> {
         return notes.filter { note ->
-            note.parentNoteId == null && note.state == "deleted"
+            note.parentNoteId == null && note.state == NoteState.DELETED
         }
     }
 

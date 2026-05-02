@@ -91,6 +91,7 @@ describe('useUnifiedUndo', () => {
       id: 'view1', userId: '', parentNoteId: null, content: 'A', createdAt: null, updatedAt: null,
       tags: [], containedNotes: [], state: null, path: '', rootNoteId: null,
       showCompleted: true, onceCache: {},
+      version: 0, lastWriterOpId: null, containedNotesBase: null,
     }])
     rerender()
     const session = sessionManager.getSession('view1')!

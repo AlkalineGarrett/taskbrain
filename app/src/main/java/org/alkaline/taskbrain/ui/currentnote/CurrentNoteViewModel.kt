@@ -33,6 +33,7 @@ import org.alkaline.taskbrain.ui.currentnote.components.RecurrenceConfig
 import org.alkaline.taskbrain.data.NoteLine
 import org.alkaline.taskbrain.data.NoteRepository
 import org.alkaline.taskbrain.data.NoteStatsRepository
+import org.alkaline.taskbrain.data.NoteState
 import org.alkaline.taskbrain.data.NoteStore
 import org.alkaline.taskbrain.data.PrompterAgent
 import org.alkaline.taskbrain.dsl.cache.MetadataHasher
@@ -211,7 +212,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 val storeLines = NoteStore.getNoteLinesById(noteId) ?: return@collect
                 applyNoteContent(
                     noteId, storeLines,
-                    isDeleted = storeNote.state == "deleted",
+                    isDeleted = storeNote.state == NoteState.DELETED,
                     showCompleted = storeNote.showCompleted,
                 )
             }
@@ -451,7 +452,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             Log.d(TAG, "loadContent: using NoteStore content for $noteId (${storeLines.size} lines)")
             applyNoteContent(
                 noteId, storeLines,
-                isDeleted = storeNote.state == "deleted",
+                isDeleted = storeNote.state == NoteState.DELETED,
                 showCompleted = storeNote.showCompleted,
             )
             scheduleRecordView(noteId)

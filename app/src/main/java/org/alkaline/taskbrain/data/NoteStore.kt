@@ -103,7 +103,7 @@ object NoteStore {
     private var persistCallback: ((noteId: String, content: String) -> Unit)? = null
     private val pendingPersistContent = mutableMapOf<String, String>()
     private val pendingPersistRunnables = mutableMapOf<String, Runnable>()
-    private val persistHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private const val PERSIST_DEBOUNCE_MS = 500L
 
     /**
@@ -126,14 +126,14 @@ object NoteStore {
     private fun debouncePersist(noteId: String, content: String) {
         pendingPersistContent[noteId] = content
         // Cancel any previously scheduled persist for this note
-        pendingPersistRunnables.remove(noteId)?.let { persistHandler.removeCallbacks(it) }
+        pendingPersistRunnables.remove(noteId)?.let { mainHandler.removeCallbacks(it) }
         val runnable = Runnable {
             pendingPersistRunnables.remove(noteId)
             val savedContent = pendingPersistContent.remove(noteId) ?: return@Runnable
             persistCallback?.invoke(noteId, savedContent)
         }
         pendingPersistRunnables[noteId] = runnable
-        persistHandler.postDelayed(runnable, PERSIST_DEBOUNCE_MS)
+        mainHandler.postDelayed(runnable, PERSIST_DEBOUNCE_MS)
     }
 
     /**
@@ -209,7 +209,7 @@ object NoteStore {
         rawNotesLock.write { rawNotes.clear() }
         pendingPersistContent.clear()
         pendingPersistRunnables.clear()
-        persistHandler.removeCallbacksAndMessages(null)
+        mainHandler.removeCallbacksAndMessages(null)
         persistCallback = null
         _notes.value = emptyList()
         _error.value = null
@@ -315,7 +315,7 @@ object NoteStore {
      * genuine external change that arrives later.
      */
     fun releasePendingOp(opId: String) {
-        persistHandler.postDelayed({ pendingOpIds.remove(opId) }, PENDING_OP_TTL_MS)
+        mainHandler.postDelayed({ pendingOpIds.remove(opId) }, PENDING_OP_TTL_MS)
     }
 
     /** True when [opId] matches a recently-registered local save. */

@@ -367,6 +367,9 @@ function deserializeNoteVal(map: Record<string, unknown>): NoteVal {
     rootNoteId: null,
     showCompleted: true,
     onceCache: {},
+    version: 0,
+    lastWriterOpId: null,
+    containedNotesBase: null,
   }
   return noteVal(note)
 }
@@ -388,6 +391,9 @@ function deserializeViewVal(map: Record<string, unknown>): ViewVal {
     rootNoteId: null,
     showCompleted: true,
     onceCache: {},
+    version: 0,
+    lastWriterOpId: null,
+    containedNotesBase: null,
   }))
   const renderedContents = (map.renderedContents as string[]) ?? null
   return viewVal(notes, renderedContents)

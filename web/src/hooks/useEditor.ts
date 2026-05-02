@@ -302,6 +302,9 @@ export function useEditor(noteId: string | undefined) {
   const prepareMainSaveItem = useCallback((targetNoteId: string): {
     trackedLines: NoteLine[]
     localBase: string[] | null
+    /** Joined text of the editor's current lines — used by the save
+     *  coordinator for optimistic NoteStore updates. */
+    text: string
     applyResult: (createdIds: Map<number, string>) => void
   } => {
     controller.sortCompletedToBottom()
@@ -315,6 +318,7 @@ export function useEditor(noteId: string | undefined) {
     }
 
     const localBase = localBaseRef.current
+    const text = editorState.text
 
     const applyResult = (createdIds: Map<number, string>) => {
       if (currentNoteIdRef.current !== targetNoteId) return
@@ -329,7 +333,7 @@ export function useEditor(noteId: string | undefined) {
       setDirty(false)
     }
 
-    return { trackedLines: newTracked, localBase, applyResult }
+    return { trackedLines: newTracked, localBase, text, applyResult }
   }, [editorState, controller, captureLocalBase])
 
   // Core save logic — accepts noteId to avoid stale closure bugs. Used by

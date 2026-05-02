@@ -43,6 +43,18 @@ interface SavePlan {
 }
 
 /**
+ * Per-batch context shared by every [planSave] in a single
+ * `saveNoteWithChildren` or `saveMultipleNotes` invocation. Bundling these
+ * together keeps the planner signatures from sprawling and ensures every plan
+ * in the batch sees the same userId / opId / cut-buffer snapshot.
+ */
+interface SaveContext {
+  userId: string
+  opId: string
+  pendingCuts: Map<string, string>
+}
+
+/**
  * One unit of work for [NoteRepository.saveMultipleNotes]: the note id, the
  * editor's tracked lines, and (optionally) the `containedNotes` value the
  * editor observed when this edit session started. The base anchors a 3-way
@@ -252,7 +264,7 @@ export class NoteRepository {
         if (rawNote && storeLines) {
           return {
             lines: storeLines,
-            isDeleted: rawNote.state === 'deleted',
+            isDeleted: rawNote.state === NoteState.DELETED,
             showCompleted: rawNote.showCompleted ?? true,
           }
         }
@@ -270,7 +282,7 @@ export class NoteRepository {
 
       return {
         lines: allLines,
-        isDeleted: note.state === 'deleted',
+        isDeleted: note.state === NoteState.DELETED,
         showCompleted: note.showCompleted ?? true,
       }
     })
@@ -385,7 +397,7 @@ export class NoteRepository {
       const docSnap = await getDoc(this.noteRef(noteId))
       firestoreUsage.recordRead('isNoteDeleted', 'DOC_GET')
       if (!docSnap.exists()) return false
-      return docSnap.data().state === 'deleted'
+      return docSnap.data().state === NoteState.DELETED
     })
   }
 
@@ -410,9 +422,9 @@ export class NoteRepository {
       if (trackedLines.length === 0) return new Map()
       const userId = this.requireUserId()
       return this.withPendingOp(async (opId) => {
-        const pendingCuts = noteStore.getPendingCuts()
-        const plan = this.planSave({ noteId, trackedLines, localBase }, userId, opId, pendingCuts)
-        const cutDeleteOps = this.buildCutDeleteOps(pendingCuts, [plan.survivingIds], opId)
+        const ctx: SaveContext = { userId, opId, pendingCuts: noteStore.getPendingCuts() }
+        const plan = this.planSave({ noteId, trackedLines, localBase }, ctx)
+        const cutDeleteOps = this.buildCutDeleteOps([plan.survivingIds], ctx)
         await this.commitInBatches('saveNoteWithChildren', [...plan.ops, ...cutDeleteOps.ops])
         for (const id of cutDeleteOps.committedCutIds) noteStore.clearPendingCut(id)
         return plan.createdIds
@@ -434,11 +446,11 @@ export class NoteRepository {
       if (items.length === 0) return new Map()
       const userId = this.requireUserId()
       return this.withPendingOp(async (opId) => {
-        const pendingCuts = noteStore.getPendingCuts()
+        const ctx: SaveContext = { userId, opId, pendingCuts: noteStore.getPendingCuts() }
         const plans = items
           .filter((item) => item.trackedLines.length > 0)
-          .map((item) => this.planSave(item, userId, opId, pendingCuts))
-        const cutDeleteOps = this.buildCutDeleteOps(pendingCuts, plans.map((p) => p.survivingIds), opId)
+          .map((item) => this.planSave(item, ctx))
+        const cutDeleteOps = this.buildCutDeleteOps(plans.map((p) => p.survivingIds), ctx)
         const allOps = plans.flatMap((p) => p.ops).concat(cutDeleteOps.ops)
         await this.commitInBatches('saveMultipleNotes', allOps)
         for (const id of cutDeleteOps.committedCutIds) noteStore.clearPendingCut(id)
@@ -461,22 +473,21 @@ export class NoteRepository {
    * the cut buffer is fully drained on commit and doesn't leak phantoms.
    */
   private buildCutDeleteOps(
-    pendingCuts: Map<string, string>,
     survivingIdSets: Set<string>[],
-    opId: string,
+    ctx: SaveContext,
   ): { ops: BatchWriteOp[]; committedCutIds: string[] } {
     // Partition pendingCuts: ids being revived in this batch (skip the
     // cut-delete write but still clear from buffer) vs ids needing parking.
     const idsToPark: string[] = []
     const committedCutIds: string[] = []
-    for (const [lineId] of pendingCuts) {
+    for (const [lineId] of ctx.pendingCuts) {
       committedCutIds.push(lineId)
       const reviving = survivingIdSets.some((s) => s.has(lineId))
       // The destination's planSave writes state=null for revived ids; we
       // only need to schedule the cut-delete write for the rest.
       if (!reviving) idsToPark.push(lineId)
     }
-    const ops = this.buildStateChangeOps(idsToPark, NoteState.CUT_DELETE, opId)
+    const ops = this.buildStateChangeOps(idsToPark, NoteState.CUT_DELETE, ctx.opId)
     return { ops, committedCutIds }
   }
 
@@ -486,21 +497,20 @@ export class NoteRepository {
    * batch). Assertions throw inline so a bad item in a multi-note save aborts
    * the whole batch before any commit.
    *
-   * [opId] is the same value for every doc in the batch; the listener uses
-   * it to identify our own server echo and skip the editor reload.
+   * [ctx.opId] is the same value for every doc in the batch; the listener
+   * uses it to identify our own server echo and skip the editor reload.
    * [item.localBase], when non-null, is the `containedNotes` value the editor
    * observed at edit-session start; used to 3-way merge against the current
    * remote so concurrent edits from other clients aren't silently overwritten.
-   * [pendingCuts] is the editor's cut buffer; planSave excludes its keys
+   * [ctx.pendingCuts] is the editor's cut buffer; planSave excludes its keys
    * from soft-delete so cross-note moves aren't lost when this note's save
    * runs ahead of the destination's.
    */
   private planSave(
     item: SaveItem,
-    userId: string,
-    opId: string,
-    pendingCuts: Map<string, string>,
+    ctx: SaveContext,
   ): SavePlan {
+    const { userId, opId, pendingCuts } = ctx
     const { noteId, trackedLines, localBase } = item
     this.assertNoteStoreLoaded('saveNoteWithChildren', noteId)
     this.warnIfDescendantsLikelyStale('saveNoteWithChildren', noteId)
@@ -721,7 +731,7 @@ export class NoteRepository {
       ops.push({
         ref: this.noteRef(id),
         data: {
-          state: 'deleted',
+          state: NoteState.DELETED,
           ...stampWrite(opId, noteStore.getRawNoteById(id)),
           updatedAt: serverTimestamp(),
         },
@@ -1076,7 +1086,7 @@ export class NoteRepository {
       const userId = this.requireUserId()
       const q = query(
         this.notesRef,
-        where('state', '==', 'deleted'),
+        where('state', '==', NoteState.DELETED),
         where('userId', '==', userId),
       )
       const snap = await getDocs(q)
@@ -1265,7 +1275,8 @@ function reconcileNullNoteIdsByContent(
     contentPreview: string
     recoveredId: string | null
   }
-  const nullTrace: NullIdRecovery[] = []
+  // Lazily allocated so the common all-ids-real save path allocates nothing.
+  let nullTrace: NullIdRecovery[] | null = null
   for (let i = 1; i < result.length; i++) {
     const content = result[i]!.content.replace(/^\t+/, '')
     const existing = result[i]!.noteId
@@ -1294,7 +1305,8 @@ function reconcileNullNoteIdsByContent(
         reconciledFromNull++
       }
     }
-    nullTrace.push({
+    const trace = nullTrace ?? (nullTrace = [])
+    trace.push({
       lineIndex: i,
       parentLineIndex: parentLineOf[i]!,
       parentId,
@@ -1303,7 +1315,7 @@ function reconcileNullNoteIdsByContent(
     })
   }
 
-  if (nullTrace.length > 0) {
+  if (nullTrace !== null && nullTrace.length > 0) {
     // Upstream lossy path produced bare null ids on non-empty lines. Logged
     // at error level — null arrival at save means an editor or load path is
     // dropping ids and should be fixed upstream. Includes a stack so the

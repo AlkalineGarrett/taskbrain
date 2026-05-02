@@ -90,3 +90,27 @@
   border-radius: 4px;
   font-size: 0.85rem;
 }
+
+.errorBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--color-error-bg, #fdecea);
+  color: var(--color-error-hover);
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  margin-bottom: 0.5rem;
+}
+
+.errorDismiss {
+  background: none;
+  border: none;
+  color: var(--color-error-hover);
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+  padding: 0.25rem 0.5rem;
+  margin-left: 1rem;
+  flex-shrink: 0;
+}

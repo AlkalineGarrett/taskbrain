@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { NoteLine } from '@/data/Note'
 import { NoteRepository } from '@/data/NoteRepository'
 import { noteStore } from '@/data/NoteStore'
-import type { EditorState } from '@/editor/EditorState'
 import type { InlineEditSession } from '@/editor/InlineEditSession'
 import type { InlineSessionManager } from '@/editor/InlineSessionManager'
 import type { SaveStatus } from '@/components/CommandBar'
@@ -12,10 +11,10 @@ const noteRepo = new NoteRepository(db, auth)
 
 interface UseSaveCoordinatorOptions {
   noteId: string | null | undefined
-  editorState: EditorState
   prepareMainSaveItem: (targetNoteId: string) => {
     trackedLines: NoteLine[]
     localBase: string[] | null
+    text: string
     applyResult: (createdIds: Map<number, string>) => void
   }
   setSaveError: (msg: string | null) => void
@@ -41,7 +40,6 @@ interface SaveSlot {
  */
 export function useSaveCoordinator({
   noteId,
-  editorState,
   prepareMainSaveItem,
   setSaveError,
   dirty,
@@ -111,7 +109,7 @@ export function useSaveCoordinator({
           localBase: main.localBase,
           applyResult: main.applyResult,
         })
-        noteStore.updateContentIfChanged(noteId, editorState.text)
+        noteStore.updateContentIfChanged(noteId, main.text)
       }
 
       // Resolve inline session tracked lines in parallel: a NoteStore miss
@@ -164,7 +162,7 @@ export function useSaveCoordinator({
       setSaveError(e instanceof Error ? e.message : 'Save failed')
       setSaveStatus('partial-error')
     }
-  }, [noteId, editorState, dirty, sessionManager, prepareMainSaveItem, setSaveError, flushOnceCacheEntries, invalidateAndRecompute])
+  }, [noteId, dirty, sessionManager, prepareMainSaveItem, setSaveError, flushOnceCacheEntries, invalidateAndRecompute])
 
   useEffect(() => {
     if (anyDirty && (saveStatus === 'saved' || saveStatus === 'partial-error')) {

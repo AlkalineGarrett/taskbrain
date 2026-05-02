@@ -24,25 +24,25 @@ export interface Note {
    * Used by listeners to drop out-of-order/stale echoes (apply only if
    * version > lastAppliedVersion). Advisory — not enforced via transactions;
    * concurrent writes from two clients can both produce the same version, in
-   * which case last-write-wins at Firestore. Optional; absent means 0
-   * (legacy docs predating this field). Read sites should default to 0.
+   * which case last-write-wins at Firestore. Defaults to 0 on legacy docs
+   * predating this field (set by [noteFromFirestore]).
    */
-  version?: number
+  version: number
   /**
    * Identity stamp written by the save that produced this revision. The local
    * listener checks each echo's lastWriterOpId against an in-memory set of
    * in-flight saves; matches are treated as our own echo (raw cache update
-   * only, no editor reload). Distinct UUID per save batch. Optional; absent
-   * on legacy docs and on writes from clients predating this field.
+   * only, no editor reload). Distinct UUID per save batch. `null` on legacy
+   * docs and on writes from clients predating this field.
    */
-  lastWriterOpId?: string | null
+  lastWriterOpId: string | null
   /**
    * Snapshot of containedNotes as the saving client read it before applying
    * its diff. Receiving clients use this for 3-way merge: base = this field,
-   * local = client's current view, remote = the new containedNotes. Only
-   * present on writes that staged a 3-way-merge-eligible change.
+   * local = client's current view, remote = the new containedNotes. `null`
+   * when the writing save didn't stage a merge-eligible change.
    */
-  containedNotesBase?: string[] | null
+  containedNotesBase: string[] | null
 }
 
 export interface NoteLine {

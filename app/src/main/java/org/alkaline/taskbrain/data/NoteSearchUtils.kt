@@ -50,7 +50,7 @@ object NoteSearchUtils {
             if (nameMatches.isEmpty() && contentSnippets.isEmpty()) continue
 
             val result = NoteSearchResult(note, nameMatches, contentSnippets)
-            if (note.state == "deleted") {
+            if (note.state == NoteState.DELETED) {
                 deletedResults.add(result)
             } else {
                 activeResults.add(result)

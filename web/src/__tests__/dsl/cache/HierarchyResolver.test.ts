@@ -18,6 +18,9 @@ function makeNote(id: string, path: string): Note {
     rootNoteId: null,
     showCompleted: true,
     onceCache: {},
+    version: 0,
+    lastWriterOpId: null,
+    containedNotesBase: null,
   }
 }
 

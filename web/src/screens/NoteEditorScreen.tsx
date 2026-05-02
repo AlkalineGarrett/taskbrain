@@ -1,7 +1,7 @@
 import { useParams } from 'react-router-dom'
 import { useEffect, useState, useMemo } from 'react'
 import { noteStore } from '@/data/NoteStore'
-import { isLive } from '@/data/NoteState'
+import { isLive, NoteState } from '@/data/NoteState'
 import { useAllNotes, useNoteStoreError } from '@/hooks/useNoteStore'
 import { NoteRepositoryOperations } from '@/dsl/runtime/NoteRepositoryOperations'
 import { useEditor } from '@/hooks/useEditor'
@@ -97,7 +97,6 @@ export function NoteEditorScreen() {
 
   const { saveAll, saveStatus, anyDirty } = useSaveCoordinator({
     noteId,
-    editorState,
     prepareMainSaveItem,
     setSaveError,
     dirty,
@@ -184,7 +183,7 @@ export function NoteEditorScreen() {
         canRedo={unifiedUndoManager.canRedo}
         onDelete={() => setShowDeleteConfirm(true)}
         onRestore={() => void handleRestoreNote()}
-        isDeleted={currentNote?.state === 'deleted'}
+        isDeleted={currentNote?.state === NoteState.DELETED}
         anyDirty={anyDirty}
         saveStatus={saveStatus}
         needsFix={needsFix}
@@ -222,7 +221,7 @@ export function NoteEditorScreen() {
       <div className={styles.editorArea}>
         <div
           ref={editorRef}
-          className={`${styles.editor} ${currentNote?.state === 'deleted' ? styles.deletedEditor : ''}`}
+          className={`${styles.editor} ${currentNote?.state === NoteState.DELETED ? styles.deletedEditor : ''}`}
         >
         <div ref={dropCursorRef} className={styles.dropCursor} style={{ display: 'none' }} />
         {displayItems.map((item, i) =>

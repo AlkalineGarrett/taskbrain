@@ -40,16 +40,9 @@ vi.mock('@/data/NoteStore', () => ({
   },
 }))
 
-import { EditorState } from '@/editor/EditorState'
 import { InlineSessionManager } from '@/editor/InlineSessionManager'
 import { useSaveCoordinator } from '@/hooks/useSaveCoordinator'
 import { note } from '../factories'
-
-function makeState() {
-  const state = new EditorState()
-  state.initFromNoteLines([{ text: 'title', noteIds: ['real-1'] }])
-  return state
-}
 
 function setup(opts: {
   prepareMainSaveItem?: (id: string) => { trackedLines: { content: string; noteId: string | null }[]; applyResult: (ids: Map<number, string>) => void }
@@ -59,7 +52,6 @@ function setup(opts: {
   pendingOnceCacheEntries?: Record<string, Record<string, unknown>> | null
   sessionManager?: InlineSessionManager
 } = {}) {
-  const editorState = makeState()
   const sessionManager = opts.sessionManager ?? new InlineSessionManager()
   const invalidate = vi.fn()
   const setSaveError = opts.setSaveError ?? vi.fn()
@@ -67,12 +59,12 @@ function setup(opts: {
   const prepareMainSaveItem = opts.prepareMainSaveItem
     ?? vi.fn((id: string) => ({
       trackedLines: [{ content: 'title', noteId: id }],
+      text: 'title',
       applyResult,
     }))
   const utils = renderHook(({ dirty }) =>
     useSaveCoordinator({
       noteId: opts.noteId ?? 'note-1',
-      editorState,
       prepareMainSaveItem: prepareMainSaveItem as never,
       setSaveError,
       dirty,
@@ -82,7 +74,7 @@ function setup(opts: {
     }),
     { initialProps: { dirty: opts.dirty ?? false } },
   )
-  return { ...utils, invalidate, sessionManager, editorState, prepareMainSaveItem, applyResult, setSaveError }
+  return { ...utils, invalidate, sessionManager, prepareMainSaveItem, applyResult, setSaveError }
 }
 
 describe('useSaveCoordinator', () => {

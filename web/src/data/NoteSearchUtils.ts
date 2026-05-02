@@ -1,4 +1,5 @@
 import type { Note } from './Note'
+import { NoteState } from './NoteState'
 import {
   sortByUpdatedAtDescending,
 } from './NoteFilteringUtils'
@@ -52,7 +53,7 @@ export function searchNotes(
     if (nameMatches.length === 0 && contentSnippets.length === 0) continue
 
     const result: NoteSearchResult = { note, nameMatches, contentSnippets }
-    if (note.state === 'deleted') {
+    if (note.state === NoteState.DELETED) {
       deletedResults.push(result)
     } else {
       activeResults.push(result)
