@@ -1027,6 +1027,57 @@ describe('NoteRepository', () => {
 
   // endregion
 
+  // region restoreCutDeletedNotes (Phase 6)
+
+  describe('restoreCutDeletedNotes', () => {
+    it('flips state=null for each id and stamps a fresh opId', async () => {
+      const c1 = note({ id: 'c1', content: 'a', state: 'cut-delete', parentNoteId: 'r', rootNoteId: 'r', version: 3 })
+      const c2 = note({ id: 'c2', content: 'b', state: 'cut-delete', parentNoteId: 'r', rootNoteId: 'r', version: 1 })
+      vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
+        id === 'c1' ? c1 : id === 'c2' ? c2 : undefined,
+      )
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => ({ id: args[args.length - 1] } as any))
+      const { batch, setSpy } = setupSaveBatch()
+
+      await repository.restoreCutDeletedNotes(['c1', 'c2'])
+
+      expect(batch.commit).toHaveBeenCalled()
+      const writes = setSpy.mock.calls
+      expect(writes.length).toBe(2)
+      // Every write sets state=null and bumps version (3→4, 1→2).
+      const c1Write = writes.find((c: any[]) => c[1].version === 4)
+      const c2Write = writes.find((c: any[]) => c[1].version === 2)
+      expect(c1Write).toBeDefined()
+      expect(c2Write).toBeDefined()
+      expect(c1Write![1].state).toBeNull()
+      expect(c2Write![1].state).toBeNull()
+      // Every write carries a single shared lastWriterOpId.
+      const opIds = writes.map((c: any[]) => c[1].lastWriterOpId)
+      expect(opIds.every((id) => id != null && id === opIds[0])).toBe(true)
+    })
+
+    it('skips ids that are not in NoteStore', async () => {
+      // E.g., the doc was hard-deleted between the user opening Recover and
+      // pressing Restore. Skip rather than write a phantom entry.
+      vi.spyOn(noteStore, 'getRawNoteById').mockReturnValue(undefined)
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => ({ id: args[args.length - 1] } as any))
+      const { batch, setSpy } = setupSaveBatch()
+
+      await repository.restoreCutDeletedNotes(['ghost-1', 'ghost-2'])
+
+      expect(setSpy.mock.calls.length).toBe(0)
+      expect(batch.commit).not.toHaveBeenCalled()
+    })
+
+    it('is a no-op for empty input', async () => {
+      const { batch } = setupSaveBatch()
+      await repository.restoreCutDeletedNotes([])
+      expect(batch.commit).not.toHaveBeenCalled()
+    })
+  })
+
+  // endregion
+
   // region Create Tests
 
   describe('createNote', () => {

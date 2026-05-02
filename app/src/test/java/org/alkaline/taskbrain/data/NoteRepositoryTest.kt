@@ -1126,6 +1126,52 @@ class NoteRepositoryTest {
 
     // endregion
 
+    // region restoreCutDeletedNotes (Phase 6)
+
+    @Test
+    fun `restoreCutDeletedNotes flips state=null and bumps version per id`() = runTest {
+        val c1 = Note(id = "c1", content = "a", state = "cut-delete", parentNoteId = "r", rootNoteId = "r", version = 3L)
+        val c2 = Note(id = "c2", content = "b", state = "cut-delete", parentNoteId = "r", rootNoteId = "r", version = 1L)
+        every { NoteStore.getRawNoteById("c1") } returns c1
+        every { NoteStore.getRawNoteById("c2") } returns c2
+        mockDocument("c1", c1)
+        mockDocument("c2", c2)
+        val batch = mockBatch()
+        val captured = mutableListOf<Map<String, Any?>>()
+        every { batch.set(any(), capture(captured), any<SetOptions>()) } returns batch
+
+        repository.restoreCutDeletedNotes(listOf("c1", "c2")).getOrThrow()
+
+        assertEquals(2, captured.size)
+        // Both writes flip state to null and stamp the same lastWriterOpId.
+        assertTrue(captured.all { it["state"] == null })
+        val opIds = captured.map { it["lastWriterOpId"] }
+        assertTrue("expected single opId across writes: $opIds", opIds.toSet().size == 1)
+        // Versions bumped (3→4, 1→2).
+        val versions = captured.map { it["version"] }.toSet()
+        assertEquals(setOf(4L, 2L), versions)
+    }
+
+    @Test
+    fun `restoreCutDeletedNotes skips ids absent from NoteStore`() = runTest {
+        // E.g., a hard delete raced our Restore click — skip the phantom.
+        every { NoteStore.getRawNoteById(any()) } returns null
+        val batch = mockBatch()
+
+        repository.restoreCutDeletedNotes(listOf("ghost-1", "ghost-2")).getOrThrow()
+
+        verify(exactly = 0) { batch.commit() }
+    }
+
+    @Test
+    fun `restoreCutDeletedNotes is a no-op for empty input`() = runTest {
+        val batch = mockBatch()
+        repository.restoreCutDeletedNotes(emptyList()).getOrThrow()
+        verify(exactly = 0) { batch.commit() }
+    }
+
+    // endregion
+
     // region Create Tests
 
     @Test

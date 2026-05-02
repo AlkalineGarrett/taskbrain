@@ -4,6 +4,7 @@ import { db, auth } from '@/firebase/config'
 import { type Note, noteFromFirestore } from '@/data/Note'
 import { NoteRepository } from '@/data/NoteRepository'
 import { noteStore } from '@/data/NoteStore'
+import { NoteState } from '@/data/NoteState'
 import styles from './RecoverScreen.module.css'
 
 const repo = new NoteRepository(db, auth)
@@ -13,7 +14,7 @@ const BATCH_WINDOW_MS = 5000
 
 // --- Unified recovery group ---
 
-type GroupLabel = 'self-parent' | 'missing-parent' | 'cycle' | 'batch-deleted'
+type GroupLabel = 'self-parent' | 'missing-parent' | 'cycle' | 'batch-deleted' | 'parked-cuts'
 
 interface RecoverGroup {
   label: GroupLabel
@@ -34,7 +35,7 @@ function detectOrphanedNotes(allNotes: Note[]): { note: Note; reason: OrphanReas
 
   for (const note of allNotes) {
     if (!note.parentNoteId) continue
-    if (note.state === 'deleted') continue
+    if (note.state === NoteState.DELETED) continue
 
     if (note.parentNoteId === note.id) {
       orphans.push({ note, reason: 'self-parent' })
@@ -125,7 +126,7 @@ function buildRecoverGroups(allNotes: Note[]): RecoverGroup[] {
   }
 
   // Batch-deleted: exclude notes already in orphan groups
-  const deleted = allNotes.filter(n => n.state === 'deleted' && !orphanIds.has(n.id))
+  const deleted = allNotes.filter(n => n.state === NoteState.DELETED && !orphanIds.has(n.id))
   for (const cluster of clusterByTime(deleted, noteUpdatedTime, 3)) {
     const rootIds = new Set(cluster.map(n => n.rootNoteId ?? n.id))
     const sharedRoot = rootIds.size === 1 ? [...rootIds][0]! : null
@@ -135,6 +136,30 @@ function buildRecoverGroups(allNotes: Note[]): RecoverGroup[] {
       notes: cluster.sort((a, b) => a.content.localeCompare(b.content)),
       timestamp: cluster[0]!.updatedAt?.toDate() ?? new Date(),
       rootNoteId: sharedRoot,
+      rootNoteTitle: rootTitle,
+    })
+  }
+
+  // Parked cuts: lines cut but never pasted, parked via cut-delete state.
+  // One group per source root so the user can decide which tree to fold
+  // them back into. Restore flips state=null; reconstruction re-attaches
+  // as stray children of the source.
+  const cutDeleted = allNotes.filter(n => n.state === NoteState.CUT_DELETE)
+  const cutByRoot = new Map<string, Note[]>()
+  for (const note of cutDeleted) {
+    const rootId = note.rootNoteId ?? note.id
+    const list = cutByRoot.get(rootId)
+    if (list) list.push(note)
+    else cutByRoot.set(rootId, [note])
+  }
+  for (const [rootId, notes] of cutByRoot) {
+    const latestMs = notes.reduce((max, n) => Math.max(max, noteUpdatedTime(n)), 0)
+    const rootTitle = noteMap.get(rootId)?.content.split('\n')[0] ?? ''
+    groups.push({
+      label: 'parked-cuts',
+      notes: notes.sort((a, b) => a.content.localeCompare(b.content)),
+      timestamp: new Date(latestMs),
+      rootNoteId: rootId,
       rootNoteTitle: rootTitle,
     })
   }
@@ -193,6 +218,21 @@ export function RecoverScreen() {
     }
   }, [groups, titles])
 
+  const handleRestoreParkedCuts = useCallback(async (index: number) => {
+    const group = groups[index]
+    if (!group) return
+    setBusyIndex(index)
+    try {
+      await noteStore.enqueueSave(() => repo.restoreCutDeletedNotes(group.notes.map(n => n.id)))
+      setGroups(prev => prev.filter((_, i) => i !== index))
+    } catch (e) {
+      console.error('Restore parked cuts failed:', e)
+      alert('Restore failed: ' + (e instanceof Error ? e.message : String(e)))
+    } finally {
+      setBusyIndex(null)
+    }
+  }, [groups])
+
   if (loading) {
     return <div className={styles.loading}>Loading notes...</div>
   }
@@ -201,13 +241,14 @@ export function RecoverScreen() {
     <div className={styles.container}>
       <h2 className={styles.title}>Recoverable Notes</h2>
       <p className={styles.subtitle}>
-        Orphaned notes (broken parent chains) and batch-deleted notes, sorted by most recent.
+        Orphaned notes (broken parent chains), batch-deleted notes, and parked cuts (lines cut but never pasted), sorted by most recent.
       </p>
 
       {groups.length === 0 && <p>No recoverable notes found.</p>}
 
       {groups.map((group, i) => {
         const isBusy = busyIndex === i
+        const isParkedCuts = group.label === 'parked-cuts'
         return (
           <div key={i} className={styles.batch}>
             <div className={styles.batchHeader}>
@@ -216,22 +257,34 @@ export function RecoverScreen() {
                 {group.rootNoteId && <> &middot; root: {group.rootNoteId}</>}
               </div>
             </div>
-            <div className={styles.createRow}>
-              <input
-                className={styles.titleInput}
-                type="text"
-                placeholder="Title for new note"
-                value={titles.get(i) ?? ''}
-                onChange={e => setTitles(prev => new Map(prev).set(i, e.target.value))}
-              />
-              <button
-                className={styles.restoreButton}
-                onClick={() => void handleCreateNote(i)}
-                disabled={isBusy}
-              >
-                {isBusy ? 'Creating...' : 'Create new note'}
-              </button>
-            </div>
+            {isParkedCuts ? (
+              <div className={styles.createRow}>
+                <button
+                  className={styles.restoreButton}
+                  onClick={() => void handleRestoreParkedCuts(i)}
+                  disabled={isBusy}
+                >
+                  {isBusy ? 'Restoring...' : 'Restore to source note'}
+                </button>
+              </div>
+            ) : (
+              <div className={styles.createRow}>
+                <input
+                  className={styles.titleInput}
+                  type="text"
+                  placeholder="Title for new note"
+                  value={titles.get(i) ?? ''}
+                  onChange={e => setTitles(prev => new Map(prev).set(i, e.target.value))}
+                />
+                <button
+                  className={styles.restoreButton}
+                  onClick={() => void handleCreateNote(i)}
+                  disabled={isBusy}
+                >
+                  {isBusy ? 'Creating...' : 'Create new note'}
+                </button>
+              </div>
+            )}
             <div className={styles.noteList}>
               {group.notes.map(n => (
                 <div

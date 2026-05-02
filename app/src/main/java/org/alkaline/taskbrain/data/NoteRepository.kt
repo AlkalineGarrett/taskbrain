@@ -1108,6 +1108,37 @@ class NoteRepository(
         commitInBatches("undeleteNote", idsToRestore.map { BatchOp(noteRef(it), restoreData, merge = true) })
     }
 
+    /**
+     * Restores parked cut-delete docs by flipping `state` back to null. The
+     * stray-child healing inside reconstruction picks each restored doc up
+     * under its preserved parentNoteId; the next save of that root writes
+     * the healed `containedNotes` back to Firestore. Bumps `version` and
+     * stamps a fresh `lastWriterOpId` so the listener treats the write as
+     * our own echo.
+     */
+    suspend fun restoreCutDeletedNotes(noteIds: List<String>): Result<Unit> = ioLogged("restoreCutDeletedNotes") body@{
+        requireUserId()
+        if (noteIds.isEmpty()) return@body
+        val opId = newClientOpId()
+        NoteStore.registerPendingOp(opId)
+        try {
+            val ops = noteIds.mapNotNull { id ->
+                val existing = NoteStore.getRawNoteById(id) ?: return@mapNotNull null
+                BatchOp(
+                    noteRef(id),
+                    mapOf(
+                        "state" to null,
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    ) + stampWrite(opId, existing),
+                    merge = true,
+                )
+            }
+            commitInBatches("restoreCutDeletedNotes", ops)
+        } finally {
+            NoteStore.releasePendingOp(opId)
+        }
+    }
+
     // ── Utility operations ──────────────────────────────────────────────
 
     suspend fun updateShowCompleted(noteId: String, showCompleted: Boolean): Result<Unit> = ioLogged("updateShowCompleted") {

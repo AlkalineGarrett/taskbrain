@@ -1100,6 +1100,41 @@ export class NoteRepository {
     })
   }
 
+  /**
+   * Restores parked cut-delete docs by flipping `state` back to null. The
+   * stray-child healing inside reconstruction picks each restored doc up
+   * under its preserved parentNoteId; the next save of that root writes the
+   * healed `containedNotes` back to Firestore. Bumps `version` and stamps a
+   * fresh `lastWriterOpId` so the listener treats the write as our own echo.
+   */
+  async restoreCutDeletedNotes(noteIds: string[]): Promise<void> {
+    return this.logged('restoreCutDeletedNotes', async () => {
+      this.requireUserId()
+      if (noteIds.length === 0) return
+      const opId = newClientOpId()
+      noteStore.registerPendingOp(opId)
+      try {
+        const ops: BatchWriteOp[] = []
+        for (const id of noteIds) {
+          const existing = noteStore.getRawNoteById(id)
+          if (!existing) continue
+          ops.push({
+            ref: this.noteRef(id),
+            data: {
+              state: null,
+              updatedAt: serverTimestamp(),
+              ...stampWrite(opId, existing),
+            },
+            merge: true,
+          })
+        }
+        await this.commitInBatches('restoreCutDeletedNotes', ops)
+      } finally {
+        noteStore.releasePendingOp(opId)
+      }
+    })
+  }
+
   // ── Utility operations ──────────────────────────────────────────────
 
   async updateShowCompleted(noteId: string, showCompleted: boolean): Promise<void> {
