@@ -775,6 +775,94 @@ class NoteRepositoryTest {
 
     // endregion
 
+    // region Multi-note atomic batched save (Phase 2)
+
+    @Test
+    fun `saveMultipleNotes returns empty result for empty input without committing`() = runTest {
+        val batch = mockBatch()
+
+        val result = repository.saveMultipleNotes(emptyList()).getOrThrow()
+
+        assertTrue(result.isEmpty())
+        verify(exactly = 0) { batch.commit() }
+    }
+
+    @Test
+    fun `saveMultipleNotes combines writes from multiple notes into a single batch commit`() = runTest {
+        val r1 = Note(id = "r1", content = "Old r1", containedNotes = listOf("c1"))
+        val c1 = Note(id = "c1", content = "a", parentNoteId = "r1", rootNoteId = "r1")
+        val r2 = Note(id = "r2", content = "Old r2", containedNotes = listOf("c2"))
+        val c2 = Note(id = "c2", content = "b", parentNoteId = "r2", rootNoteId = "r2")
+        every { NoteStore.getRawNoteById("r1") } returns r1
+        every { NoteStore.getRawNoteById("c1") } returns c1
+        every { NoteStore.getRawNoteById("r2") } returns r2
+        every { NoteStore.getRawNoteById("c2") } returns c2
+        every { NoteStore.getNoteById("r1") } returns r1
+        every { NoteStore.getNoteById("r2") } returns r2
+        every { NoteStore.getDescendantIds("r1") } returns setOf("c1")
+        every { NoteStore.getDescendantIds("r2") } returns setOf("c2")
+        mockDocument("r1", r1)
+        mockDocument("r2", r2)
+        mockDocument("c1", c1)
+        mockDocument("c2", c2)
+        val batch = mockBatch()
+
+        val result = repository.saveMultipleNotes(
+            listOf(
+                "r1" to listOf(NoteLine("New r1", "r1"), NoteLine("\ta", "c1")),
+                "r2" to listOf(NoteLine("New r2", "r2"), NoteLine("\tb", "c2")),
+            ),
+        ).getOrThrow()
+
+        assertEquals(2, result.size)
+        assertTrue(result.containsKey("r1"))
+        assertTrue(result.containsKey("r2"))
+        // One commit covers both notes' rewrites.
+        verify(exactly = 1) { batch.commit() }
+    }
+
+    @Test
+    fun `saveMultipleNotes rolls back all notes when one item trips the content-drop guard`() = runTest {
+        // r1 has 4 declared children, save sends only 1 → trips guard.
+        // r2 is benign. The whole batch must abort before commit.
+        val r1 = Note(id = "r1", content = "Old r1", containedNotes = listOf("a", "b", "c", "d"))
+        val a = Note(id = "a", content = "A", parentNoteId = "r1", rootNoteId = "r1")
+        val b = Note(id = "b", content = "B", parentNoteId = "r1", rootNoteId = "r1")
+        val c = Note(id = "c", content = "C", parentNoteId = "r1", rootNoteId = "r1")
+        val d = Note(id = "d", content = "D", parentNoteId = "r1", rootNoteId = "r1")
+        val r2 = Note(id = "r2", content = "Old r2", containedNotes = emptyList())
+        every { NoteStore.getRawNoteById("r1") } returns r1
+        every { NoteStore.getNoteById("r1") } returns r1
+        every { NoteStore.getRawNoteById("r2") } returns r2
+        every { NoteStore.getNoteById("r2") } returns r2
+        every { NoteStore.getDescendantIds("r1") } returns setOf("a", "b", "c", "d")
+        every { NoteStore.getDescendantIds("r2") } returns emptySet()
+        every { NoteStore.getRawNoteById("a") } returns a
+        every { NoteStore.getRawNoteById("b") } returns b
+        every { NoteStore.getRawNoteById("c") } returns c
+        every { NoteStore.getRawNoteById("d") } returns d
+        mockDocument("r1", r1)
+        mockDocument("r2", r2)
+        mockDocument("a", a)
+        mockDocument("b", b)
+        mockDocument("c", c)
+        mockDocument("d", d)
+        val batch = mockBatch()
+
+        val result = repository.saveMultipleNotes(
+            listOf(
+                "r1" to listOf(NoteLine("r1", "r1"), NoteLine("\tA", "a")),
+                "r2" to listOf(NoteLine("New r2", "r2")),
+            ),
+        )
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is ContentDropAbortException)
+        verify(exactly = 0) { batch.commit() }
+    }
+
+    // endregion
+
     // region Create Tests
 
     @Test

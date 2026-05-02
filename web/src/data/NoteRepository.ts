@@ -5,7 +5,6 @@ import {
   getDocs,
   query,
   where,
-  runTransaction,
   serverTimestamp,
   writeBatch,
   updateDoc,
@@ -27,7 +26,20 @@ export interface NoteLoadResult {
   showCompleted: boolean
 }
 
+interface BatchWriteOp {
+  ref: DocumentReference
+  data: Record<string, unknown>
+  merge: boolean
+}
+
+interface SavePlan {
+  noteId: string
+  ops: BatchWriteOp[]
+  createdIds: Map<number, string>
+}
+
 const NOTE_STORE_AWAIT_MS = 1500
+const MAX_BATCH_SIZE = 500
 
 /**
  * Repository for managing composable notes in Firestore.
@@ -254,9 +266,6 @@ export class NoteRepository {
   /**
    * Saves a note with tree structure derived from tab-indented lines.
    * Returns a map of line indices to newly created note IDs.
-   *
-   * Note: Firestore transactions can read/write at most 500 documents.
-   * Notes with >500 descendants will fail. Add batched transaction support if needed.
    */
   async saveNoteWithChildren(
     noteId: string,
@@ -264,209 +273,271 @@ export class NoteRepository {
   ): Promise<Map<number, string>> {
     return this.logged('saveNoteWithChildren', async () => {
       if (trackedLines.length === 0) return new Map()
-      this.assertNoteStoreLoaded('saveNoteWithChildren', noteId)
-      this.warnIfDescendantsLikelyStale('saveNoteWithChildren', noteId)
-
       const userId = this.requireUserId()
-      const parentRef = this.noteRef(noteId)
-      const rootContent = trackedLines[0]!.content.replace(/^\t+/, '')
+      const plan = this.planSave(noteId, trackedLines, userId)
+      await this.commitInBatches('saveNoteWithChildren', plan.ops)
+      return plan.createdIds
+    })
+  }
 
-      const linesToSaveUnreconciled = trackedLines
-
-      // Recover noteIds that the editor lost along the way: if a null-id
-      // line sits at the same tree position and has identical content to
-      // an existing descendant, reuse that descendant's id. Without this
-      // the save would allocate a fresh doc and orphan the real one.
-      const linesToSave = reconcileNullNoteIdsByContent(noteId, linesToSaveUnreconciled)
-
-      // Pre-allocate refs for new notes. Both null (upstream-bug signal) and
-      // sentinel (expected placeholder from paste/split/typed/etc.) ids
-      // need a fresh Firestore doc — only real ids refer to existing docs we
-      // can update.
-      const newRefs = new Map<number, DocumentReference>()
-      for (let i = 1; i < linesToSave.length; i++) {
-        if (!isRealNoteId(linesToSave[i]!.noteId)) {
-          newRefs.set(i, doc(this.notesRef))
-        }
+  /**
+   * Saves multiple notes atomically as a single Firestore batch (chunked at
+   * 500 ops). Use when more than one note has unsaved edits — e.g. main
+   * editor + dirty inline view-directive sessions — so partial commits can't
+   * leave the user with stale content in some notes and saved content in
+   * others. Returns per-noteId line-index→new-id maps.
+   */
+  async saveMultipleNotes(
+    items: Array<{ noteId: string; trackedLines: NoteLine[] }>,
+  ): Promise<Map<string, Map<number, string>>> {
+    return this.logged('saveMultipleNotes', async () => {
+      if (items.length === 0) return new Map()
+      const userId = this.requireUserId()
+      const plans = items
+        .filter((item) => item.trackedLines.length > 0)
+        .map((item) => this.planSave(item.noteId, item.trackedLines, userId))
+      const allOps = plans.flatMap((p) => p.ops)
+      await this.commitInBatches('saveMultipleNotes', allOps)
+      const result = new Map<string, Map<number, string>>()
+      for (const plan of plans) {
+        result.set(plan.noteId, plan.createdIds)
       }
+      return result
+    })
+  }
 
-      function effectiveId(lineIndex: number): string {
-        if (lineIndex === 0) return noteId
-        if (isRealNoteId(linesToSave[lineIndex]!.noteId)) return linesToSave[lineIndex]!.noteId!
-        return newRefs.get(lineIndex)!.id
+  /**
+   * Builds the writes for a single-note save without committing them. Shared
+   * by [saveNoteWithChildren] (single note) and [saveMultipleNotes] (combined
+   * batch). Assertions throw inline so a bad item in a multi-note save aborts
+   * the whole batch before any commit.
+   */
+  private planSave(
+    noteId: string,
+    trackedLines: NoteLine[],
+    userId: string,
+  ): SavePlan {
+    this.assertNoteStoreLoaded('saveNoteWithChildren', noteId)
+    this.warnIfDescendantsLikelyStale('saveNoteWithChildren', noteId)
+
+    const parentRef = this.noteRef(noteId)
+    const rootContent = trackedLines[0]!.content.replace(/^\t+/, '')
+
+    // Recover noteIds that the editor lost along the way: if a null-id
+    // line sits at the same tree position and has identical content to
+    // an existing descendant, reuse that descendant's id. Without this
+    // the save would allocate a fresh doc and orphan the real one.
+    const linesToSave = reconcileNullNoteIdsByContent(noteId, trackedLines)
+
+    // Pre-allocate refs for new notes. Both null (upstream-bug signal) and
+    // sentinel (expected placeholder from paste/split/typed/etc.) ids
+    // need a fresh Firestore doc — only real ids refer to existing docs we
+    // can update.
+    const newRefs = new Map<number, DocumentReference>()
+    for (let i = 1; i < linesToSave.length; i++) {
+      if (!isRealNoteId(linesToSave[i]!.noteId)) {
+        newRefs.set(i, doc(this.notesRef))
       }
+    }
 
-      // Empty lines don't push the indent stack — indented children below
-      // them attach to the last content-bearing ancestor.
-      const parentOfLine = new Array<number>(linesToSave.length).fill(0)
-      const childrenOfLine = linesToSave.map(() => [] as string[])
+    function effectiveId(lineIndex: number): string {
+      if (lineIndex === 0) return noteId
+      if (isRealNoteId(linesToSave[lineIndex]!.noteId)) return linesToSave[lineIndex]!.noteId!
+      return newRefs.get(lineIndex)!.id
+    }
 
-      const stack: { depth: number; lineIndex: number }[] = [{ depth: 0, lineIndex: 0 }]
+    // Empty lines don't push the indent stack — indented children below
+    // them attach to the last content-bearing ancestor.
+    const parentOfLine = new Array<number>(linesToSave.length).fill(0)
+    const childrenOfLine = linesToSave.map(() => [] as string[])
 
-      for (let i = 1; i < linesToSave.length; i++) {
-        const tabMatch = linesToSave[i]!.content.match(/^\t*/)
-        const depth = tabMatch ? tabMatch[0]!.length : 0
-        const content = linesToSave[i]!.content.replace(/^\t+/, '')
+    const stack: { depth: number; lineIndex: number }[] = [{ depth: 0, lineIndex: 0 }]
 
-        while (stack.length > 1 && stack[stack.length - 1]!.depth >= depth) {
-          stack.pop()
-        }
-        parentOfLine[i] = stack[stack.length - 1]!.lineIndex
-        childrenOfLine[parentOfLine[i]!]!.push(effectiveId(i))
-        if (content !== '') {
-          stack.push({ depth, lineIndex: i })
-        }
+    for (let i = 1; i < linesToSave.length; i++) {
+      const tabMatch = linesToSave[i]!.content.match(/^\t*/)
+      const depth = tabMatch ? tabMatch[0]!.length : 0
+      const content = linesToSave[i]!.content.replace(/^\t+/, '')
+
+      while (stack.length > 1 && stack[stack.length - 1]!.depth >= depth) {
+        stack.pop()
       }
-
-      // Pull existing descendants from in-memory NoteStore — the listener
-      // already mirrors Firestore truth, so the save no longer pays a
-      // descendant-collection read on every commit.
-      const existingDescendantIds = noteStore.getDescendantIds(noteId)
-
-      // Compute surviving IDs upfront so the content-drop guard can run
-      // before any transaction work; matches the Android save path.
-      const survivingIds = new Set<string>()
-      for (let i = 1; i < linesToSave.length; i++) {
-        survivingIds.add(effectiveId(i))
+      parentOfLine[i] = stack[stack.length - 1]!.lineIndex
+      childrenOfLine[parentOfLine[i]!]!.push(effectiveId(i))
+      if (content !== '') {
+        stack.push({ depth, lineIndex: i })
       }
-      const toDelete = new Set<string>()
-      for (const id of existingDescendantIds) {
-        if (!survivingIds.has(id)) toDelete.add(id)
-      }
+    }
 
-      this.assertNotContentDrop(noteId, trackedLines, linesToSave, existingDescendantIds, survivingIds, toDelete)
+    // Pull existing descendants from in-memory NoteStore — the listener
+    // already mirrors Firestore truth, so the save no longer pays a
+    // descendant-collection read on every commit.
+    const existingDescendantIds = noteStore.getDescendantIds(noteId)
 
-      // Fix parent cycles: if this note's parent chain loops back
-      // to itself, clear parentNoteId/rootNoteId to make it a root note.
-      const hasCycle = this.hasParentCycle(noteId)
+    // Compute surviving IDs upfront so the content-drop guard can run
+    // before any batch work; matches the Android save path.
+    const survivingIds = new Set<string>()
+    for (let i = 1; i < linesToSave.length; i++) {
+      survivingIds.add(effectiveId(i))
+    }
+    const toDelete = new Set<string>()
+    for (const id of existingDescendantIds) {
+      if (!survivingIds.has(id)) toDelete.add(id)
+    }
 
-      // Pre-compute skips: any merge write whose payload already matches
-      // in-memory state would be a no-op write. Skipping it saves the doc
-      // write AND the listener echo/fresh reads it would trigger across
-      // all clients listening to the notes collection.
-      const arraysEqual = (a: string[], b: string[]): boolean => {
-        if (a.length !== b.length) return false
-        for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return false
-        return true
+    this.assertNotContentDrop(noteId, trackedLines, linesToSave, existingDescendantIds, survivingIds, toDelete)
+
+    // Fix parent cycles: if this note's parent chain loops back
+    // to itself, clear parentNoteId/rootNoteId to make it a root note.
+    const hasCycle = this.hasParentCycle(noteId)
+
+    // Pre-compute skips: any merge write whose payload already matches
+    // in-memory state would be a no-op write. Skipping it saves the doc
+    // write AND the listener echo/fresh reads it would trigger across
+    // all clients listening to the notes collection.
+    const arraysEqual = (a: string[], b: string[]): boolean => {
+      if (a.length !== b.length) return false
+      for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return false
+      return true
+    }
+    const rootContainedList = childrenOfLine[0]!
+    const existingRoot = noteStore.getRawNoteById(noteId)
+    const rootUnchanged =
+      !hasCycle &&
+      existingRoot != null &&
+      existingRoot.content === rootContent &&
+      arraysEqual(existingRoot.containedNotes, rootContainedList) &&
+      existingRoot.state == null
+    const descendantSkipped = new Set<number>()
+    for (let i = 1; i < linesToSave.length; i++) {
+      if (!isRealNoteId(linesToSave[i]!.noteId)) continue
+      const existing = noteStore.getRawNoteById(effectiveId(i))
+      const newContent = linesToSave[i]!.content.replace(/^\t+/, '')
+      const newParentId = effectiveId(parentOfLine[i]!)
+      if (
+        existing != null &&
+        existing.content === newContent &&
+        existing.parentNoteId === newParentId &&
+        existing.rootNoteId === noteId &&
+        arraysEqual(existing.containedNotes, childrenOfLine[i]!) &&
+        existing.state == null
+      ) {
+        descendantSkipped.add(i)
       }
-      const rootContainedList = childrenOfLine[0]!
-      const existingRoot = noteStore.getRawNoteById(noteId)
-      const rootUnchanged =
-        !hasCycle &&
-        existingRoot != null &&
-        existingRoot.content === rootContent &&
-        arraysEqual(existingRoot.containedNotes, rootContainedList) &&
-        existingRoot.state == null
-      const descendantSkipped = new Set<number>()
-      for (let i = 1; i < linesToSave.length; i++) {
-        if (!isRealNoteId(linesToSave[i]!.noteId)) continue
-        const existing = noteStore.getRawNoteById(effectiveId(i))
-        const newContent = linesToSave[i]!.content.replace(/^\t+/, '')
-        const newParentId = effectiveId(parentOfLine[i]!)
-        if (
-          existing != null &&
-          existing.content === newContent &&
-          existing.parentNoteId === newParentId &&
-          existing.rootNoteId === noteId &&
-          arraysEqual(existing.containedNotes, childrenOfLine[i]!) &&
-          existing.state == null
-        ) {
-          descendantSkipped.add(i)
-        }
-      }
-      const skippedUnchanged = (rootUnchanged ? 1 : 0) + descendantSkipped.size
-      const txnDocCount =
+    }
+    const skippedUnchanged = (rootUnchanged ? 1 : 0) + descendantSkipped.size
+    if (skippedUnchanged > 0) {
+      const writeCount =
         (rootUnchanged ? 0 : 1) +
         (linesToSave.length - 1 - descendantSkipped.size) +
         toDelete.size
-      firestoreUsage.recordWrite('saveNoteWithChildren', 'TRANSACTION', txnDocCount)
-      if (skippedUnchanged > 0) {
-        console.log(
-          `saveNoteWithChildren(${noteId}): skipped ${skippedUnchanged} unchanged docs of ${linesToSave.length}, writing ${txnDocCount}`,
-        )
+      console.log(
+        `saveNoteWithChildren(${noteId}): skipped ${skippedUnchanged} unchanged docs of ${linesToSave.length}, writing ${writeCount}`,
+      )
+    }
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('taskbrainDebugSaves') === '1') {
+      const lineDump = linesToSave.map((l, i) => {
+        const eid = effectiveId(i)
+        const skipped = i === 0 ? rootUnchanged : descendantSkipped.has(i)
+        return `  [${i}] eid=${eid} content=${JSON.stringify(l.content.slice(0, 40))} ` +
+          `parentLine=${parentOfLine[i]} children=[${childrenOfLine[i]!.join(',')}] skip=${skipped}`
+      }).join('\n')
+      const existingContained = existingDescendantIds.size > 0
+        ? Array.from(existingDescendantIds).slice(0, 20).join(',') + (existingDescendantIds.size > 20 ? `+${existingDescendantIds.size - 20}` : '')
+        : '(none)'
+      console.log(
+        `[debugSave] saveNoteWithChildren(${noteId})\n` +
+        lineDump + '\n' +
+        `  existingDescendants=[${existingContained}]\n` +
+        `  toDelete=[${Array.from(toDelete).join(',')}]`
+      )
+    }
+
+    const ops: BatchWriteOp[] = []
+
+    if (!rootUnchanged) {
+      const rootData: Record<string, unknown> = {
+        ...this.baseNoteData(userId, rootContent),
+        containedNotes: childrenOfLine[0]!,
       }
-      if (typeof localStorage !== 'undefined' && localStorage.getItem('taskbrainDebugSaves') === '1') {
-        const lineDump = linesToSave.map((l, i) => {
-          const eid = effectiveId(i)
-          const skipped = i === 0 ? rootUnchanged : descendantSkipped.has(i)
-          return `  [${i}] eid=${eid} content=${JSON.stringify(l.content.slice(0, 40))} ` +
-            `parentLine=${parentOfLine[i]} children=[${childrenOfLine[i]!.join(',')}] skip=${skipped}`
-        }).join('\n')
-        const existingContained = existingDescendantIds.size > 0
-          ? Array.from(existingDescendantIds).slice(0, 20).join(',') + (existingDescendantIds.size > 20 ? `+${existingDescendantIds.size - 20}` : '')
-          : '(none)'
-        console.log(
-          `[debugSave] saveNoteWithChildren(${noteId})\n` +
-          lineDump + '\n' +
-          `  existingDescendants=[${existingContained}]\n` +
-          `  toDelete=[${Array.from(toDelete).join(',')}]`
-        )
+      if (hasCycle) {
+        rootData.parentNoteId = null
+        rootData.rootNoteId = null
       }
-      return runTransaction(this.db, async (transaction) => {
-        // Update root
-        if (!rootUnchanged) {
-          const rootData: Record<string, unknown> = {
-            ...this.baseNoteData(userId, rootContent),
-            containedNotes: childrenOfLine[0]!,
-          }
-          if (hasCycle) {
-            rootData.parentNoteId = null
-            rootData.rootNoteId = null
-          }
-          transaction.set(parentRef, rootData, { merge: true })
-        }
+      ops.push({ ref: parentRef, data: rootData, merge: true })
+    }
 
-        // Write each descendant
-        for (let i = 1; i < linesToSave.length; i++) {
-          if (descendantSkipped.has(i)) continue
-          const content = linesToSave[i]!.content.replace(/^\t+/, '')
+    for (let i = 1; i < linesToSave.length; i++) {
+      if (descendantSkipped.has(i)) continue
+      const content = linesToSave[i]!.content.replace(/^\t+/, '')
+      const id = effectiveId(i)
+      const parentId = effectiveId(parentOfLine[i]!)
 
-          const id = effectiveId(i)
-          const parentId = effectiveId(parentOfLine[i]!)
-
-          if (isRealNoteId(linesToSave[i]!.noteId)) {
-            transaction.set(
-              this.noteRef(id),
-              {
-                content,
-                parentNoteId: parentId,
-                rootNoteId: noteId,
-                containedNotes: childrenOfLine[i]!,
-                state: null, // Clear deleted state for reparented notes
-                updatedAt: serverTimestamp(),
-              },
-              { merge: true },
-            )
-          } else {
-            transaction.set(newRefs.get(i)!, {
-              userId,
-              content,
-              parentNoteId: parentId,
-              rootNoteId: noteId,
-              containedNotes: childrenOfLine[i]!,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            })
-          }
-        }
-
-        // Soft-delete removed notes. Preserve parentNoteId/rootNoteId so the
-        // deleted-notes view can distinguish removed child lines (have a parent)
-        // from deleted top-level notes (don't).
-        for (const id of toDelete) {
-          transaction.update(this.noteRef(id), {
-            state: 'deleted',
+      if (isRealNoteId(linesToSave[i]!.noteId)) {
+        ops.push({
+          ref: this.noteRef(id),
+          data: {
+            content,
+            parentNoteId: parentId,
+            rootNoteId: noteId,
+            containedNotes: childrenOfLine[i]!,
+            state: null, // Clear deleted state for reparented notes
             updatedAt: serverTimestamp(),
-          })
-        }
+          },
+          merge: true,
+        })
+      } else {
+        ops.push({
+          ref: newRefs.get(i)!,
+          data: {
+            userId,
+            content,
+            parentNoteId: parentId,
+            rootNoteId: noteId,
+            containedNotes: childrenOfLine[i]!,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+          merge: false,
+        })
+      }
+    }
 
-        const createdIds = new Map<number, string>()
-        for (const [lineIndex, ref] of newRefs) {
-          createdIds.set(lineIndex, ref.id)
-        }
-        return createdIds
+    // Soft-delete removed notes. Preserve parentNoteId/rootNoteId so the
+    // deleted-notes view can distinguish removed child lines (have a parent)
+    // from deleted top-level notes (don't).
+    for (const id of toDelete) {
+      ops.push({
+        ref: this.noteRef(id),
+        data: {
+          state: 'deleted',
+          updatedAt: serverTimestamp(),
+        },
+        merge: true,
       })
-    })
+    }
+
+    const createdIds = new Map<number, string>()
+    for (const [lineIndex, ref] of newRefs) {
+      createdIds.set(lineIndex, ref.id)
+    }
+    return { noteId, ops, createdIds }
+  }
+
+  private async commitInBatches(operation: string, ops: BatchWriteOp[]): Promise<void> {
+    if (ops.length === 0) return
+    for (let i = 0; i < ops.length; i += MAX_BATCH_SIZE) {
+      const chunk = ops.slice(i, i + MAX_BATCH_SIZE)
+      const batch = writeBatch(this.db)
+      for (const op of chunk) {
+        if (op.merge) {
+          batch.set(op.ref, op.data, { merge: true })
+        } else {
+          batch.set(op.ref, op.data)
+        }
+      }
+      await batch.commit()
+      firestoreUsage.recordWrite(operation, 'BATCH_COMMIT', chunk.length)
+    }
   }
 
   /**
@@ -594,20 +665,35 @@ export class NoteRepository {
     editorNoteIds?: (string | null)[],
   ): Promise<Map<number, string>> {
     return this.logged('saveNoteWithFullContent', async () => {
-      this.requireUserId()
-      this.assertNoteStoreLoaded('saveNoteWithFullContent', noteId)
-      this.warnIfDescendantsLikelyStale('saveNoteWithFullContent', noteId)
-
-      // Prefer NoteStore in-memory lines; fall back to Firestore only when
-      // the store doesn't have this specific note yet (e.g., immediately
-      // after createNote, before the listener echo). Mirrors Android.
-      const existingLines = noteStore.getNoteLinesById(noteId)
-        ?? (await this.loadNoteWithChildren(noteId)).lines
-
-      const newLinesContent = newContent.split('\n')
-      const trackedLines = matchLinesToIds(noteId, existingLines, newLinesContent, editorNoteIds)
+      const trackedLines = await this.prepareInlineEditTrackedLines(
+        noteId, newContent, 'saveNoteWithFullContent', editorNoteIds,
+      )
       return this.saveNoteWithChildren(noteId, trackedLines)
     })
+  }
+
+  /**
+   * Builds tracked lines for an inline-edited note by matching its flat
+   * editor content against the existing tree (preserving grandchild
+   * relationships). Mirrors the load+match step inside [saveNoteWithFullContent].
+   * Exposed so callers can pre-build planning input for [saveMultipleNotes]
+   * without committing each session separately. Falls back to a Firestore
+   * read when the note isn't in NoteStore yet (post-create, pre-listener).
+   */
+  async prepareInlineEditTrackedLines(
+    noteId: string,
+    newContent: string,
+    operation: string,
+    editorNoteIds?: (string | null)[],
+  ): Promise<NoteLine[]> {
+    this.requireUserId()
+    this.assertNoteStoreLoaded(operation, noteId)
+    this.warnIfDescendantsLikelyStale(operation, noteId)
+
+    const existingLines = noteStore.getNoteLinesById(noteId)
+      ?? (await this.loadNoteWithChildren(noteId)).lines
+
+    return matchLinesToIds(noteId, existingLines, newContent.split('\n'), editorNoteIds)
   }
 
   async createNote(): Promise<string> {
@@ -744,9 +830,8 @@ export class NoteRepository {
       firestoreUsage.recordRead('hardDeleteAllSoftDeleted', 'GET_DOCS', snap.size)
       if (snap.empty) return 0
 
-      const BATCH_LIMIT = 500
-      for (let i = 0; i < snap.docs.length; i += BATCH_LIMIT) {
-        const chunk = snap.docs.slice(i, i + BATCH_LIMIT)
+      for (let i = 0; i < snap.docs.length; i += MAX_BATCH_SIZE) {
+        const chunk = snap.docs.slice(i, i + MAX_BATCH_SIZE)
         const batch = writeBatch(this.db)
         for (const d of chunk) {
           batch.delete(d.ref)

@@ -9,6 +9,9 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -864,78 +867,98 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         val content = trackedLines.joinToString("\n") { it.content }
         currentNoteLines = trackedLines
 
-        // Update NoteStore synchronously before async writes
-        val existing = NoteStore.getNoteById(savedNoteId)
-        if (existing != null) {
-            NoteStore.updateNote(savedNoteId, existing.copy(content = content), persist = false)
+        // Optimistic NoteStore updates so directives see edits before Firestore confirms.
+        NoteStore.updateContentIfChanged(savedNoteId, content)
+        for (session in dirtySessions) {
+            session.controller.sortCompletedToBottom()
+            NoteStore.updateContentIfChanged(session.noteId, session.editorState.text)
+        }
+        // Per CLAUDE.md edit-session-lifecycle invariant: suppress directive
+        // staleness checks for the originating (main) note during the batch.
+        // EditSessionManager holds exactly one active context; all dirty inline
+        // sessions share the same originatingNoteId (the main note) so a single
+        // session covers them.
+        if (dirtySessions.isNotEmpty() && !directiveManager.isInlineEditSessionActive()) {
+            directiveManager.startInlineEditSession(dirtySessions.first().noteId)
         }
         MetadataHasher.invalidateCache()
 
         saving = true
         viewModelScope.launch {
             try {
-                val failedNoteIds = mutableListOf<String>()
-                var lastError: Throwable? = null
+                val items = mutableListOf<Pair<String, List<NoteLine>>>()
+                items.add(savedNoteId to trackedLines)
 
-                // Save main note (without persistCurrentNote's status side effects)
-                val mainResult = NoteStore.enqueueSave {
-                    repository.saveNoteWithChildren(savedNoteId, trackedLines, extraOpsBuilder = null)
+                // Pre-build each dirty inline session's tracked lines in
+                // parallel: a NoteStore miss falls through to loadNoteWithChildren
+                // (Firestore round trip), so serializing them would stack
+                // unrelated read latencies.
+                val inlinePairs = coroutineScope {
+                    dirtySessions.map { session ->
+                        async {
+                            session to repository.prepareInlineEditTrackedLines(
+                                session.noteId, session.editorState.text, "saveAll",
+                            )
+                        }
+                    }.awaitAll()
                 }
+                for ((session, tracked) in inlinePairs) {
+                    items.add(session.noteId to tracked)
+                }
+
+                val result = NoteStore.enqueueSave {
+                    repository.saveMultipleNotes(items)
+                }
+
                 // See persistCurrentNote: skip current-note mutations after a
                 // mid-save tab switch; saved ids are persisted in Firestore.
                 val stillCurrent = currentNoteId == savedNoteId
-                mainResult.onSuccess { newIdsMap ->
-                    if (stillCurrent && newIdsMap.isNotEmpty()) {
-                        val updated = currentNoteLines.toMutableList()
-                        for ((index, newId) in newIdsMap) {
-                            if (index < updated.size) {
-                                updated[index] = updated[index].copy(noteId = newId)
+                result.fold(
+                    onSuccess = { idsByNote ->
+                        val mainNewIds = idsByNote[savedNoteId] ?: emptyMap()
+                        if (stillCurrent && mainNewIds.isNotEmpty()) {
+                            val updated = currentNoteLines.toMutableList()
+                            for ((index, newId) in mainNewIds) {
+                                if (index < updated.size) {
+                                    updated[index] = updated[index].copy(noteId = newId)
+                                }
                             }
+                            currentNoteLines = updated
+                            _newlyAssignedNoteIds.tryEmit(mainNewIds)
                         }
-                        currentNoteLines = updated
-                        _newlyAssignedNoteIds.tryEmit(newIdsMap)
-                    }
-                    alarmManager.syncAlarmLineContent(trackedLines)
-                    alarmManager.syncAlarmNoteIds(trackedLines)
-                    if (stillCurrent) {
-                        directiveManager.onSaveCompleted(content)
-                    }
-                }.onFailure { e ->
-                    failedNoteIds.add(savedNoteId)
-                    lastError = e
-                }
+                        alarmManager.syncAlarmLineContent(trackedLines)
+                        alarmManager.syncAlarmNoteIds(trackedLines)
 
-                // Save all dirty inline sessions
-                for (session in dirtySessions) {
-                    try {
-                        directiveManager.saveInlineEditSessionSync(session)
-                        session.markSaved()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to save inline session ${session.noteId}", e)
-                        failedNoteIds.add(session.noteId)
-                        lastError = e
-                    }
-                }
+                        for ((session, _) in inlinePairs) session.markSaved()
+                        directiveManager.endInlineEditSession()
 
-                if (failedNoteIds.isEmpty()) {
-                    if (stillCurrent) {
-                        _saveStatus.value = UnifiedSaveStatus.Saved(savedNoteId)
-                        _saveCompleted.tryEmit(Unit)
-                        markAsSaved()
-                        // Bring _loadStatus up to date with the just-saved content so
-                        // the external change handler's content-equality check
-                        // suppresses our own save echo. currentNoteLines has the
-                        // freshly assigned noteIds at this point.
-                        _loadStatus.value = LoadStatus.Success(savedNoteId, currentNoteLines)
+                        if (stillCurrent) {
+                            directiveManager.onSaveCompleted(content)
+                            _saveStatus.value = UnifiedSaveStatus.Saved(savedNoteId)
+                            _saveCompleted.tryEmit(Unit)
+                            markAsSaved()
+                            // Bring _loadStatus up to date with the just-saved content so
+                            // the external change handler's content-equality check
+                            // suppresses our own save echo. currentNoteLines has the
+                            // freshly assigned noteIds at this point.
+                            _loadStatus.value = LoadStatus.Success(savedNoteId, currentNoteLines)
+                        }
+                        // The save wrote the healed containedNotes — clear the
+                        // needs-fix flag optimistically so the UI flips back now
+                        // instead of waiting for the Firestore echo. Safe to do
+                        // even if the user switched away.
+                        NoteStore.markNoteFixed(savedNoteId)
+                    },
+                    onFailure = { e ->
+                        Log.e(TAG, "saveAll failed (atomic batch)", e)
+                        directiveManager.endInlineEditSession()
+                        if (stillCurrent) {
+                            // All-or-nothing: every dirty note stays dirty for retry.
+                            val failedIds = items.map { it.first }
+                            _saveStatus.value = UnifiedSaveStatus.PartialError(failedIds, e)
+                        }
                     }
-                    // The save wrote the healed containedNotes — clear the
-                    // needs-fix flag optimistically so the UI flips back now
-                    // instead of waiting for the Firestore echo. Safe to do
-                    // even if the user switched away.
-                    NoteStore.markNoteFixed(savedNoteId)
-                } else if (stillCurrent) {
-                    _saveStatus.value = UnifiedSaveStatus.PartialError(failedNoteIds, lastError!!)
-                }
+                )
             } finally {
                 saving = false
             }

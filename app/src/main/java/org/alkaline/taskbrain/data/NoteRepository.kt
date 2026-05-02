@@ -317,15 +317,21 @@ class NoteRepository(
     }
 
     /**
-     * Saves a note with tree structure derived from tab-indented lines.
-     *
-     * Computes parentNoteId and containedNotes from indentation, sets rootNoteId
-     * on all descendants, and strips tabs from stored content.
-     *
-     * Returns a map of line indices to newly created note IDs.
-     *
-     * Uses batch writes (not transactions) so saves queue offline.
-     * Batches are chunked at 500 operations (Firestore limit).
+     * Save plan: ops ready to commit as a Firestore WriteBatch (chunked at
+     * 500 if needed) plus a map of newly-allocated ids by line index.
+     */
+    private data class SavePlan(
+        val noteId: String,
+        val ops: List<BatchOp>,
+        val createdIds: Map<Int, String>,
+    )
+
+    /**
+     * Save a single note. Computes parentNoteId and containedNotes from
+     * indentation, sets rootNoteId on all descendants, and strips tabs from
+     * stored content. Returns a map of line indices to newly created note IDs.
+     * Uses batch writes (not transactions) so saves queue offline; batches
+     * chunk at 500 ops (Firestore limit).
      */
     suspend fun saveNoteWithChildren(
         noteId: String,
@@ -333,6 +339,44 @@ class NoteRepository(
         extraOpsBuilder: ExtraOpsBuilder?,
     ): Result<Map<Int, String>> = ioLogged("saveNoteWithChildren") body@{
         if (trackedLines.isEmpty()) return@body emptyMap()
+        val plan = planSaveNoteWithChildren(noteId, trackedLines, extraOpsBuilder)
+        commitInBatches("saveNoteWithChildren", plan.ops)
+        plan.createdIds
+    }
+
+    /**
+     * Saves multiple notes atomically as a single Firestore batch (chunked at
+     * 500 ops). Use when more than one note has unsaved edits — e.g. the main
+     * editor + dirty inline view-directive sessions — so partial commits can't
+     * leave stale content in some notes and saved content in others. Returns
+     * per-noteId line-index→new-id maps.
+     */
+    suspend fun saveMultipleNotes(
+        items: List<Pair<String, List<NoteLine>>>,
+    ): Result<Map<String, Map<Int, String>>> = ioLogged("saveMultipleNotes") body@{
+        if (items.isEmpty()) return@body emptyMap()
+        val plans = items
+            .filter { it.second.isNotEmpty() }
+            .map { (noteId, trackedLines) ->
+                planSaveNoteWithChildren(noteId, trackedLines, extraOpsBuilder = null)
+            }
+        val allOps = plans.flatMap { it.ops }
+        commitInBatches("saveMultipleNotes", allOps)
+        plans.associate { it.noteId to it.createdIds }
+    }
+
+    /**
+     * Builds the writes for a single-note save without committing them. Pure
+     * planning step shared by [saveNoteWithChildren] (single note) and
+     * [saveMultipleNotes] (combined batch). Runs the same assertions and
+     * content-drop guard as before — assertions throw inline so a bad item in
+     * a multi-note save aborts the whole batch before any commit.
+     */
+    private fun planSaveNoteWithChildren(
+        noteId: String,
+        trackedLines: List<NoteLine>,
+        extraOpsBuilder: ExtraOpsBuilder?,
+    ): SavePlan {
         assertNoteStoreLoaded("saveNoteWithChildren", noteId)
         warnIfDescendantsLikelyStale("saveNoteWithChildren", noteId)
 
@@ -575,9 +619,11 @@ class NoteRepository(
             ops.add(BatchOp(extra.ref, extra.data, extra.merge))
         }
 
-        commitInBatches("saveNoteWithChildren", ops)
-
-        newRefs.mapValues { it.value.id }
+        return SavePlan(
+            noteId = noteId,
+            ops = ops,
+            createdIds = newRefs.mapValues { it.value.id },
+        )
     }
 
     /**
@@ -797,19 +843,35 @@ class NoteRepository(
      * Used for inline editing of notes within view directives.
      */
     suspend fun saveNoteWithFullContent(noteId: String, newContent: String): Result<Unit> = ioLogged("saveNoteWithFullContent") {
-        requireUserId()
-        assertNoteStoreLoaded("saveNoteWithFullContent", noteId)
-        warnIfDescendantsLikelyStale("saveNoteWithFullContent", noteId)
+        val trackedLines = prepareInlineEditTrackedLines(noteId, newContent, "saveNoteWithFullContent")
+        saveNoteWithChildren(noteId, trackedLines, extraOpsBuilder = null).getOrThrow()
+        Log.d(TAG, "Saved note with full content: $noteId (${trackedLines.size} lines)")
+    }
 
-        // Prefer NoteStore in-memory data (works offline) with Firestore fallback.
+    /**
+     * Builds tracked lines for an inline-edited note by matching its flat
+     * editor content against the existing tree (preserving grandchild
+     * relationships). Exposed so callers can pre-build the planning input
+     * for [saveMultipleNotes] without committing each session separately.
+     * Mirrors the load+match step inside [saveNoteWithFullContent].
+     *
+     * [operation] tags any [NoteStoreNotLoadedException] thrown from the load
+     * step with the caller's name; pass an explicit value so the user-facing
+     * error reflects the originating call site.
+     */
+    suspend fun prepareInlineEditTrackedLines(
+        noteId: String,
+        newContent: String,
+        operation: String,
+    ): List<NoteLine> {
+        requireUserId()
+        assertNoteStoreLoaded(operation, noteId)
+        warnIfDescendantsLikelyStale(operation, noteId)
+
         val existingLines = NoteStore.getNoteLinesById(noteId)
             ?: loadNoteWithChildren(noteId).getOrThrow().lines
 
-        val newLinesContent = newContent.lines()
-        val trackedLines = matchLinesToIds(noteId, existingLines, newLinesContent)
-        saveNoteWithChildren(noteId, trackedLines, extraOpsBuilder = null).getOrThrow()
-
-        Log.d(TAG, "Saved note with full content: $noteId (${trackedLines.size} lines)")
+        return matchLinesToIds(noteId, existingLines, newContent.lines())
     }
 
     /**

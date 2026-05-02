@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { EditorState } from '@/editor/EditorState'
 import { EditorController } from '@/editor/EditorController'
 import { UndoManager, type UndoManagerState } from '@/editor/UndoManager'
-import { toEditorLines, type EditorLineInput } from '@/data/Note'
+import { toEditorLines, type EditorLineInput, type NoteLine } from '@/data/Note'
 import { NoteRepository } from '@/data/NoteRepository'
 import { NoteStatsRepository } from '@/data/NoteStatsRepository'
 import { noteStore } from '@/data/NoteStore'
@@ -281,35 +281,27 @@ export function useEditor(noteId: string | undefined) {
     })
   }, [noteId, editorState])
 
-  // Core save logic — accepts noteId as parameter to avoid stale closure bugs
-  const saveNoteById = useCallback(async (targetNoteId: string) => {
-    try {
-      setSaving(true)
-      savingRef.current = true
-      controller.sortCompletedToBottom()
-      controller.commitUndoState(true)
+  /**
+   * Builds the main editor's tracked lines for inclusion in a multi-note
+   * save. The returned [applyResult] writes created ids back to the original
+   * EditorState — guarded so a mid-save tab switch doesn't cross-pollinate.
+   */
+  const prepareMainSaveItem = useCallback((targetNoteId: string): {
+    trackedLines: NoteLine[]
+    applyResult: (createdIds: Map<number, string>) => void
+  } => {
+    controller.sortCompletedToBottom()
+    controller.commitUndoState(true)
 
-      // Build tracked lines from editor state's noteIds (already kept in sync
-      // through all operations: indent, split, merge, paste, move, etc.)
-      // resolveNoteIds deduplicates when multiple lines claim the same noteId.
-      const currentLines = editorState.lines.map((l) => l.text)
-      const currentNoteIds = editorState.lines.map((l) => l.noteIds)
-      let newTracked = resolveNoteIds(currentLines, currentNoteIds)
-      // Ensure first line always maps to the parent noteId
-      if (newTracked.length > 0 && newTracked[0]!.noteId !== targetNoteId) {
-        newTracked = [{ ...newTracked[0]!, noteId: targetNoteId }, ...newTracked.slice(1)]
-      }
+    const currentLines = editorState.lines.map((l) => l.text)
+    const currentNoteIds = editorState.lines.map((l) => l.noteIds)
+    let newTracked = resolveNoteIds(currentLines, currentNoteIds)
+    if (newTracked.length > 0 && newTracked[0]!.noteId !== targetNoteId) {
+      newTracked = [{ ...newTracked[0]!, noteId: targetNoteId }, ...newTracked.slice(1)]
+    }
 
-      const createdIds = await noteStore.enqueueSave(() =>
-        repo.saveNoteWithChildren(targetNoteId, newTracked),
-      )
-
-      // After a note switch during the save, `editorState` now holds the new
-      // note's lines — writing this save's ids onto it would cross-pollinate.
-      // Saved ids are in Firestore; next load picks them up.
+    const applyResult = (createdIds: Map<number, string>) => {
       if (currentNoteIdRef.current !== targetNoteId) return
-
-      // Push updated noteIds back into editor state so the UI reflects new IDs
       editorState.updateNoteIds(
         newTracked.map((line, index) => {
           const newId = createdIds.get(index)
@@ -317,8 +309,24 @@ export function useEditor(noteId: string | undefined) {
           return id ? [id] : []
         }),
       )
-
       setDirty(false)
+    }
+
+    return { trackedLines: newTracked, applyResult }
+  }, [editorState, controller])
+
+  // Core save logic — accepts noteId to avoid stale closure bugs. Used by
+  // unmount/beforeunload paths.
+  const saveNoteById = useCallback(async (targetNoteId: string) => {
+    try {
+      setSaving(true)
+      savingRef.current = true
+
+      const { trackedLines, applyResult } = prepareMainSaveItem(targetNoteId)
+      const createdIds = await noteStore.enqueueSave(() =>
+        repo.saveNoteWithChildren(targetNoteId, trackedLines),
+      )
+      applyResult(createdIds)
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : ERROR_SAVE)
       throw e // Re-throw so unmount/beforeunload callers can persist the error
@@ -326,7 +334,7 @@ export function useEditor(noteId: string | undefined) {
       setSaving(false)
       savingRef.current = false
     }
-  }, [editorState, controller])
+  }, [prepareMainSaveItem])
 
   const toggleShowCompleted = useCallback(async () => {
     if (!noteId) return
@@ -411,11 +419,13 @@ export function useEditor(noteId: string | undefined) {
     loadedNoteId,
     showLoading,
     saving,
+    setSaveError,
     error,
     saveError,
     clearSaveError,
     dirty,
     save: saveForFixOrEdit,
+    prepareMainSaveItem,
     showCompleted,
     toggleShowCompleted,
     needsFix,

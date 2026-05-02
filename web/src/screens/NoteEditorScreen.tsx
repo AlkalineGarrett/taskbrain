@@ -32,7 +32,7 @@ import styles from './NoteEditorScreen.module.css'
 
 export function NoteEditorScreen() {
   const { noteId: urlNoteId } = useParams<{ noteId: string }>()
-  const { controller, editorState, loading, loadedNoteId, showLoading, error, saveError, clearSaveError, dirty, save, showCompleted, toggleShowCompleted, needsFix, notesNeedingFix } = useEditor(urlNoteId)
+  const { controller, editorState, loading, loadedNoteId, showLoading, error, saveError, clearSaveError, setSaveError, dirty, prepareMainSaveItem, showCompleted, toggleShowCompleted, needsFix, notesNeedingFix } = useEditor(urlNoteId)
   // Use loadedNoteId for all rendering — keeps showing the old note until
   // the new one is fully loaded, preventing transition flashes.
   const noteId = loadedNoteId ?? urlNoteId
@@ -98,7 +98,8 @@ export function NoteEditorScreen() {
   const { saveAll, saveStatus, anyDirty } = useSaveCoordinator({
     noteId,
     editorState,
-    save,
+    prepareMainSaveItem,
+    setSaveError,
     dirty,
     sessionManager,
     invalidateAndRecompute,

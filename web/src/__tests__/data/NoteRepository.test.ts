@@ -15,7 +15,6 @@ vi.mock('firebase/firestore', () => {
   const mockQuery = vi.fn()
   const mockWhere = vi.fn()
   const mockAddDoc = vi.fn()
-  const mockRunTransaction = vi.fn()
   const mockServerTimestamp = vi.fn(() => 'SERVER_TIMESTAMP')
   const mockWriteBatch = vi.fn()
   const mockUpdateDoc = vi.fn()
@@ -28,7 +27,6 @@ vi.mock('firebase/firestore', () => {
     query: mockQuery,
     where: mockWhere,
     addDoc: mockAddDoc,
-    runTransaction: mockRunTransaction,
     serverTimestamp: mockServerTimestamp,
     writeBatch: mockWriteBatch,
     updateDoc: mockUpdateDoc,
@@ -47,7 +45,6 @@ const {
   getDoc: mockGetDoc,
   getDocs: mockGetDocs,
   addDoc: mockAddDoc,
-  runTransaction: mockRunTransaction,
   writeBatch: mockWriteBatch,
   collection: mockCollection,
 } = await import('firebase/firestore')
@@ -55,6 +52,24 @@ const {
 /** Mock getDocs to return empty results (no tree-format descendants). */
 function mockEmptyTreeQuery() {
   vi.mocked(mockGetDocs).mockResolvedValue({ docs: [], empty: true } as any)
+}
+
+/**
+ * Installs a writeBatch mock that records all set/update calls. Default for
+ * save tests; helper tests use the returned spies to inspect individual writes.
+ */
+function setupSaveBatch(): {
+  batch: { set: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn>; commit: ReturnType<typeof vi.fn> }
+  setSpy: ReturnType<typeof vi.fn>
+} {
+  const setSpy = vi.fn()
+  const batch = {
+    set: setSpy,
+    update: vi.fn(),
+    commit: vi.fn().mockResolvedValue(undefined),
+  }
+  vi.mocked(mockWriteBatch).mockReturnValue(batch as any)
+  return { batch, setSpy }
 }
 
 beforeEach(() => {
@@ -74,6 +89,10 @@ beforeEach(() => {
   // tests that aren't exercising the load guard. Tests for the guard itself
   // override this.
   vi.spyOn(noteStore, 'isLoaded').mockReturnValue(true)
+
+  // Default batch mock for save paths; tests that need to inspect writes
+  // call setupSaveBatch() to grab spies.
+  setupSaveBatch()
 
   repository = new NoteRepository(mockDb, mockAuth)
 })
@@ -233,18 +252,8 @@ describe('NoteRepository', () => {
   // region Save Tests
 
   describe('saveNoteWithChildren', () => {
-    it('saves parent content via transaction', async () => {
-      vi.mocked(mockRunTransaction).mockImplementation(async (_db, fn) => {
-        const transaction = {
-          get: vi.fn().mockResolvedValue({
-            exists: () => false,
-            data: () => ({}),
-          }),
-          set: vi.fn(),
-          update: vi.fn(),
-        }
-        return fn(transaction as any)
-      })
+    it('saves parent content via batch commit', async () => {
+      const { batch } = setupSaveBatch()
       vi.mocked(mockDoc).mockReturnValue({ id: 'note_1' } as any)
 
       const result = await repository.saveNoteWithChildren('note_1', [
@@ -252,7 +261,7 @@ describe('NoteRepository', () => {
       ])
 
       expect(result).toBeInstanceOf(Map)
-      expect(mockRunTransaction).toHaveBeenCalled()
+      expect(batch.commit).toHaveBeenCalled()
     })
 
     it('creates new child notes and returns their IDs', async () => {
@@ -263,17 +272,7 @@ describe('NoteRepository', () => {
         return { id: args[args.length - 1] } as any
       })
 
-      vi.mocked(mockRunTransaction).mockImplementation(async (_db, fn) => {
-        const transaction = {
-          get: vi.fn().mockResolvedValue({
-            exists: () => false,
-            data: () => ({}),
-          }),
-          set: vi.fn(),
-          update: vi.fn(),
-        }
-        return fn(transaction as any)
-      })
+      setupSaveBatch()
 
       const result = await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
@@ -290,17 +289,7 @@ describe('NoteRepository', () => {
         return { id: args[args.length - 1] } as any
       })
 
-      vi.mocked(mockRunTransaction).mockImplementation(async (_db, fn) => {
-        const transaction = {
-          get: vi.fn().mockResolvedValue({
-            exists: () => false,
-            data: () => ({}),
-          }),
-          set: vi.fn(),
-          update: vi.fn(),
-        }
-        return fn(transaction as any)
-      })
+      setupSaveBatch()
 
       const result = await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
@@ -320,17 +309,7 @@ describe('NoteRepository', () => {
         return { id: args[args.length - 1] } as any
       })
 
-      vi.mocked(mockRunTransaction).mockImplementation(async (_db, fn) => {
-        const transaction = {
-          get: vi.fn().mockResolvedValue({
-            exists: () => false,
-            data: () => ({}),
-          }),
-          set: vi.fn(),
-          update: vi.fn(),
-        }
-        return fn(transaction as any)
-      })
+      setupSaveBatch()
 
       const result = await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
@@ -357,15 +336,7 @@ describe('NoteRepository', () => {
         return { id: args[args.length - 1] } as any
       })
 
-      const setSpy = vi.fn()
-      vi.mocked(mockRunTransaction).mockImplementation(async (_db, fn) => {
-        const transaction = {
-          get: vi.fn().mockResolvedValue({ exists: () => false, data: () => ({}) }),
-          set: setSpy,
-          update: vi.fn(),
-        }
-        return fn(transaction as any)
-      })
+      const { setSpy } = setupSaveBatch()
 
       const sentinel = '@paste_abc123'
       const result = await repository.saveNoteWithChildren('note_1', [
@@ -415,15 +386,7 @@ describe('NoteRepository', () => {
         if (args.length === 1) return freshRef
         return { id: args[args.length - 1] } as any
       })
-      const setSpy = vi.fn()
-      vi.mocked(mockRunTransaction).mockImplementation(async (_db, fn) => {
-        const transaction = {
-          get: vi.fn().mockResolvedValue({ exists: () => false, data: () => ({}) }),
-          set: setSpy,
-          update: vi.fn(),
-        }
-        return fn(transaction as any)
-      })
+      setupSaveBatch()
 
       const sentinel = '@paste_abc123'
       const result = await repository.saveNoteWithChildren('note_1', [
@@ -442,17 +405,7 @@ describe('NoteRepository', () => {
         return { id: args[args.length - 1] } as any
       })
 
-      vi.mocked(mockRunTransaction).mockImplementation(async (_db, fn) => {
-        const transaction = {
-          get: vi.fn().mockResolvedValue({
-            exists: () => false,
-            data: () => ({}),
-          }),
-          set: vi.fn(),
-          update: vi.fn(),
-        }
-        return fn(transaction as any)
-      })
+      setupSaveBatch()
 
       const result = await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
@@ -474,24 +427,22 @@ describe('NoteRepository', () => {
       )
     }
 
-    function captureWrites(): { setSpy: ReturnType<typeof vi.fn>; updateSpy: ReturnType<typeof vi.fn> } {
-      const setSpy = vi.fn()
-      const updateSpy = vi.fn()
+    function captureWrites(): { setSpy: ReturnType<typeof vi.fn> } {
       vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
         if (args.length === 1) return { id: 'unexpected_new_doc' } as any
         return { id: args[args.length - 1] } as any
       })
-      vi.mocked(mockRunTransaction).mockImplementation(async (_db, fn) => {
-        return fn({ get: vi.fn(), set: setSpy, update: updateSpy } as any)
-      })
-      return { setSpy, updateSpy }
+      const { setSpy } = setupSaveBatch()
+      return { setSpy }
     }
 
     function mergeCalls(setSpy: ReturnType<typeof vi.fn>) {
       // Merge writes use the 3-arg overload (ref, data, { merge: true }).
-      // CREATE writes for fresh docs use the 2-arg form. The skip logic only
-      // affects the merge path, so that's what we count.
-      return setSpy.mock.calls.filter((c: unknown[]) => c.length === 3)
+      // Soft-delete writes also go through merge with `state: 'deleted'` —
+      // exclude them so the count reflects only re-writes of live docs.
+      return setSpy.mock.calls.filter((c: unknown[]) =>
+        c.length === 3 && (c[1] as { state?: string }).state !== 'deleted',
+      )
     }
 
     it('skips all merge writes when nothing changed', async () => {
@@ -639,19 +590,99 @@ describe('NoteRepository', () => {
         id: 'c1', content: 'Doomed', parentNoteId: 'note_1', rootNoteId: 'note_1',
       })
       setupStore([rootNote, child], { note_1: ['c1'] })
-      const { updateSpy } = captureWrites()
+      const { setSpy } = captureWrites()
 
       await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
       ])
 
-      const deleteCall = updateSpy.mock.calls.find(
+      const deleteCall = setSpy.mock.calls.find(
         (c: any[]) => c[1]?.state === 'deleted',
       )
       expect(deleteCall).toBeDefined()
       const payload = deleteCall![1] as Record<string, unknown>
       expect(payload).not.toHaveProperty('parentNoteId')
       expect(payload).not.toHaveProperty('rootNoteId')
+    })
+  })
+
+  // endregion
+
+  // region Multi-note atomic batched save (Phase 2)
+
+  describe('saveMultipleNotes', () => {
+    function setupStore(notes: Note[], descendantIdsByRoot: Record<string, string[]>) {
+      const byId = new Map(notes.map((n) => [n.id, n]))
+      vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id: string) => byId.get(id))
+      vi.spyOn(noteStore, 'getNoteById').mockImplementation((id: string) => byId.get(id))
+      vi.spyOn(noteStore, 'getDescendantIds').mockImplementation(
+        (id: string) => new Set(descendantIdsByRoot[id] ?? []),
+      )
+    }
+
+    it('returns empty result for empty input without committing', async () => {
+      const { batch } = setupSaveBatch()
+      const result = await repository.saveMultipleNotes([])
+      expect(result.size).toBe(0)
+      expect(batch.commit).not.toHaveBeenCalled()
+    })
+
+    it('combines writes from multiple notes into a single batch commit', async () => {
+      const root1 = note({ id: 'r1', content: 'Old r1', containedNotes: ['c1'] })
+      const child1 = note({ id: 'c1', content: 'a', parentNoteId: 'r1', rootNoteId: 'r1' })
+      const root2 = note({ id: 'r2', content: 'Old r2', containedNotes: ['c2'] })
+      const child2 = note({ id: 'c2', content: 'b', parentNoteId: 'r2', rootNoteId: 'r2' })
+      setupStore([root1, child1, root2, child2], { r1: ['c1'], r2: ['c2'] })
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => ({ id: args[args.length - 1] } as any))
+      const { batch, setSpy } = setupSaveBatch()
+
+      const result = await repository.saveMultipleNotes([
+        { noteId: 'r1', trackedLines: [
+          { content: 'New r1', noteId: 'r1' },
+          { content: '\ta', noteId: 'c1' },
+        ] },
+        { noteId: 'r2', trackedLines: [
+          { content: 'New r2', noteId: 'r2' },
+          { content: '\tb', noteId: 'c2' },
+        ] },
+      ])
+
+      expect(result.size).toBe(2)
+      expect(result.has('r1')).toBe(true)
+      expect(result.has('r2')).toBe(true)
+      // Single batch commit covers both notes' root rewrites.
+      expect(batch.commit).toHaveBeenCalledTimes(1)
+      const refs = setSpy.mock.calls.map((c: any[]) => (c[0] as { id: string }).id)
+      expect(refs).toContain('r1')
+      expect(refs).toContain('r2')
+    })
+
+    it('rolls back all notes when one item trips the content-drop guard', async () => {
+      const root1 = note({ id: 'r1', content: 'Old r1', containedNotes: ['a', 'b', 'c', 'd'] })
+      const a = note({ id: 'a', content: 'A', parentNoteId: 'r1', rootNoteId: 'r1' })
+      const b = note({ id: 'b', content: 'B', parentNoteId: 'r1', rootNoteId: 'r1' })
+      const c = note({ id: 'c', content: 'C', parentNoteId: 'r1', rootNoteId: 'r1' })
+      const d = note({ id: 'd', content: 'D', parentNoteId: 'r1', rootNoteId: 'r1' })
+      const root2 = note({ id: 'r2', content: 'Old r2', containedNotes: [] })
+      setupStore([root1, a, b, c, d, root2], { r1: ['a', 'b', 'c', 'd'], r2: [] })
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => ({ id: args[args.length - 1] } as any))
+      const { batch } = setupSaveBatch()
+
+      // r1 drops 3 of 4 children → trips guard. r2 is benign. The whole
+      // batch must abort before commit so r2 isn't saved alone.
+      await expect(
+        repository.saveMultipleNotes([
+          { noteId: 'r1', trackedLines: [
+            { content: 'r1', noteId: 'r1' },
+            { content: '\tA', noteId: 'a' },
+          ] },
+          { noteId: 'r2', trackedLines: [
+            { content: 'New r2', noteId: 'r2' },
+          ] },
+        ]),
+      ).rejects.toBeInstanceOf(ContentDropAbortError)
+
+      expect(batch.commit).not.toHaveBeenCalled()
     })
   })
 
@@ -882,15 +913,6 @@ describe('NoteRepository', () => {
         return { id: args[args.length - 1] } as any
       })
 
-      vi.mocked(mockRunTransaction).mockImplementation(async (_db, fn) => {
-        const transaction = {
-          get: vi.fn().mockResolvedValue({ exists: () => false, data: () => ({}) }),
-          set: vi.fn(),
-          update: vi.fn(),
-        }
-        return fn(transaction as any)
-      })
-
       const result = await repository.saveNoteWithChildren('root', [
         { content: 'Root', noteId: 'root' },
         { content: '\tA', noteId: null },
@@ -967,15 +989,8 @@ describe('NoteRepository', () => {
   // region Content-drop guard
 
   describe('content-drop guard', () => {
-    function setupTransaction() {
-      vi.mocked(mockRunTransaction).mockImplementation(async (_db, fn) => {
-        const transaction = {
-          get: vi.fn().mockResolvedValue({ exists: () => false, data: () => ({}) }),
-          set: vi.fn(),
-          update: vi.fn(),
-        }
-        return fn(transaction as any)
-      })
+    function setupBatch() {
+      setupSaveBatch()
       vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
         return { id: args[args.length - 1] ?? 'new' } as any
       })
@@ -990,7 +1005,7 @@ describe('NoteRepository', () => {
         containedNotes: ['c1', 'c2', 'c3', 'c4'],
       } as any)
       vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c1', 'c2', 'c3', 'c4']))
-      setupTransaction()
+      setupBatch()
 
       await expect(
         repository.saveNoteWithChildren('root', [
@@ -1007,7 +1022,7 @@ describe('NoteRepository', () => {
         containedNotes: ['c1', 'c2', 'c3', 'c4'],
       } as any)
       vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c1', 'c2', 'c3', 'c4']))
-      setupTransaction()
+      setupBatch()
 
       await expect(
         repository.saveNoteWithChildren('root', [
@@ -1025,7 +1040,7 @@ describe('NoteRepository', () => {
         containedNotes: ['c1', 'c2'],
       } as any)
       vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c1', 'c2']))
-      setupTransaction()
+      setupBatch()
 
       await expect(
         repository.saveNoteWithChildren('root', [{ content: 'Root', noteId: 'root' }]),
@@ -1041,7 +1056,7 @@ describe('NoteRepository', () => {
         containedNotes: ['c1', 'orphan_a', 'orphan_b', 'orphan_c'],
       } as any)
       vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c1']))
-      setupTransaction()
+      setupBatch()
 
       await expect(
         repository.saveNoteWithChildren('root', [

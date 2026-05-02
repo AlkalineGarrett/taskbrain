@@ -235,6 +235,17 @@ object NoteStore {
         }
     }
 
+    /**
+     * Optimistic content-only update for save paths. Skips when the in-memory
+     * content already matches so listeners don't recompose for no-op writes.
+     * Always [persist]=false — the caller drives the structured save.
+     */
+    fun updateContentIfChanged(noteId: String, content: String) {
+        val existing = getNoteById(noteId) ?: return
+        if (existing.content == content) return
+        updateNote(noteId, existing.copy(content = content), persist = false)
+    }
+
     /** Add a new note to the reconstructed list. */
     fun addNote(note: Note) {
         _notes.value = _notes.value + note

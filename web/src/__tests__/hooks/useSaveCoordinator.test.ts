@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act, renderHook, waitFor } from '@testing-library/react'
 
-const { repoSaveSpy, updateNoteSpy, getNoteByIdSpy, trackSaveSpy, getNoteLinesByIdSpy, enqueueSaveSpy } = vi.hoisted(() => ({
+const { repoSaveSpy, multiSaveSpy, prepareInlineSpy, updateNoteSpy, updateContentIfChangedSpy, getNoteByIdSpy, trackSaveSpy, getNoteLinesByIdSpy, enqueueSaveSpy } = vi.hoisted(() => ({
   repoSaveSpy: vi.fn(),
+  multiSaveSpy: vi.fn(),
+  prepareInlineSpy: vi.fn(),
   updateNoteSpy: vi.fn(),
+  updateContentIfChangedSpy: vi.fn(),
   getNoteByIdSpy: vi.fn(),
   trackSaveSpy: vi.fn(),
   getNoteLinesByIdSpy: vi.fn(),
@@ -18,6 +21,8 @@ vi.mock('@/firebase/config', () => ({
 vi.mock('@/data/NoteRepository', () => {
   class FakeRepo {
     saveNoteWithFullContent = repoSaveSpy
+    saveMultipleNotes = multiSaveSpy
+    prepareInlineEditTrackedLines = prepareInlineSpy
   }
   return { NoteRepository: FakeRepo }
 })
@@ -25,6 +30,7 @@ vi.mock('@/data/NoteRepository', () => {
 vi.mock('@/data/NoteStore', () => ({
   noteStore: {
     updateNote: updateNoteSpy,
+    updateContentIfChanged: updateContentIfChangedSpy,
     getNoteById: getNoteByIdSpy,
     trackSave: trackSaveSpy,
     getNoteLinesById: getNoteLinesByIdSpy,
@@ -44,7 +50,8 @@ function makeState() {
 }
 
 function setup(opts: {
-  save?: () => Promise<void>
+  prepareMainSaveItem?: (id: string) => { trackedLines: { content: string; noteId: string | null }[]; applyResult: (ids: Map<number, string>) => void }
+  setSaveError?: (msg: string | null) => void
   dirty?: boolean
   noteId?: string | null
   pendingOnceCacheEntries?: Record<string, Record<string, unknown>> | null
@@ -53,12 +60,19 @@ function setup(opts: {
   const editorState = makeState()
   const sessionManager = opts.sessionManager ?? new InlineSessionManager()
   const invalidate = vi.fn()
-  const save = opts.save ?? vi.fn(async () => {})
+  const setSaveError = opts.setSaveError ?? vi.fn()
+  const applyResult = vi.fn()
+  const prepareMainSaveItem = opts.prepareMainSaveItem
+    ?? vi.fn((id: string) => ({
+      trackedLines: [{ content: 'title', noteId: id }],
+      applyResult,
+    }))
   const utils = renderHook(({ dirty }) =>
     useSaveCoordinator({
       noteId: opts.noteId ?? 'note-1',
       editorState,
-      save,
+      prepareMainSaveItem: prepareMainSaveItem as never,
+      setSaveError,
       dirty,
       sessionManager,
       invalidateAndRecompute: invalidate,
@@ -66,13 +80,17 @@ function setup(opts: {
     }),
     { initialProps: { dirty: opts.dirty ?? false } },
   )
-  return { ...utils, save, invalidate, sessionManager, editorState }
+  return { ...utils, invalidate, sessionManager, editorState, prepareMainSaveItem, applyResult, setSaveError }
 }
 
 describe('useSaveCoordinator', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     repoSaveSpy.mockResolvedValue(new Map<number, string>())
+    multiSaveSpy.mockResolvedValue(new Map<string, Map<number, string>>())
+    prepareInlineSpy.mockImplementation(async (noteId: string, content: string) =>
+      content.split('\n').map((c, i) => ({ content: c, noteId: i === 0 ? noteId : null })),
+    )
     getNoteByIdSpy.mockReturnValue(note({ id: 'note-1', content: 'old' }))
     getNoteLinesByIdSpy.mockReturnValue(undefined)
   })
@@ -84,31 +102,31 @@ describe('useSaveCoordinator', () => {
     expect(result.current.saveStatus).toBe('saved')
   })
 
-  it('saveAll reports partial-error when the main save rejects', async () => {
-    const failingSave = vi.fn(async () => { throw new Error('boom') })
-    const { result } = setup({ save: failingSave })
+  it('saveAll reports partial-error when the batched save rejects', async () => {
+    multiSaveSpy.mockRejectedValueOnce(new Error('boom'))
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { result } = setup({ dirty: true })
     await act(async () => { await result.current.saveAll() })
-    // No dirty sessions and dirty=false → auto-reset will not fire,
-    // so the partial-error status persists for the user to see.
-    expect(result.current.saveStatus).toBe('partial-error')
+    // dirty=true → anyDirty stays true → the auto-reset effect lands the
+    // status back at 'idle' so the user can retry.
+    expect(result.current.saveStatus).toBe('idle')
+    expect(result.current.anyDirty).toBe(true)
+    errorSpy.mockRestore()
   })
 
-  it('logs the failing inline session id when its save rejects', async () => {
+  it('reports partial-error and logs when the batched save rejects', async () => {
     const sessionManager = new InlineSessionManager()
     sessionManager.ensureSessions([note({ id: 'view1', content: 'orig' })])
     const session = sessionManager.getSession('view1')!
     session.editorState.lines[0]!.updateFull('mutated', 7)
 
-    repoSaveSpy.mockRejectedValueOnce(new Error('boom'))
+    multiSaveSpy.mockRejectedValueOnce(new Error('boom'))
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const { result } = setup({ sessionManager })
     await act(async () => { await result.current.saveAll() })
 
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to save inline session view1'),
-      expect.any(Error),
-    )
+    expect(errorSpy).toHaveBeenCalledWith('saveAll failed:', expect.any(Error))
     // The session is still dirty after a failed save, so anyDirty stays true
     // and the auto-reset effect lands the status back at 'idle' for retry.
     expect(result.current.anyDirty).toBe(true)
@@ -140,21 +158,28 @@ describe('useSaveCoordinator', () => {
     expect(result.current.anyDirty).toBe(true)
   })
 
-  it('saving a dirty inline session optimistically updates the store and persists', async () => {
+  it('saving a dirty inline session optimistically updates the store and persists via the atomic batch', async () => {
     const sessionManager = new InlineSessionManager()
     sessionManager.ensureSessions([note({ id: 'viewX', content: 'orig\nline2' })])
     const session = sessionManager.getSession('viewX')!
     session.editorState.lines[0]!.updateFull('changed', 7)
+    getNoteByIdSpy.mockImplementation((id: string) => note({ id, content: 'old' }))
 
     const { result, invalidate } = setup({ sessionManager })
     await act(async () => { await result.current.saveAll() })
 
-    expect(updateNoteSpy).toHaveBeenCalledWith(
+    expect(updateContentIfChangedSpy).toHaveBeenCalledWith(
       'viewX',
-      expect.objectContaining({ content: expect.stringContaining('changed') }),
+      expect.stringContaining('changed'),
     )
-    expect(repoSaveSpy).toHaveBeenCalledWith('viewX', expect.stringContaining('changed'))
-    expect(trackSaveSpy).toHaveBeenCalled()
+    // Multi-note path: saveMultipleNotes receives an items array containing
+    // the dirty inline session, never the single-note saveNoteWithFullContent.
+    expect(multiSaveSpy).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ noteId: 'viewX' }),
+      ]),
+    )
+    expect(repoSaveSpy).not.toHaveBeenCalled()
     expect(invalidate).toHaveBeenCalled()
   })
 

@@ -291,6 +291,16 @@ export class NoteStore {
   }
 
   /**
+   * Optimistic content-only update for save paths. Skips when the in-memory
+   * content already matches so subscribers don't recompose for no-op writes.
+   */
+  updateContentIfChanged(noteId: string, content: string): void {
+    const existing = this.getNoteById(noteId)
+    if (!existing || existing.content === content) return
+    this.updateNote(noteId, { ...existing, content })
+  }
+
+  /**
    * Update a note without notifying subscribers.
    * Use when the caller knows a re-render will happen for other reasons
    * (e.g., during unmount cleanup before a navigation) and doesn't want
