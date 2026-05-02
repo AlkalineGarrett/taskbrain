@@ -361,17 +361,13 @@ class NoteRepository(
         localBase: List<String>?,
     ): Result<Map<Int, String>> = ioLogged("saveNoteWithChildren") body@{
         if (trackedLines.isEmpty()) return@body emptyMap()
-        val opId = newClientOpId()
-        NoteStore.registerPendingOp(opId)
-        try {
+        withPendingOp { opId ->
             val pendingCuts = NoteStore.getPendingCuts()
             val plan = planSaveNoteWithChildren(noteId, trackedLines, extraOpsBuilder, opId, localBase, pendingCuts)
             val cutDelete = buildCutDeleteOps(pendingCuts, listOf(plan.survivingIds), opId)
             commitInBatches("saveNoteWithChildren", plan.ops + cutDelete.ops)
             for (id in cutDelete.committedCutIds) NoteStore.clearPendingCut(id)
             plan.createdIds
-        } finally {
-            NoteStore.releasePendingOp(opId)
         }
     }
 
@@ -386,9 +382,7 @@ class NoteRepository(
         items: List<SaveItem>,
     ): Result<Map<String, Map<Int, String>>> = ioLogged("saveMultipleNotes") body@{
         if (items.isEmpty()) return@body emptyMap()
-        val opId = newClientOpId()
-        NoteStore.registerPendingOp(opId)
-        try {
+        withPendingOp { opId ->
             val pendingCuts = NoteStore.getPendingCuts()
             val plans = items
                 .filter { it.trackedLines.isNotEmpty() }
@@ -403,8 +397,6 @@ class NoteRepository(
             commitInBatches("saveMultipleNotes", allOps)
             for (id in cutDelete.committedCutIds) NoteStore.clearPendingCut(id)
             plans.associate { it.noteId to it.createdIds }
-        } finally {
-            NoteStore.releasePendingOp(opId)
         }
     }
 
@@ -413,37 +405,30 @@ class NoteRepository(
     /**
      * For each pendingCut whose lineId isn't a survivor in any of [survivingIdSets]
      * (i.e., not being revived as a child of some destination note in this batch),
-     * append a `state='cut-delete'` write so the line is parked rather than left
-     * orphaned in its old parent's tree. Returns the ids actually scheduled so
-     * the caller can clear them from the buffer after commit.
+     * append a `state='cut-delete'` write so the line is parked rather than
+     * left orphaned in its old parent's tree. Returns every input id in
+     * [CutDeleteOps.committedCutIds] — including ids whose underlying doc
+     * has vanished from NoteStore (where [buildStateChangeOps] silently
+     * skipped the write) — so the cut buffer is fully drained on commit and
+     * doesn't leak phantoms.
      */
     private fun buildCutDeleteOps(
         pendingCuts: Map<String, String>,
         survivingIdSets: List<Set<String>>,
         opId: String,
     ): CutDeleteOps {
-        val ops = mutableListOf<BatchOp>()
+        // Partition pendingCuts: ids being revived in this batch (skip the
+        // cut-delete write but still clear from buffer) vs ids needing parking.
+        val idsToPark = mutableListOf<String>()
         val committedCutIds = mutableListOf<String>()
         for ((lineId, _) in pendingCuts) {
-            val reviving = survivingIdSets.any { lineId in it }
-            if (reviving) {
-                committedCutIds.add(lineId)
-                continue
-            }
-            val existing = NoteStore.getRawNoteById(lineId) ?: continue
-            ops.add(
-                BatchOp(
-                    noteRef(lineId),
-                    mapOf(
-                        "state" to NoteState.CUT_DELETE,
-                        "updatedAt" to FieldValue.serverTimestamp(),
-                    ) + stampWrite(opId, existing),
-                    merge = true,
-                ),
-            )
             committedCutIds.add(lineId)
+            val reviving = survivingIdSets.any { lineId in it }
+            // The destination's planSave writes state=null for revived ids;
+            // we only need to schedule the cut-delete write for the rest.
+            if (!reviving) idsToPark.add(lineId)
         }
-        return CutDeleteOps(ops, committedCutIds)
+        return CutDeleteOps(buildStateChangeOps(idsToPark, NoteState.CUT_DELETE, opId), committedCutIds)
     }
 
     /**
@@ -1090,8 +1075,9 @@ class NoteRepository(
         assertNoteStoreLoaded("softDeleteNote", noteId)
         warnIfDescendantsLikelyStale("softDeleteNote", noteId)
         val idsToDelete = NoteStore.getDescendantIds(noteId) + noteId
-        val deleteData = mapOf("state" to "deleted", "updatedAt" to FieldValue.serverTimestamp())
-        commitInBatches("softDeleteNote", idsToDelete.map { BatchOp(noteRef(it), deleteData, merge = true) })
+        withPendingOp { opId ->
+            commitInBatches("softDeleteNote", buildStateChangeOps(idsToDelete, NoteState.DELETED, opId))
+        }
     }
 
     /**
@@ -1104,8 +1090,9 @@ class NoteRepository(
         // only lists active children, so it can't detect missing soft-deleted
         // descendants — the heuristic doesn't apply here.
         val idsToRestore = NoteStore.getAllDescendantIds(noteId) + noteId
-        val restoreData = mapOf<String, Any?>("state" to null, "updatedAt" to FieldValue.serverTimestamp())
-        commitInBatches("undeleteNote", idsToRestore.map { BatchOp(noteRef(it), restoreData, merge = true) })
+        withPendingOp { opId ->
+            commitInBatches("undeleteNote", buildStateChangeOps(idsToRestore, null, opId))
+        }
     }
 
     /**
@@ -1119,23 +1106,8 @@ class NoteRepository(
     suspend fun restoreCutDeletedNotes(noteIds: List<String>): Result<Unit> = ioLogged("restoreCutDeletedNotes") body@{
         requireUserId()
         if (noteIds.isEmpty()) return@body
-        val opId = newClientOpId()
-        NoteStore.registerPendingOp(opId)
-        try {
-            val ops = noteIds.mapNotNull { id ->
-                val existing = NoteStore.getRawNoteById(id) ?: return@mapNotNull null
-                BatchOp(
-                    noteRef(id),
-                    mapOf(
-                        "state" to null,
-                        "updatedAt" to FieldValue.serverTimestamp(),
-                    ) + stampWrite(opId, existing),
-                    merge = true,
-                )
-            }
-            commitInBatches("restoreCutDeletedNotes", ops)
-        } finally {
-            NoteStore.releasePendingOp(opId)
+        withPendingOp { opId ->
+            commitInBatches("restoreCutDeletedNotes", buildStateChangeOps(noteIds, null, opId))
         }
     }
 
@@ -1394,6 +1366,51 @@ class NoteRepository(
             }
         }
         return result
+    }
+
+    /**
+     * Run [block] with a freshly-allocated `clientOpId` registered against
+     * the NoteStore for the duration of the operation. Centralizes the
+     * register/try/finally/release boilerplate that every save-path mutation
+     * needs to ride the echo-suppression contract.
+     */
+    private suspend fun <T> withPendingOp(block: suspend (opId: String) -> T): T {
+        val opId = newClientOpId()
+        NoteStore.registerPendingOp(opId)
+        return try {
+            block(opId)
+        } finally {
+            NoteStore.releasePendingOp(opId)
+        }
+    }
+
+    /**
+     * Build merge writes that flip `state` for each id, stamped with [opId]
+     * and a fresh `version`. Skips ids absent from NoteStore (defends against
+     * the doc being hard-deleted between caller's id-collection and write).
+     * Shared by softDeleteNote, undeleteNote, restoreCutDeletedNotes, and
+     * buildCutDeleteOps so all state flips ride the echo-suppression contract.
+     */
+    private fun buildStateChangeOps(
+        ids: Iterable<String>,
+        newState: String?,
+        opId: String,
+    ): List<BatchOp> {
+        val ops = mutableListOf<BatchOp>()
+        for (id in ids) {
+            val existing = NoteStore.getRawNoteById(id) ?: continue
+            ops.add(
+                BatchOp(
+                    noteRef(id),
+                    mapOf(
+                        "state" to newState,
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    ) + stampWrite(opId, existing),
+                    merge = true,
+                ),
+            )
+        }
+        return ops
     }
 
     private suspend fun commitInBatches(operation: String, ops: List<BatchOp>) {

@@ -409,18 +409,14 @@ export class NoteRepository {
     return this.logged('saveNoteWithChildren', async () => {
       if (trackedLines.length === 0) return new Map()
       const userId = this.requireUserId()
-      const opId = newClientOpId()
-      noteStore.registerPendingOp(opId)
-      try {
+      return this.withPendingOp(async (opId) => {
         const pendingCuts = noteStore.getPendingCuts()
         const plan = this.planSave({ noteId, trackedLines, localBase }, userId, opId, pendingCuts)
         const cutDeleteOps = this.buildCutDeleteOps(pendingCuts, [plan.survivingIds], opId)
         await this.commitInBatches('saveNoteWithChildren', [...plan.ops, ...cutDeleteOps.ops])
         for (const id of cutDeleteOps.committedCutIds) noteStore.clearPendingCut(id)
         return plan.createdIds
-      } finally {
-        noteStore.releasePendingOp(opId)
-      }
+      })
     })
   }
 
@@ -437,9 +433,7 @@ export class NoteRepository {
     return this.logged('saveMultipleNotes', async () => {
       if (items.length === 0) return new Map()
       const userId = this.requireUserId()
-      const opId = newClientOpId()
-      noteStore.registerPendingOp(opId)
-      try {
+      return this.withPendingOp(async (opId) => {
         const pendingCuts = noteStore.getPendingCuts()
         const plans = items
           .filter((item) => item.trackedLines.length > 0)
@@ -453,9 +447,7 @@ export class NoteRepository {
           result.set(plan.noteId, plan.createdIds)
         }
         return result
-      } finally {
-        noteStore.releasePendingOp(opId)
-      }
+      })
     })
   }
 
@@ -463,38 +455,28 @@ export class NoteRepository {
    * For each pendingCut whose lineId isn't a survivor in any of [survivingIdSets]
    * (i.e., not being revived as a child of some destination note in this batch),
    * append a `state='cut-delete'` write so the line is parked rather than left
-   * orphaned in its old parent's tree. Returns the ids actually scheduled so
-   * the caller can clear them from the buffer after commit.
+   * orphaned in its old parent's tree. Returns every input id in
+   * [committedCutIds] — including ids whose underlying doc has vanished from
+   * NoteStore (where [buildStateChangeOps] silently skipped the write) — so
+   * the cut buffer is fully drained on commit and doesn't leak phantoms.
    */
   private buildCutDeleteOps(
     pendingCuts: Map<string, string>,
     survivingIdSets: Set<string>[],
     opId: string,
   ): { ops: BatchWriteOp[]; committedCutIds: string[] } {
-    const ops: BatchWriteOp[] = []
+    // Partition pendingCuts: ids being revived in this batch (skip the
+    // cut-delete write but still clear from buffer) vs ids needing parking.
+    const idsToPark: string[] = []
     const committedCutIds: string[] = []
     for (const [lineId] of pendingCuts) {
-      const reviving = survivingIdSets.some((s) => s.has(lineId))
-      if (reviving) {
-        // The line is being saved as a child of some note in this batch —
-        // its destination's planSave will write state=null. Just clear the
-        // buffer entry; no cut-delete write needed.
-        committedCutIds.push(lineId)
-        continue
-      }
-      const existing = noteStore.getRawNoteById(lineId)
-      if (!existing) continue
-      ops.push({
-        ref: this.noteRef(lineId),
-        data: {
-          state: NoteState.CUT_DELETE,
-          updatedAt: serverTimestamp(),
-          ...stampWrite(opId, existing),
-        },
-        merge: true,
-      })
       committedCutIds.push(lineId)
+      const reviving = survivingIdSets.some((s) => s.has(lineId))
+      // The destination's planSave writes state=null for revived ids; we
+      // only need to schedule the cut-delete write for the rest.
+      if (!reviving) idsToPark.push(lineId)
     }
+    const ops = this.buildStateChangeOps(idsToPark, NoteState.CUT_DELETE, opId)
     return { ops, committedCutIds }
   }
 
@@ -752,6 +734,51 @@ export class NoteRepository {
       createdIds.set(lineIndex, ref.id)
     }
     return { noteId, ops, createdIds, survivingIds }
+  }
+
+  /**
+   * Run [fn] with a freshly-allocated `clientOpId` registered against the
+   * NoteStore for the duration of the operation. Centralizes the
+   * register/try/finally/release boilerplate that every save-path mutation
+   * needs to ride the echo-suppression contract.
+   */
+  private async withPendingOp<T>(fn: (opId: string) => Promise<T>): Promise<T> {
+    const opId = newClientOpId()
+    noteStore.registerPendingOp(opId)
+    try {
+      return await fn(opId)
+    } finally {
+      noteStore.releasePendingOp(opId)
+    }
+  }
+
+  /**
+   * Build merge writes that flip `state` for each id, stamped with [opId]
+   * and a fresh `version`. Skips ids absent from NoteStore (defends against
+   * the doc being hard-deleted between caller's id-collection and write).
+   * Shared by softDeleteNote, undeleteNote, restoreCutDeletedNotes, and
+   * buildCutDeleteOps so all state flips ride the echo-suppression contract.
+   */
+  private buildStateChangeOps(
+    ids: Iterable<string>,
+    newState: string | null,
+    opId: string,
+  ): BatchWriteOp[] {
+    const ops: BatchWriteOp[] = []
+    for (const id of ids) {
+      const existing = noteStore.getRawNoteById(id)
+      if (!existing) continue
+      ops.push({
+        ref: this.noteRef(id),
+        data: {
+          state: newState,
+          updatedAt: serverTimestamp(),
+          ...stampWrite(opId, existing),
+        },
+        merge: true,
+      })
+    }
+    return ops
   }
 
   private async commitInBatches(operation: string, ops: BatchWriteOp[]): Promise<void> {
@@ -1029,16 +1056,10 @@ export class NoteRepository {
       this.assertNoteStoreLoaded('softDeleteNote', noteId)
       this.warnIfDescendantsLikelyStale('softDeleteNote', noteId)
       const idsToDelete = new Set([noteId, ...noteStore.getDescendantIds(noteId)])
-
-      const batch = writeBatch(this.db)
-      for (const id of idsToDelete) {
-        batch.update(this.noteRef(id), {
-          state: 'deleted',
-          updatedAt: serverTimestamp(),
-        })
-      }
-      await batch.commit()
-      firestoreUsage.recordWrite('softDeleteNote', 'BATCH_COMMIT', idsToDelete.size)
+      await this.withPendingOp(async (opId) => {
+        const ops = this.buildStateChangeOps(idsToDelete, NoteState.DELETED, opId)
+        await this.commitInBatches('softDeleteNote', ops)
+      })
     })
   }
 
@@ -1087,16 +1108,10 @@ export class NoteRepository {
       // stale-descendants warning: a deleted note's containedNotes only lists
       // active children, so it can't detect missing soft-deleted descendants.
       const idsToRestore = new Set([noteId, ...noteStore.getAllDescendantIds(noteId)])
-
-      const batch = writeBatch(this.db)
-      for (const id of idsToRestore) {
-        batch.update(this.noteRef(id), {
-          state: null,
-          updatedAt: serverTimestamp(),
-        })
-      }
-      await batch.commit()
-      firestoreUsage.recordWrite('undeleteNote', 'BATCH_COMMIT', idsToRestore.size)
+      await this.withPendingOp(async (opId) => {
+        const ops = this.buildStateChangeOps(idsToRestore, null, opId)
+        await this.commitInBatches('undeleteNote', ops)
+      })
     })
   }
 
@@ -1111,27 +1126,10 @@ export class NoteRepository {
     return this.logged('restoreCutDeletedNotes', async () => {
       this.requireUserId()
       if (noteIds.length === 0) return
-      const opId = newClientOpId()
-      noteStore.registerPendingOp(opId)
-      try {
-        const ops: BatchWriteOp[] = []
-        for (const id of noteIds) {
-          const existing = noteStore.getRawNoteById(id)
-          if (!existing) continue
-          ops.push({
-            ref: this.noteRef(id),
-            data: {
-              state: null,
-              updatedAt: serverTimestamp(),
-              ...stampWrite(opId, existing),
-            },
-            merge: true,
-          })
-        }
+      await this.withPendingOp(async (opId) => {
+        const ops = this.buildStateChangeOps(noteIds, null, opId)
         await this.commitInBatches('restoreCutDeletedNotes', ops)
-      } finally {
-        noteStore.releasePendingOp(opId)
-      }
+      })
     })
   }
 

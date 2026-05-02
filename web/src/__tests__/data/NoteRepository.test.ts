@@ -1325,51 +1325,68 @@ describe('NoteRepository', () => {
   // region Delete/Restore Tests
 
   describe('softDeleteNote', () => {
-    it('deletes root and new-format descendants', async () => {
-      const getDescendantIdsSpy = vi.spyOn(noteStore, 'getDescendantIds')
-        .mockReturnValue(new Set(['child_1', 'child_2']))
-      const batch = { update: vi.fn(), commit: vi.fn().mockResolvedValue(undefined) }
-      vi.mocked(mockWriteBatch).mockReturnValue(batch as any)
-      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
-        return { id: args[args.length - 1] } as any
-      })
+    it('deletes root and new-format descendants with opId + version stamps', async () => {
+      const root = note({ id: 'note_1', version: 5 })
+      const c1 = note({ id: 'child_1', version: 2 })
+      const c2 = note({ id: 'child_2', version: 7 })
+      vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['child_1', 'child_2']))
+      vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root : id === 'child_1' ? c1 : id === 'child_2' ? c2 : undefined,
+      )
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => ({ id: args[args.length - 1] } as any))
+      const { batch, setSpy } = setupSaveBatch()
 
       await repository.softDeleteNote('note_1')
 
-      // root + 2 children
-      expect(batch.update).toHaveBeenCalledTimes(3)
-      getDescendantIdsSpy.mockRestore()
+      // root + 2 children → 3 merge writes.
+      expect(setSpy.mock.calls.length).toBe(3)
+      // Every write flips state to 'deleted' and stamps a single shared opId.
+      const states = setSpy.mock.calls.map((c: any[]) => c[1].state)
+      expect(states.every((s) => s === 'deleted')).toBe(true)
+      const opIds = setSpy.mock.calls.map((c: any[]) => c[1].lastWriterOpId)
+      expect(opIds.every((id) => id != null && id === opIds[0])).toBe(true)
+      // Versions bumped from each existing note.
+      const rootWrite = setSpy.mock.calls.find((c: any[]) => (c[0] as { id: string }).id === 'note_1')
+      expect(rootWrite![1].version).toBe(6)
+      expect(batch.commit).toHaveBeenCalled()
     })
 
     it('deletes only root when no descendants', async () => {
-      const getDescendantIdsSpy = vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set())
-      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
-        return { id: args[args.length - 1] } as any
-      })
-      const batch = { update: vi.fn(), commit: vi.fn().mockResolvedValue(undefined) }
-      vi.mocked(mockWriteBatch).mockReturnValue(batch as any)
+      const root = note({ id: 'note_1', version: 1 })
+      vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set())
+      vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root : undefined,
+      )
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => ({ id: args[args.length - 1] } as any))
+      const { setSpy } = setupSaveBatch()
 
       await repository.softDeleteNote('note_1')
 
-      expect(batch.update).toHaveBeenCalledTimes(1)
-      getDescendantIdsSpy.mockRestore()
+      expect(setSpy.mock.calls.length).toBe(1)
+      expect(setSpy.mock.calls[0]![1].state).toBe('deleted')
     })
   })
 
   describe('undeleteNote', () => {
-    it('restores root and new-format descendants', async () => {
-      const getAllDescendantIdsSpy = vi.spyOn(noteStore, 'getAllDescendantIds')
-        .mockReturnValue(new Set(['child_1', 'child_2']))
-      const batch = { update: vi.fn(), commit: vi.fn().mockResolvedValue(undefined) }
-      vi.mocked(mockWriteBatch).mockReturnValue(batch as any)
-      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
-        return { id: args[args.length - 1] } as any
-      })
+    it('restores root and new-format descendants with opId + version stamps', async () => {
+      const root = note({ id: 'note_1', state: 'deleted', version: 3 })
+      const c1 = note({ id: 'child_1', state: 'deleted', version: 1 })
+      const c2 = note({ id: 'child_2', state: 'deleted', version: 4 })
+      vi.spyOn(noteStore, 'getAllDescendantIds').mockReturnValue(new Set(['child_1', 'child_2']))
+      vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root : id === 'child_1' ? c1 : id === 'child_2' ? c2 : undefined,
+      )
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => ({ id: args[args.length - 1] } as any))
+      const { setSpy } = setupSaveBatch()
 
       await repository.undeleteNote('note_1')
 
-      expect(batch.update).toHaveBeenCalledTimes(3)
-      getAllDescendantIdsSpy.mockRestore()
+      expect(setSpy.mock.calls.length).toBe(3)
+      // Every write flips state to null.
+      expect(setSpy.mock.calls.every((c: any[]) => c[1].state === null)).toBe(true)
+      // Single shared opId.
+      const opIds = setSpy.mock.calls.map((c: any[]) => c[1].lastWriterOpId)
+      expect(opIds.every((id) => id != null && id === opIds[0])).toBe(true)
     })
 
   })

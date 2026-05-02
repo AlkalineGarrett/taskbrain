@@ -1,6 +1,6 @@
 # Save-refactor follow-ups
 
-Deferred items, known limitations, and follow-up work from Phases 0–6 of the
+Deferred items, known limitations, and follow-up work from Phases 0–7 of the
 save-path refactor. Review after the plan completes; not all of these are
 worth doing.
 
@@ -10,12 +10,6 @@ Organized by phase, with priority hints:
 - **Low** — style/cosmetic; only worth touching if you're already in the area
 
 ## Cross-cutting
-
-- **`undeleteNote` not under the Phase 3+ contract.** Doesn't stamp `lastWriterOpId`
-  / bump `version`, doesn't `registerPendingOp`, so its echo flows through the
-  full reload path instead of being suppressed. Bringing it in line would also
-  let `restoreCutDeletedNotes` (Phase 6) and `undeleteNote` share a private
-  `commitStateFlip(ids, newState, opId)` helper. **Medium.**
 
 - **Per-descendant 3-way merge for `containedNotes`.** Phase 4 only merges the
   root note's `containedNotes`. Concurrent edits to a deeply-nested doc's
@@ -27,16 +21,18 @@ Organized by phase, with priority hints:
   `containedNotes` mutually inconsistent. Last-writer-wins on the descendant
   write. **Low** (rare; users rarely move-conflict).
 
-## Pre-Phase 0 / cleanup
-
-- **Migrate `updateFromText` tests and delete the function.** Originally Phase 9
-  in the rolling plan. ~50 test usages on Android; the production code no
-  longer calls it. Mechanical migration. **Medium.**
-
 - **Document the remaining null-synthesis path** in
   `NoteStore.getNoteLinesByIdOrSynthesize` (Android). Used by `InlineEditSession`
   on Android — needs an async refactor to fully remove. The Phase 0 fix
   closed the `CurrentNoteViewModel.loadContent` path; this one stays. **Low.**
+
+## Phase 8 (planned cleanup, not yet done)
+
+- **Migrate `updateFromText` tests and delete the function.** ~50 test usages
+  on Android; the production code no longer calls it. Mechanical migration:
+  replace `editorState.updateFromText(text)` with `editorState.initFromNoteLines(...)`
+  in tests, then delete the function. **Medium.** This is the last
+  pre-planned item; everything else below is genuinely opportunistic.
 
 ## Phase 1 (schema)
 
@@ -57,11 +53,12 @@ Organized by phase, with priority hints:
 
 - **Group B `state == "deleted"` sites kept as raw strings.** Phase 1 added
   `isLive(state)` and migrated Group A (live-filtering) sites; Group B sites
-  (Recover screen filter, search-result deleted bucketing, `isDeleted` flag
-  in editor state, `RecoverScreen.tsx` pre-Phase-6) specifically asked "is
-  this soft-deleted" rather than "is this not live." Phase 6 migrated the
-  RecoverScreen filter to `NoteState.DELETED`; the rest still use raw
-  strings. **Low** (intentional split, but worth a quick audit).
+  (search-result deleted bucketing, `isDeleted` flag in editor state, etc.)
+  specifically asked "is this soft-deleted" rather than "is this not live."
+  Phase 6 migrated the RecoverScreen filter; Phase 7 migrated the new
+  state-flip helpers; the rest still use raw strings (`NoteSearchUtils`,
+  `NoteFilteringUtils`, several editor sites). **Low** (intentional split,
+  but worth a quick audit).
 
 - **`extraOpsBuilder` hardcoded `null` in `saveMultipleNotes`.** Multi-note
   batched saves can't carry alarm/extra ops today — only the single-note
@@ -140,16 +137,21 @@ Organized by phase, with priority hints:
   Phase 6's new restore handler matches it. CLAUDE.md error-handling
   guidance prefers UI-surfaced errors. **Low.**
 
-- **Extract `buildStateChangeOps(ids, newState, opId)` helper.** Would
-  consolidate `buildCutDeleteOps` (Phase 5) and `restoreCutDeletedNotes`
-  (Phase 6) on both platforms. Modest win (~5 lines per platform) but
-  positions Phase 7+ to add more state flips cleanly. **Low.**
-
 - **Restore wizard for cuts whose source was deleted.** Phase 6's restore
   flips `state=null` and relies on stray-child reconstruction to re-attach
   under the original `parentNoteId`. If the parent has since been deleted,
   the restored doc orphans (it'd then surface in the orphans cluster).
   Workable but not seamless. **Low.**
+
+## Phase 7 (state-flip consolidation + Phase 3 contract retrofit)
+
+- **Stringly-typed `state` literals in non-save call sites.** Phase 7
+  migrated every state-flip in `NoteRepository` (both platforms) to use
+  `NoteState.DELETED` / `NoteState.CUT_DELETE` / `null`, but pre-existing
+  reads still compare against raw strings: web `NoteSearchUtils.ts:55`,
+  `NoteFilteringUtils.ts:125`, `EditorContentState.kt:90`,
+  `CurrentNoteViewModel.kt:214,454`, `loadNoteWithChildren` `isDeleted`
+  flags, etc. Mechanical sweep. **Low.**
 
 ## Test infra
 
