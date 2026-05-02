@@ -6,6 +6,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.tasks.await
 import org.alkaline.taskbrain.data.Note
 import org.alkaline.taskbrain.data.NoteStore
+import org.alkaline.taskbrain.data.withStampedWrite
 
 /**
  * Implementation of NoteOperations that uses Firebase Firestore directly.
@@ -41,7 +42,11 @@ class NoteRepositoryOperations(
             path?.let { put("path", it) }
             put("updatedAt", FieldValue.serverTimestamp())
         }
-        notesCollection.document(noteId).update(updates).await()
+        withStampedWrite(
+            existing = NoteStore.getRawNoteById(noteId),
+        ) { _, stamp ->
+            notesCollection.document(noteId).update(updates + stamp).await()
+        }
 
         val base = NoteStore.getRawNoteById(noteId)
             ?: throw NoteOperationException("Note not found after update: $noteId")
@@ -59,15 +64,16 @@ class NoteRepositoryOperations(
         }
 
         val noteRef = notesCollection.document()
-        val noteData = hashMapOf(
-            "userId" to userId,
-            "content" to content,
-            "path" to path,
-            "createdAt" to FieldValue.serverTimestamp(),
-            "updatedAt" to FieldValue.serverTimestamp()
-        )
-
-        noteRef.set(noteData).await()
+        withStampedWrite(existing = null) { _, stamp ->
+            val noteData = hashMapOf<String, Any>(
+                "userId" to userId,
+                "content" to content,
+                "path" to path,
+                "createdAt" to FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp(),
+            ).apply { putAll(stamp) }
+            noteRef.set(noteData).await()
+        }
 
         // Return the created note
         return Note(

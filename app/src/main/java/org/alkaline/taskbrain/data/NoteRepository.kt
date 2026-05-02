@@ -936,12 +936,14 @@ class NoteRepository(
 
     suspend fun updateShowCompleted(noteId: String, showCompleted: Boolean): Result<Unit> = ioLogged("updateShowCompleted") {
         requireUserId()
-        noteRef(noteId).update(
-            mapOf(
-                "showCompleted" to showCompleted,
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-        ).await()
+        withPendingOp { opId ->
+            noteRef(noteId).update(
+                mapOf(
+                    "showCompleted" to showCompleted,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                ) + stampWrite(opId, NoteStore.getRawNoteById(noteId)),
+            ).await()
+        }
         FirestoreUsage.recordWrite("updateShowCompleted", FirestoreUsage.WriteType.UPDATE)
     }
 
@@ -1112,24 +1114,9 @@ class NoteRepository(
         val merge: Boolean
     )
 
-    /**
-     * Generates a fresh `clientOpId` for a save operation. Stamped on every
-     * doc the save writes; the listener uses it to identify and suppress the
-     * server echo so the editor doesn't reload over characters typed since
-     * the save started.
-     */
-    private fun newClientOpId(): String = java.util.UUID.randomUUID().toString()
-
-    /**
-     * Per-write fields tagging this commit so the listener can identify our
-     * own server echo and skip the editor reload that would otherwise clobber
-     * characters typed since the save started. Also bumps `version` (monotonic
-     * per-doc counter; new docs start at 1).
-     */
-    private fun stampWrite(opId: String, existing: Note?): Map<String, Any> = mapOf(
-        FIELD_LAST_WRITER_OP_ID to opId,
-        FIELD_VERSION to (existing?.version ?: 0L) + 1L,
-    )
+    // [newClientOpId] and [stampWrite] live in WriteStamp.kt so direct-write
+    // bypass sites (DSL ops, once-cache flush, settings updates) can also
+    // stamp + register their writes for echo suppression.
 
     /**
      * 3-way merge of `containedNotes` ID lists. Returns:
@@ -1273,8 +1260,6 @@ class NoteRepository(
         private const val TAG = "NoteRepository"
         private const val MAX_BATCH_SIZE = 500
         private const val NOTE_STORE_AWAIT_MS = 1500L
-        private const val FIELD_LAST_WRITER_OP_ID = "lastWriterOpId"
-        private const val FIELD_VERSION = "version"
     }
 }
 

@@ -657,8 +657,8 @@ object NoteStore {
                 rootNoteId = data["rootNoteId"] as? String,
                 showCompleted = data["showCompleted"] as? Boolean ?: true,
                 onceCache = (data["onceCache"] as? Map<String, Map<String, Any>>) ?: emptyMap(),
-                version = (data["version"] as? Long) ?: 0L,
-                lastWriterOpId = data["lastWriterOpId"] as? String,
+                version = (data[FIELD_VERSION] as? Long) ?: 0L,
+                lastWriterOpId = data[FIELD_LAST_WRITER_OP_ID] as? String,
                 containedNotesBase = data["containedNotesBase"] as? List<String>,
             )
         } catch (e: Exception) {

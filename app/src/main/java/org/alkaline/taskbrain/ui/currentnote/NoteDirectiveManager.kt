@@ -15,6 +15,7 @@ import org.alkaline.taskbrain.data.Note
 import org.alkaline.taskbrain.data.NoteLine
 import org.alkaline.taskbrain.data.NoteRepository
 import org.alkaline.taskbrain.data.NoteStore
+import org.alkaline.taskbrain.data.withStampedWrite
 import org.alkaline.taskbrain.dsl.cache.CachedDirectiveExecutor
 import org.alkaline.taskbrain.dsl.cache.DirectiveCacheManager
 import org.alkaline.taskbrain.dsl.cache.EditSessionManager
@@ -960,11 +961,15 @@ class NoteDirectiveManager(
         scope.launch {
             try {
                 val updates = newEntries.mapKeys { (key, _) -> "onceCache.$key" }
-                FirebaseFirestore.getInstance()
-                    .collection("notes")
-                    .document(noteId)
-                    .update(updates)
-                    .await()
+                withStampedWrite(
+                    existing = NoteStore.getRawNoteById(noteId),
+                ) { _, stamp ->
+                    FirebaseFirestore.getInstance()
+                        .collection("notes")
+                        .document(noteId)
+                        .update(updates + stamp)
+                        .await()
+                }
                 Log.d(TAG, "Persisted ${newEntries.size} once cache entries for note $noteId")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to persist once cache entries", e)

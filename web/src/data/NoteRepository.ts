@@ -1,4 +1,5 @@
 import {
+  addDoc,
   collection,
   doc,
   getDoc,
@@ -89,8 +90,27 @@ function newClientOpId(): string {
  * characters typed since the save started. Also bumps `version` (monotonic
  * per-doc counter; new docs start at 1).
  */
-function stampWrite(opId: string, existing: Note | undefined): { lastWriterOpId: string; version: number } {
+export function stampWrite(opId: string, existing: Note | undefined): { lastWriterOpId: string; version: number } {
   return { lastWriterOpId: opId, version: (existing?.version ?? 0) + 1 }
+}
+
+/**
+ * Wrap a direct Firestore write so its echo is suppressed by the listener.
+ * Use from sites that don't go through `NoteRepository.withPendingOp` (DSL
+ * ops, once-cache flush, settings updates). Returns the wrapped operation's
+ * result.
+ */
+export async function withStampedWrite<T>(
+  fn: (opId: string, stamp: { lastWriterOpId: string; version: number }) => Promise<T>,
+  existing: Note | undefined,
+): Promise<T> {
+  const opId = newClientOpId()
+  noteStore.registerPendingOp(opId)
+  try {
+    return await fn(opId, stampWrite(opId, existing))
+  } finally {
+    noteStore.releasePendingOp(opId)
+  }
 }
 
 /**
@@ -991,10 +1011,12 @@ export class NoteRepository {
   async createNote(): Promise<string> {
     return this.logged('createNote', async () => {
       const userId = this.requireUserId()
-      const { addDoc } = await import('firebase/firestore')
-      const ref = await addDoc(this.notesRef, this.newNoteData(userId, ''))
-      firestoreUsage.recordWrite('createNote', 'SET')
-      return ref.id
+      return this.withPendingOp(async (opId) => {
+        const data = { ...this.newNoteData(userId, ''), ...stampWrite(opId, undefined) }
+        const ref = await addDoc(this.notesRef, data)
+        firestoreUsage.recordWrite('createNote', 'SET')
+        return ref.id
+      })
     })
   }
 
@@ -1004,13 +1026,24 @@ export class NoteRepository {
   async createMultiLineNote(content: string): Promise<string> {
     return this.logged('createMultiLineNote', async () => {
       const userId = this.requireUserId()
+      // Register the opId so the listener suppresses the create echo —
+      // same contract as saveNoteWithChildren.
+      return this.withPendingOp((opId) => this.createMultiLineNoteInner(userId, opId, content))
+    })
+  }
+
+  private async createMultiLineNoteInner(
+    userId: string,
+    opId: string,
+    content: string,
+  ): Promise<string> {
       const lines = content.split('\n')
       const firstLine = (lines[0] ?? '').replace(/^\t+/, '')
       const childLines = lines.slice(1)
 
       if (childLines.length === 0 || childLines.every((l) => l.replace(/^\t+/, '') === '')) {
-        const { addDoc } = await import('firebase/firestore')
-        const ref = await addDoc(this.notesRef, this.newNoteData(userId, firstLine))
+        const data = { ...this.newNoteData(userId, firstLine), ...stampWrite(opId, undefined) }
+        const ref = await addDoc(this.notesRef, data)
         firestoreUsage.recordWrite('createMultiLineNote', 'SET')
         return ref.id
       }
@@ -1057,6 +1090,7 @@ export class NoteRepository {
       batch.set(parentRef, {
         ...this.newNoteData(userId, firstLine),
         containedNotes: rootChildren,
+        ...stampWrite(opId, undefined),
       })
 
       for (const node of nodes) {
@@ -1068,6 +1102,7 @@ export class NoteRepository {
           containedNotes: node.children,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
+          ...stampWrite(opId, undefined),
         })
       }
 
@@ -1075,7 +1110,6 @@ export class NoteRepository {
       // Root note + N descendants written in a single batch.
       firestoreUsage.recordWrite('createMultiLineNote', 'BATCH_COMMIT', nodes.length + 1)
       return parentRef.id
-    })
   }
 
   // ── Delete/restore operations ───────────────────────────────────────
@@ -1171,9 +1205,12 @@ export class NoteRepository {
   async updateShowCompleted(noteId: string, showCompleted: boolean): Promise<void> {
     return this.logged('updateShowCompleted', async () => {
       this.requireUserId()
-      await updateDoc(this.noteRef(noteId), {
-        showCompleted,
-        updatedAt: serverTimestamp(),
+      await this.withPendingOp(async (opId) => {
+        await updateDoc(this.noteRef(noteId), {
+          showCompleted,
+          updatedAt: serverTimestamp(),
+          ...stampWrite(opId, noteStore.getRawNoteById(noteId) ?? undefined),
+        })
       })
       firestoreUsage.recordWrite('updateShowCompleted', 'UPDATE')
     })
