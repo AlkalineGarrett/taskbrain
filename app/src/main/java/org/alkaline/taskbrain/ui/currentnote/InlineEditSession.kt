@@ -41,6 +41,20 @@ class InlineEditSession(
     var originalContent by mutableStateOf(originalContent)
         private set
 
+    /**
+     * `containedNotes` snapshot captured at session start. Anchors the 3-way
+     * merge in [NoteRepository.planSaveNoteWithChildren]. Refreshed after
+     * each save via [refreshLocalBase].
+     */
+    private var localBase: List<String> = NoteStore.snapshotContainedNotes(noteId)
+
+    fun getLocalBase(): List<String> = localBase
+
+    /** Refresh from rawNote — call after a successful save. */
+    fun refreshLocalBase() {
+        localBase = NoteStore.snapshotContainedNotes(noteId)
+    }
+
     val isDirty: Boolean
         get() = editorState.text != originalContent
 

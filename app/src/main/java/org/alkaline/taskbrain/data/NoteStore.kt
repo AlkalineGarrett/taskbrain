@@ -254,6 +254,15 @@ object NoteStore {
         updateNote(noteId, existing.copy(content = content), persist = false)
     }
 
+    /**
+     * Defensive copy of [noteId]'s `containedNotes`. Returns empty list if
+     * absent. Editors capture this at edit-session start as the base for the
+     * 3-way merge in [NoteRepository.planSaveNoteWithChildren].
+     */
+    fun snapshotContainedNotes(noteId: String): List<String> {
+        return getRawNoteById(noteId)?.containedNotes?.toList() ?: emptyList()
+    }
+
     /** Mirrors web NoteStore.pendingOpIds — see that file for full rationale. */
     private val pendingOpIds = ConcurrentHashMap<String, Long>()
 

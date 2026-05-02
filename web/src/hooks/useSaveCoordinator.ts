@@ -15,6 +15,7 @@ interface UseSaveCoordinatorOptions {
   editorState: EditorState
   prepareMainSaveItem: (targetNoteId: string) => {
     trackedLines: NoteLine[]
+    localBase: string[] | null
     applyResult: (createdIds: Map<number, string>) => void
   }
   setSaveError: (msg: string | null) => void
@@ -27,6 +28,7 @@ interface UseSaveCoordinatorOptions {
 interface SaveSlot {
   noteId: string
   trackedLines: NoteLine[]
+  localBase: string[] | null
   applyResult: (createdIds: Map<number, string>) => void
 }
 
@@ -103,7 +105,12 @@ export function useSaveCoordinator({
 
       if (dirty && noteId) {
         const main = prepareMainSaveItem(noteId)
-        slots.push({ noteId, trackedLines: main.trackedLines, applyResult: main.applyResult })
+        slots.push({
+          noteId,
+          trackedLines: main.trackedLines,
+          localBase: main.localBase,
+          applyResult: main.applyResult,
+        })
         noteStore.updateContentIfChanged(noteId, editorState.text)
       }
 
@@ -119,9 +126,11 @@ export function useSaveCoordinator({
           return {
             noteId: session.noteId,
             trackedLines: tracked,
+            localBase: session.getLocalBase(),
             applyResult: (createdIds) => {
               session.applyCreatedIds(createdIds)
               session.markSaved(content)
+              session.refreshLocalBase()
             },
           }
         }),
@@ -132,7 +141,11 @@ export function useSaveCoordinator({
         noteStore.updateContentIfChanged(session.noteId, session.getText())
       }
 
-      const items = slots.map((s) => ({ noteId: s.noteId, trackedLines: s.trackedLines }))
+      const items = slots.map((s) => ({
+        noteId: s.noteId,
+        trackedLines: s.trackedLines,
+        localBase: s.localBase,
+      }))
       const savePromise = noteStore.enqueueSave(() => noteRepo.saveMultipleNotes(items))
       // Single-promise fan-out: every dirty noteId sees the batch in
       // awaitPendingSave, matching the all-or-nothing batch contract.

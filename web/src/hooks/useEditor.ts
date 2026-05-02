@@ -114,6 +114,14 @@ export function useEditor(noteId: string | undefined) {
   const dirtyRef = useRef(dirty)
   dirtyRef.current = dirty
 
+  // Snapshot of `containedNotes` at edit-session start (or last save). Anchors
+  // the 3-way merge in NoteRepository.planSave. Refreshed on load, on
+  // external-change reload, and after a successful save.
+  const localBaseRef = useRef<string[] | null>(null)
+  const captureLocalBase = useCallback((targetNoteId: string) => {
+    localBaseRef.current = noteStore.snapshotContainedNotes(targetNoteId)
+  }, [])
+
   // Load note
   useEffect(() => {
     if (!noteId) return
@@ -172,6 +180,7 @@ export function useEditor(noteId: string | undefined) {
     if (cached?.dirty) {
       // Restore unsaved edits immediately for instant display
       populateEditor(cached.editorLines, true)
+      captureLocalBase(noteId)
       setShowLoading(false)
       scheduleRecordView()
 
@@ -226,6 +235,7 @@ export function useEditor(noteId: string | undefined) {
           if (rawNote && storeLines) {
             setShowCompleted(rawNote.showCompleted ?? true)
             populateEditor(toEditorLines(storeLines), false)
+            captureLocalBase(noteId)
             setShowLoading(false)
             scheduleRecordView()
             return
@@ -235,6 +245,7 @@ export function useEditor(noteId: string | undefined) {
         const { lines, showCompleted } = await repo.loadNoteWithChildren(noteId)
         setShowCompleted(showCompleted)
         populateEditor(toEditorLines(lines), false)
+        captureLocalBase(noteId)
         setShowLoading(false)
         scheduleRecordView()
       } catch (e) {
@@ -276,18 +287,21 @@ export function useEditor(noteId: string | undefined) {
       editorState.initFromNoteLines(toEditorLines(storeLines), true)
       editorState.requestFocusUpdate()
       setShowCompleted(storeNote.showCompleted ?? true)
+      captureLocalBase(noteId)
       setDirty(false)
       setRenderVersion((v) => v + 1)
     })
-  }, [noteId, editorState])
+  }, [noteId, editorState, captureLocalBase])
 
   /**
    * Builds the main editor's tracked lines for inclusion in a multi-note
    * save. The returned [applyResult] writes created ids back to the original
    * EditorState — guarded so a mid-save tab switch doesn't cross-pollinate.
+   * [localBase] anchors the 3-way merge of containedNotes in planSave.
    */
   const prepareMainSaveItem = useCallback((targetNoteId: string): {
     trackedLines: NoteLine[]
+    localBase: string[] | null
     applyResult: (createdIds: Map<number, string>) => void
   } => {
     controller.sortCompletedToBottom()
@@ -300,6 +314,8 @@ export function useEditor(noteId: string | undefined) {
       newTracked = [{ ...newTracked[0]!, noteId: targetNoteId }, ...newTracked.slice(1)]
     }
 
+    const localBase = localBaseRef.current
+
     const applyResult = (createdIds: Map<number, string>) => {
       if (currentNoteIdRef.current !== targetNoteId) return
       editorState.updateNoteIds(
@@ -309,11 +325,12 @@ export function useEditor(noteId: string | undefined) {
           return id ? [id] : []
         }),
       )
+      captureLocalBase(targetNoteId)
       setDirty(false)
     }
 
-    return { trackedLines: newTracked, applyResult }
-  }, [editorState, controller])
+    return { trackedLines: newTracked, localBase, applyResult }
+  }, [editorState, controller, captureLocalBase])
 
   // Core save logic — accepts noteId to avoid stale closure bugs. Used by
   // unmount/beforeunload paths.
@@ -322,9 +339,9 @@ export function useEditor(noteId: string | undefined) {
       setSaving(true)
       savingRef.current = true
 
-      const { trackedLines, applyResult } = prepareMainSaveItem(targetNoteId)
+      const { trackedLines, localBase, applyResult } = prepareMainSaveItem(targetNoteId)
       const createdIds = await noteStore.enqueueSave(() =>
-        repo.saveNoteWithChildren(targetNoteId, trackedLines),
+        repo.saveNoteWithChildren(targetNoteId, trackedLines, localBase),
       )
       applyResult(createdIds)
     } catch (e) {

@@ -258,7 +258,7 @@ describe('NoteRepository', () => {
 
       const result = await repository.saveNoteWithChildren('note_1', [
         { content: 'Content', noteId: 'note_1' },
-      ])
+      ], null)
 
       expect(result).toBeInstanceOf(Map)
       expect(batch.commit).toHaveBeenCalled()
@@ -279,7 +279,7 @@ describe('NoteRepository', () => {
       await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
         { content: '\tNew child', noteId: null },
-      ])
+      ], null)
 
       expect(registerSpy).toHaveBeenCalledTimes(1)
       const opId = registerSpy.mock.calls[0]![0]
@@ -305,7 +305,7 @@ describe('NoteRepository', () => {
       await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
         { content: '\tNew', noteId: null },
-      ])
+      ], null)
 
       // Find the CREATE call (2-arg, no merge option) and confirm version=1.
       const createCall = setSpy.mock.calls.find((c: any[]) => c.length === 2)
@@ -338,7 +338,7 @@ describe('NoteRepository', () => {
       await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
         { content: '\tedited', noteId: 'c1' },
-      ])
+      ], null)
 
       const c1Write = setSpy.mock.calls.find((c: any[]) => (c[0] as { id: string }).id === 'c1')
       expect(c1Write).toBeDefined()
@@ -362,7 +362,7 @@ describe('NoteRepository', () => {
       const result = await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
         { content: '\tNew child', noteId: null },
-      ])
+      ], null)
 
       expect(result.get(1)).toBe('new_child')
     })
@@ -380,7 +380,7 @@ describe('NoteRepository', () => {
         { content: 'Parent', noteId: 'note_1' },
         { content: '\tChild content', noteId: null },
         { content: '', noteId: null },
-      ])
+      ], null)
 
       expect(result.size).toBe(2)
       expect(result.get(1)).toBe('new_1')
@@ -402,7 +402,7 @@ describe('NoteRepository', () => {
         { content: '', noteId: null },
         { content: '', noteId: null },
         { content: '', noteId: null },
-      ])
+      ], null)
 
       // Child + 3 trailing empties = 4 new docs.
       expect(result.size).toBe(4)
@@ -427,7 +427,7 @@ describe('NoteRepository', () => {
       const result = await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
         { content: '\tPasted line', noteId: sentinel },
-      ])
+      ], null)
 
       expect(result.get(1)).toBe('fresh_id')
 
@@ -477,7 +477,7 @@ describe('NoteRepository', () => {
       const result = await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
         { content: '• Item A', noteId: sentinel },
-      ])
+      ], null)
 
       expect(result.get(1)).toBe('fresh_id')
       // Sentinels carry no null-id signal, so no user-facing warning is raised.
@@ -495,7 +495,7 @@ describe('NoteRepository', () => {
       const result = await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
         { content: '\t   ', noteId: null }, // Tab + whitespace — whitespace is content
-      ])
+      ], null)
 
       expect(result.get(1)).toBe('new_child')
     })
@@ -544,7 +544,7 @@ describe('NoteRepository', () => {
       await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
         { content: '\tUntouched', noteId: 'c1' },
-      ])
+      ], null)
 
       expect(mergeCalls(setSpy).length).toBe(0)
     })
@@ -564,7 +564,7 @@ describe('NoteRepository', () => {
         { content: '\tFirst', noteId: 'c1' },
         { content: '\tSecond EDITED', noteId: 'c2' },
         { content: '\tThird', noteId: 'c3' },
-      ])
+      ], null)
 
       // Root: containedNotes still [c1,c2,c3] → skip. c1, c3 unchanged → skip.
       // c2 content differs → exactly one merge write.
@@ -582,7 +582,7 @@ describe('NoteRepository', () => {
       await repository.saveNoteWithChildren('note_1', [
         { content: 'New parent', noteId: 'note_1' },
         { content: '\tUntouched', noteId: 'c1' },
-      ])
+      ], null)
 
       expect(mergeCalls(setSpy).length).toBe(1)
     })
@@ -600,7 +600,7 @@ describe('NoteRepository', () => {
         { content: 'Parent', noteId: 'note_1' },
         { content: '\tB', noteId: 'b' },
         { content: '\tA', noteId: 'a' },
-      ])
+      ], null)
 
       // Root flipped → write. Children unchanged → skip.
       expect(mergeCalls(setSpy).length).toBe(1)
@@ -622,7 +622,7 @@ describe('NoteRepository', () => {
         { content: 'Parent', noteId: 'note_1' },
         { content: '\tA', noteId: 'a' },
         { content: '\t\tB', noteId: 'b' },
-      ])
+      ], null)
 
       expect(mergeCalls(setSpy).length).toBe(3)
     })
@@ -642,7 +642,7 @@ describe('NoteRepository', () => {
       await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
         { content: '\tSame', noteId: 'c1' },
-      ])
+      ], null)
 
       expect(mergeCalls(setSpy).length).toBe(1)
     })
@@ -660,7 +660,7 @@ describe('NoteRepository', () => {
       await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
         { content: '\tSame', noteId: 'c1' },
-      ])
+      ], null)
 
       expect(mergeCalls(setSpy).length).toBe(1)
     })
@@ -679,7 +679,7 @@ describe('NoteRepository', () => {
 
       await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
-      ])
+      ], null)
 
       const deleteCall = setSpy.mock.calls.find(
         (c: any[]) => c[1]?.state === 'deleted',
@@ -722,11 +722,11 @@ describe('NoteRepository', () => {
       const { batch, setSpy } = setupSaveBatch()
 
       const result = await repository.saveMultipleNotes([
-        { noteId: 'r1', trackedLines: [
+        { noteId: 'r1', localBase: null, trackedLines: [
           { content: 'New r1', noteId: 'r1' },
           { content: '\ta', noteId: 'c1' },
         ] },
-        { noteId: 'r2', trackedLines: [
+        { noteId: 'r2', localBase: null, trackedLines: [
           { content: 'New r2', noteId: 'r2' },
           { content: '\tb', noteId: 'c2' },
         ] },
@@ -757,17 +757,135 @@ describe('NoteRepository', () => {
       // batch must abort before commit so r2 isn't saved alone.
       await expect(
         repository.saveMultipleNotes([
-          { noteId: 'r1', trackedLines: [
+          { noteId: 'r1', localBase: null, trackedLines: [
             { content: 'r1', noteId: 'r1' },
             { content: '\tA', noteId: 'a' },
           ] },
-          { noteId: 'r2', trackedLines: [
+          { noteId: 'r2', localBase: null, trackedLines: [
             { content: 'New r2', noteId: 'r2' },
           ] },
         ]),
       ).rejects.toBeInstanceOf(ContentDropAbortError)
 
       expect(batch.commit).not.toHaveBeenCalled()
+    })
+  })
+
+  // endregion
+
+  // region 3-way containedNotes merge (Phase 4)
+
+  describe('saveNoteWithChildren — 3-way merge of containedNotes', () => {
+    it('integrates a concurrent root-level addition into the saved containedNotes', async () => {
+      // Editor loaded with [c1] as containedNotes (localBase). Another client
+      // added c2 since. The user adds c3 locally. Save should land [c1, c3, c2].
+      const root = note({ id: 'note_1', containedNotes: ['c1', 'c2'] })
+      const c1 = note({ id: 'c1', content: 'first', parentNoteId: 'note_1', rootNoteId: 'note_1' })
+      const c2 = note({ id: 'c2', content: 'concurrent', parentNoteId: 'note_1', rootNoteId: 'note_1' })
+      vi.spyOn(noteStore, 'getNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root : id === 'c1' ? c1 : id === 'c2' ? c2 : undefined,
+      )
+      vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root : id === 'c1' ? c1 : id === 'c2' ? c2 : undefined,
+      )
+      vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c1', 'c2']))
+      const newRef = { id: 'c3' } as any
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
+        if (args.length === 1) return newRef
+        return { id: args[args.length - 1] } as any
+      })
+      const { setSpy } = setupSaveBatch()
+
+      await repository.saveNoteWithChildren(
+        'note_1',
+        [
+          { content: 'parent', noteId: 'note_1' },
+          { content: '\tfirst', noteId: 'c1' },
+          { content: '\tour-add', noteId: null },
+        ],
+        ['c1'], // localBase: editor saw [c1] only
+      )
+
+      const rootWrite = setSpy.mock.calls.find((c: any[]) => (c[0] as { id: string }).id === 'note_1')
+      expect(rootWrite).toBeDefined()
+      // local [c1, c3] + remote-only [c2] (in remote relative order) = [c1, c3, c2]
+      expect(rootWrite![1].containedNotes).toEqual(['c1', 'c3', 'c2'])
+      // containedNotesBase records what we merged from.
+      expect(rootWrite![1].containedNotesBase).toEqual(['c1'])
+    })
+
+    it('does not soft-delete a concurrently-added subtree', async () => {
+      // Editor loaded with localBase = [c1]. Remote added subtree rooted at c2,
+      // with c2's child c2a. Without the survivor extension, our save would
+      // soft-delete c2 + c2a since they're not in our trackedLines.
+      const root = note({ id: 'note_1', containedNotes: ['c1', 'c2'] })
+      const c1 = note({ id: 'c1', content: 'first', parentNoteId: 'note_1', rootNoteId: 'note_1' })
+      const c2 = note({
+        id: 'c2', content: 'concurrent root',
+        parentNoteId: 'note_1', rootNoteId: 'note_1',
+        containedNotes: ['c2a'],
+      })
+      const c2a = note({
+        id: 'c2a', content: 'concurrent child',
+        parentNoteId: 'c2', rootNoteId: 'note_1',
+      })
+      vi.spyOn(noteStore, 'getNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root : id === 'c1' ? c1 : id === 'c2' ? c2 : id === 'c2a' ? c2a : undefined,
+      )
+      vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root : id === 'c1' ? c1 : id === 'c2' ? c2 : id === 'c2a' ? c2a : undefined,
+      )
+      vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c1', 'c2', 'c2a']))
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => ({ id: args[args.length - 1] } as any))
+      const { setSpy } = setupSaveBatch()
+
+      await repository.saveNoteWithChildren(
+        'note_1',
+        [
+          { content: 'parent', noteId: 'note_1' },
+          { content: '\tfirst', noteId: 'c1' },
+        ],
+        ['c1'], // localBase
+      )
+
+      // Neither c2 nor c2a should be soft-deleted: each would carry state='deleted'.
+      const deletes = setSpy.mock.calls.filter((c: any[]) => (c[1] as { state?: string }).state === 'deleted')
+      const deleteIds = deletes.map((c: any[]) => (c[0] as { id: string }).id)
+      expect(deleteIds).not.toContain('c2')
+      expect(deleteIds).not.toContain('c2a')
+    })
+
+    it('respects a concurrent remote removal', async () => {
+      // Editor loaded with [c1, c2]. Other client removed c1 (remote = [c2]).
+      // We didn't change anything locally. Save should land containedNotes=[c2]
+      // (their removal honored). Soft-delete of c1 follows naturally because
+      // it isn't in survivingIds.
+      const root = note({ id: 'note_1', containedNotes: ['c2'] })
+      const c2 = note({ id: 'c2', content: 'kept', parentNoteId: 'note_1', rootNoteId: 'note_1' })
+      vi.spyOn(noteStore, 'getNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root : id === 'c2' ? c2 : undefined,
+      )
+      vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root : id === 'c2' ? c2 : undefined,
+      )
+      vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c2']))
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => ({ id: args[args.length - 1] } as any))
+      const { setSpy } = setupSaveBatch()
+
+      await repository.saveNoteWithChildren(
+        'note_1',
+        [
+          { content: 'parent', noteId: 'note_1' },
+          { content: '\tc1-stale', noteId: 'c1' },
+          { content: '\tkept', noteId: 'c2' },
+        ],
+        ['c1', 'c2'], // localBase: editor still believes c1 exists
+      )
+
+      const rootWrite = setSpy.mock.calls.find((c: any[]) => (c[0] as { id: string }).id === 'note_1')
+      expect(rootWrite).toBeDefined()
+      // Remote removed c1 → final containedNotes drops it.
+      expect(rootWrite![1].containedNotes).toEqual(['c2'])
     })
   })
 
@@ -1002,14 +1120,14 @@ describe('NoteRepository', () => {
         { content: 'Root', noteId: 'root' },
         { content: '\tA', noteId: null },
         { content: '\t\tB', noteId: null },
-      ])
+      ], null)
 
       expect(result.get(1)).toBe('child_a')
       expect(result.get(2)).toBe('child_b')
     })
 
     it('returns empty map for empty lines', async () => {
-      const result = await repository.saveNoteWithChildren('note_1', [])
+      const result = await repository.saveNoteWithChildren('note_1', [], null)
 
       expect(result.size).toBe(0)
     })
@@ -1096,7 +1214,7 @@ describe('NoteRepository', () => {
         repository.saveNoteWithChildren('root', [
           { content: 'Root', noteId: 'root' },
           { content: '\tonly survivor', noteId: 'c1' },
-        ]),
+        ], null),
       ).rejects.toBeInstanceOf(ContentDropAbortError)
     })
 
@@ -1114,7 +1232,7 @@ describe('NoteRepository', () => {
           { content: 'Root', noteId: 'root' },
           { content: '\tc1', noteId: 'c1' },
           { content: '\tc2', noteId: 'c2' },
-        ]),
+        ], null),
       ).resolves.toBeInstanceOf(Map)
     })
 
@@ -1128,7 +1246,7 @@ describe('NoteRepository', () => {
       setupBatch()
 
       await expect(
-        repository.saveNoteWithChildren('root', [{ content: 'Root', noteId: 'root' }]),
+        repository.saveNoteWithChildren('root', [{ content: 'Root', noteId: 'root' }], null),
       ).resolves.toBeInstanceOf(Map)
     })
 
@@ -1147,7 +1265,7 @@ describe('NoteRepository', () => {
         repository.saveNoteWithChildren('root', [
           { content: 'Root', noteId: 'root' },
           { content: '\tc1', noteId: 'c1' },
-        ]),
+        ], null),
       ).resolves.toBeInstanceOf(Map)
     })
   })
@@ -1160,7 +1278,7 @@ describe('NoteRepository', () => {
     it('saveNoteWithChildren throws NoteStoreNotLoadedError when NoteStore not loaded', async () => {
       vi.spyOn(noteStore, 'isLoaded').mockReturnValue(false)
       await expect(
-        repository.saveNoteWithChildren('note_1', [{ content: 'Hello', noteId: 'note_1' }]),
+        repository.saveNoteWithChildren('note_1', [{ content: 'Hello', noteId: 'note_1' }], null),
       ).rejects.toMatchObject({
         name: 'NoteStoreNotLoadedError',
         operation: 'saveNoteWithChildren',

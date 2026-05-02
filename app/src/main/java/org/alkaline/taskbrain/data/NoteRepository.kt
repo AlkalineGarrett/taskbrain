@@ -327,22 +327,40 @@ class NoteRepository(
     )
 
     /**
+     * One unit of work for [saveMultipleNotes]: the note id, the editor's
+     * tracked lines, and (optionally) the `containedNotes` value the editor
+     * observed when this edit session started. The base anchors a 3-way merge
+     * in [planSaveNoteWithChildren] so concurrent edits from other clients
+     * aren't silently overwritten by our save.
+     */
+    data class SaveItem(
+        val noteId: String,
+        val trackedLines: List<NoteLine>,
+        val localBase: List<String>?,
+    )
+
+    /**
      * Save a single note. Computes parentNoteId and containedNotes from
      * indentation, sets rootNoteId on all descendants, and strips tabs from
      * stored content. Returns a map of line indices to newly created note IDs.
      * Uses batch writes (not transactions) so saves queue offline; batches
      * chunk at 500 ops (Firestore limit).
+     *
+     * [localBase] is the `containedNotes` value the editor observed when the
+     * user started editing this note — used by [planSaveNoteWithChildren]
+     * for a 3-way merge against Firestore's current value.
      */
     suspend fun saveNoteWithChildren(
         noteId: String,
         trackedLines: List<NoteLine>,
         extraOpsBuilder: ExtraOpsBuilder?,
+        localBase: List<String>?,
     ): Result<Map<Int, String>> = ioLogged("saveNoteWithChildren") body@{
         if (trackedLines.isEmpty()) return@body emptyMap()
         val opId = newClientOpId()
         NoteStore.registerPendingOp(opId)
         try {
-            val plan = planSaveNoteWithChildren(noteId, trackedLines, extraOpsBuilder, opId)
+            val plan = planSaveNoteWithChildren(noteId, trackedLines, extraOpsBuilder, opId, localBase)
             commitInBatches("saveNoteWithChildren", plan.ops)
             plan.createdIds
         } finally {
@@ -358,16 +376,19 @@ class NoteRepository(
      * per-noteId line-index→new-id maps.
      */
     suspend fun saveMultipleNotes(
-        items: List<Pair<String, List<NoteLine>>>,
+        items: List<SaveItem>,
     ): Result<Map<String, Map<Int, String>>> = ioLogged("saveMultipleNotes") body@{
         if (items.isEmpty()) return@body emptyMap()
         val opId = newClientOpId()
         NoteStore.registerPendingOp(opId)
         try {
             val plans = items
-                .filter { it.second.isNotEmpty() }
-                .map { (noteId, trackedLines) ->
-                    planSaveNoteWithChildren(noteId, trackedLines, extraOpsBuilder = null, opId = opId)
+                .filter { it.trackedLines.isNotEmpty() }
+                .map { item ->
+                    planSaveNoteWithChildren(
+                        item.noteId, item.trackedLines, extraOpsBuilder = null,
+                        opId = opId, localBase = item.localBase,
+                    )
                 }
             val allOps = plans.flatMap { it.ops }
             commitInBatches("saveMultipleNotes", allOps)
@@ -386,12 +407,16 @@ class NoteRepository(
      *
      * [opId] is the same value for every doc in the batch; the listener uses
      * it to identify our own server echo and skip the editor reload.
+     * [localBase] anchors a 3-way merge of root containedNotes against the
+     * in-memory remote, so concurrent edits from other clients aren't
+     * silently overwritten.
      */
     private fun planSaveNoteWithChildren(
         noteId: String,
         trackedLines: List<NoteLine>,
         extraOpsBuilder: ExtraOpsBuilder?,
         opId: String,
+        localBase: List<String>?,
     ): SavePlan {
         assertNoteStoreLoaded("saveNoteWithChildren", noteId)
         warnIfDescendantsLikelyStale("saveNoteWithChildren", noteId)
@@ -496,6 +521,11 @@ class NoteRepository(
         for (i in 1 until linesToSave.size) {
             survivingIds.add(effectiveId(i))
         }
+        // Subtrees a concurrent client added at root level since [localBase]
+        // was captured aren't represented in our trackedLines — without this
+        // the soft-delete pass below would wipe their work.
+        val remoteRoot = NoteStore.getRawNoteById(noteId)?.containedNotes ?: emptyList()
+        survivingIds += findConcurrentSubtree(localBase, remoteRoot, existingDescendantIds)
         val toDelete = existingDescendantIds - survivingIds
 
         // Content-drop guard: compare against the note's containedNotes
@@ -546,8 +576,17 @@ class NoteRepository(
         // Root note. Skip the merge if the in-memory copy already matches what
         // we'd write — saves both the doc write and the listener echo/fresh
         // reads it would trigger across all clients.
-        val rootContainedList = childrenOfLine[0].toList()
+        //
+        // 3-way merge of root containedNotes against the in-memory remote,
+        // using [localBase] as the editor's snapshot at edit-session start.
+        // Picks up concurrent additions by other clients and respects their
+        // removals. When [localBase] is null or matches remote, this is a no-op.
         val existingRoot = NoteStore.getRawNoteById(noteId)
+        val rootContainedList = mergeContainedNotes(
+            local = childrenOfLine[0].toList(),
+            base = localBase,
+            remote = existingRoot?.containedNotes ?: emptyList(),
+        )
         val rootUnchanged = !hasCycle &&
             existingRoot != null &&
             existingRoot.content == rootContent &&
@@ -559,6 +598,10 @@ class NoteRepository(
             val rootData = baseNoteData(userId, rootContent).apply {
                 put("containedNotes", rootContainedList)
                 putAll(stampWrite(opId, existingRoot))
+                // Stamp the base only when there's a real anchor to record.
+                // Skipping when localBase is null avoids writing a tautological
+                // field on legacy paths that don't track an edit-session anchor.
+                if (localBase != null) put("containedNotesBase", localBase)
                 if (hasCycle) {
                     put("parentNoteId", FieldValue.delete())
                     put("rootNoteId", FieldValue.delete())
@@ -861,7 +904,9 @@ class NoteRepository(
      */
     suspend fun saveNoteWithFullContent(noteId: String, newContent: String): Result<Unit> = ioLogged("saveNoteWithFullContent") {
         val trackedLines = prepareInlineEditTrackedLines(noteId, newContent, "saveNoteWithFullContent")
-        saveNoteWithChildren(noteId, trackedLines, extraOpsBuilder = null).getOrThrow()
+        // No edit-session anchor on this legacy path — pass null so planSave
+        // skips the 3-way merge and writes through.
+        saveNoteWithChildren(noteId, trackedLines, extraOpsBuilder = null, localBase = null).getOrThrow()
         Log.d(TAG, "Saved note with full content: $noteId (${trackedLines.size} lines)")
     }
 
@@ -1196,6 +1241,72 @@ class NoteRepository(
         FIELD_LAST_WRITER_OP_ID to opId,
         FIELD_VERSION to (existing?.version ?: 0L) + 1L,
     )
+
+    /**
+     * 3-way merge of `containedNotes` ID lists. Returns:
+     *   (local ∪ remote_added) − remote_removed
+     * where remote_added = remote − base and remote_removed = base − remote.
+     *
+     * Behavior:
+     * - [base] is null (legacy / no session tracking): returns [local] unchanged.
+     * - [base] equals [remote] (no concurrent edit): returns [local].
+     * - Otherwise: keeps everything in [local], appends remote-only additions
+     *   in their relative remote order at the end, and drops items removed by
+     *   remote even if local still had them.
+     */
+    private fun mergeContainedNotes(
+        local: List<String>,
+        base: List<String>?,
+        remote: List<String>,
+    ): List<String> {
+        if (base == null) return local
+        // Fast path: no concurrent edit since base was captured. Skip the Set
+        // construction — this is the dominant case in practice.
+        if (base == remote) return local
+
+        val baseSet = base.toSet()
+        val remoteSet = remote.toSet()
+        val localSet = local.toSet()
+        val remoteRemoved = baseSet - remoteSet
+
+        val result = ArrayList<String>(local.size + remote.size)
+        for (id in local) if (id !in remoteRemoved) result.add(id)
+        for (id in remote) if (id !in baseSet && id !in localSet) result.add(id)
+        return result
+    }
+
+    /**
+     * IDs of every doc whose ancestor chain reaches a `containedNotes` entry
+     * added by a concurrent client (an item present in [remoteContained] but
+     * not in [localBase]). Used to extend the surviving set in the planner so
+     * the soft-delete pass doesn't wipe subtrees that a different client just
+     * created.
+     */
+    private fun findConcurrentSubtree(
+        localBase: List<String>?,
+        remoteContained: List<String>,
+        existingDescendantIds: Set<String>,
+    ): Set<String> {
+        if (localBase == null) return emptySet()
+        val baseSet = localBase.toSet()
+        val seeds = remoteContained.filter { it !in baseSet && it in existingDescendantIds }
+        if (seeds.isEmpty()) return emptySet()
+
+        val childrenByParent = HashMap<String, MutableList<String>>()
+        for (id in existingDescendantIds) {
+            val parent = NoteStore.getRawNoteById(id)?.parentNoteId ?: continue
+            childrenByParent.getOrPut(parent) { mutableListOf() }.add(id)
+        }
+        val result = HashSet<String>(seeds)
+        val queue = ArrayDeque(seeds)
+        while (queue.isNotEmpty()) {
+            val id = queue.removeFirst()
+            for (child in childrenByParent[id].orEmpty()) {
+                if (result.add(child)) queue.addLast(child)
+            }
+        }
+        return result
+    }
 
     private suspend fun commitInBatches(operation: String, ops: List<BatchOp>) {
         for (chunk in ops.chunked(MAX_BATCH_SIZE)) {

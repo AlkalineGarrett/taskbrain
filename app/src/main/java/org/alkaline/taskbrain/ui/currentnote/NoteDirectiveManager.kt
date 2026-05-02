@@ -741,7 +741,7 @@ class NoteDirectiveManager(
         }
 
         val result = NoteStore.enqueueSave {
-            repository.saveNoteWithChildren(session.noteId, trackedLines, extraOpsBuilder)
+            repository.saveNoteWithChildren(session.noteId, trackedLines, extraOpsBuilder, session.getLocalBase())
         }
         result.onSuccess {
             MetadataHasher.invalidateCache()

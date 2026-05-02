@@ -229,7 +229,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         extraOpsBuilder: NoteRepository.ExtraOpsBuilder?,
     ): Result<Map<Int, String>> {
         val result = NoteStore.enqueueSave {
-            repository.saveNoteWithChildren(noteId, trackedLines, extraOpsBuilder)
+            repository.saveNoteWithChildren(noteId, trackedLines, extraOpsBuilder, currentLocalBase)
         }
         result.fold(
             onSuccess = { newIdsMap ->
@@ -278,6 +278,18 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     private var currentNoteLines: List<NoteLine> = emptyList()
 
     /**
+     * Snapshot of the current note's `containedNotes` at edit-session start.
+     * Anchors the 3-way merge in [NoteRepository.planSaveNoteWithChildren].
+     * Refreshed on every [applyNoteContent] (load / external-change reload)
+     * and after a successful save.
+     */
+    private var currentLocalBase: List<String>? = null
+
+    private fun captureLocalBase(noteId: String) {
+        currentLocalBase = NoteStore.snapshotContainedNotes(noteId)
+    }
+
+    /**
      * Gets the current tracked lines for cache updates.
      * Returns a copy to prevent external modification.
      */
@@ -296,6 +308,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         _isNoteDeleted.value = isDeleted
         _showCompleted.value = showCompleted
         currentNoteLines = lines
+        captureLocalBase(noteId)
         val content = lines.joinToString("\n") { it.content }
         _loadStatus.value = LoadStatus.Success(noteId, lines)
         viewModelScope.launch {
@@ -886,8 +899,8 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         saving = true
         viewModelScope.launch {
             try {
-                val items = mutableListOf<Pair<String, List<NoteLine>>>()
-                items.add(savedNoteId to trackedLines)
+                val items = mutableListOf<NoteRepository.SaveItem>()
+                items.add(NoteRepository.SaveItem(savedNoteId, trackedLines, currentLocalBase))
 
                 // Pre-build each dirty inline session's tracked lines in
                 // parallel: a NoteStore miss falls through to loadNoteWithChildren
@@ -903,7 +916,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                     }.awaitAll()
                 }
                 for ((session, tracked) in inlinePairs) {
-                    items.add(session.noteId to tracked)
+                    items.add(NoteRepository.SaveItem(session.noteId, tracked, session.getLocalBase()))
                 }
 
                 val result = NoteStore.enqueueSave {
@@ -929,10 +942,14 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                         alarmManager.syncAlarmLineContent(trackedLines)
                         alarmManager.syncAlarmNoteIds(trackedLines)
 
-                        for ((session, _) in inlinePairs) session.markSaved()
+                        for ((session, _) in inlinePairs) {
+                            session.markSaved()
+                            session.refreshLocalBase()
+                        }
                         directiveManager.endInlineEditSession()
 
                         if (stillCurrent) {
+                            captureLocalBase(savedNoteId)
                             directiveManager.onSaveCompleted(content)
                             _saveStatus.value = UnifiedSaveStatus.Saved(savedNoteId)
                             _saveCompleted.tryEmit(Unit)
@@ -954,7 +971,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                         directiveManager.endInlineEditSession()
                         if (stillCurrent) {
                             // All-or-nothing: every dirty note stays dirty for retry.
-                            val failedIds = items.map { it.first }
+                            val failedIds = items.map { it.noteId }
                             _saveStatus.value = UnifiedSaveStatus.PartialError(failedIds, e)
                         }
                     }

@@ -38,6 +38,19 @@ interface SavePlan {
   createdIds: Map<number, string>
 }
 
+/**
+ * One unit of work for [NoteRepository.saveMultipleNotes]: the note id, the
+ * editor's tracked lines, and (optionally) the `containedNotes` value the
+ * editor observed when this edit session started. The base anchors a 3-way
+ * merge in [planSave] so concurrent edits from other clients aren't silently
+ * overwritten by our save.
+ */
+export interface SaveItem {
+  noteId: string
+  trackedLines: NoteLine[]
+  localBase: string[] | null
+}
+
 const NOTE_STORE_AWAIT_MS = 1500
 const MAX_BATCH_SIZE = 500
 
@@ -60,6 +73,96 @@ function newClientOpId(): string {
  */
 function stampWrite(opId: string, existing: Note | undefined): { lastWriterOpId: string; version: number } {
   return { lastWriterOpId: opId, version: (existing?.version ?? 0) + 1 }
+}
+
+/**
+ * 3-way merge of `containedNotes` ID lists. Returns:
+ *   (local ∪ remote_added) − remote_removed
+ * where remote_added = remote − base and remote_removed = base − remote.
+ *
+ * Behavior:
+ * - [base] is null (legacy / no session tracking): returns [local] unchanged.
+ * - [base] equals [remote] (no concurrent edit): returns [local].
+ * - Otherwise: keeps everything in [local], appends remote-only additions in
+ *   their relative remote order at the end, and drops items removed by remote
+ *   even if local still had them.
+ */
+export function mergeContainedNotes(
+  local: string[],
+  base: string[] | null,
+  remote: string[],
+): string[] {
+  if (base == null) return local
+  // Fast path: no concurrent edit since base was captured. Skip the Set
+  // construction — this is the dominant case in practice.
+  if (stringArraysEqual(base, remote)) return local
+
+  const baseSet = new Set(base)
+  const remoteSet = new Set(remote)
+  const localSet = new Set(local)
+
+  const remoteRemoved = new Set<string>()
+  for (const id of base) if (!remoteSet.has(id)) remoteRemoved.add(id)
+
+  const result: string[] = []
+  for (const id of local) {
+    if (!remoteRemoved.has(id)) result.push(id)
+  }
+  for (const id of remote) {
+    if (!baseSet.has(id) && !localSet.has(id)) result.push(id)
+  }
+  return result
+}
+
+function stringArraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+  return true
+}
+
+/**
+ * IDs of every doc whose ancestor chain reaches a `containedNotes` entry
+ * added by a concurrent client (an item present in [remoteContained] but not
+ * in [localBase]). Used to extend [survivingIds] in [planSave] so the
+ * soft-delete pass doesn't wipe subtrees that a different client just created.
+ */
+function findConcurrentSubtree(
+  localBase: string[] | null,
+  remoteContained: string[],
+  existingDescendantIds: Set<string>,
+  getNote: (id: string) => Note | undefined,
+): Set<string> {
+  if (localBase == null) return new Set()
+  const baseSet = new Set(localBase)
+  const result = new Set<string>()
+  const queue: string[] = []
+  for (const id of remoteContained) {
+    if (!baseSet.has(id) && existingDescendantIds.has(id)) {
+      result.add(id)
+      queue.push(id)
+    }
+  }
+  if (queue.length === 0) return result
+
+  // Build a parent → children index over the existing descendants once.
+  const childrenByParent = new Map<string, string[]>()
+  for (const id of existingDescendantIds) {
+    const parent = getNote(id)?.parentNoteId
+    if (parent == null) continue
+    const list = childrenByParent.get(parent)
+    if (list) list.push(id)
+    else childrenByParent.set(parent, [id])
+  }
+  while (queue.length > 0) {
+    const id = queue.shift()!
+    for (const child of childrenByParent.get(id) ?? []) {
+      if (!result.has(child)) {
+        result.add(child)
+        queue.push(child)
+      }
+    }
+  }
+  return result
 }
 
 /**
@@ -287,10 +390,17 @@ export class NoteRepository {
   /**
    * Saves a note with tree structure derived from tab-indented lines.
    * Returns a map of line indices to newly created note IDs.
+   *
+   * [localBase] is the `containedNotes` value the editor observed when the
+   * user started editing this note — used by [planSave] for a 3-way merge
+   * against Firestore's current value, so concurrent edits from other clients
+   * aren't silently overwritten. Pass `null` only at startup paths that have
+   * no edit-session anchor (no merge happens).
    */
   async saveNoteWithChildren(
     noteId: string,
     trackedLines: NoteLine[],
+    localBase: string[] | null,
   ): Promise<Map<number, string>> {
     return this.logged('saveNoteWithChildren', async () => {
       if (trackedLines.length === 0) return new Map()
@@ -298,7 +408,7 @@ export class NoteRepository {
       const opId = newClientOpId()
       noteStore.registerPendingOp(opId)
       try {
-        const plan = this.planSave(noteId, trackedLines, userId, opId)
+        const plan = this.planSave({ noteId, trackedLines, localBase }, userId, opId)
         await this.commitInBatches('saveNoteWithChildren', plan.ops)
         return plan.createdIds
       } finally {
@@ -315,7 +425,7 @@ export class NoteRepository {
    * others. Returns per-noteId line-index→new-id maps.
    */
   async saveMultipleNotes(
-    items: Array<{ noteId: string; trackedLines: NoteLine[] }>,
+    items: SaveItem[],
   ): Promise<Map<string, Map<number, string>>> {
     return this.logged('saveMultipleNotes', async () => {
       if (items.length === 0) return new Map()
@@ -325,7 +435,7 @@ export class NoteRepository {
       try {
         const plans = items
           .filter((item) => item.trackedLines.length > 0)
-          .map((item) => this.planSave(item.noteId, item.trackedLines, userId, opId))
+          .map((item) => this.planSave(item, userId, opId))
         const allOps = plans.flatMap((p) => p.ops)
         await this.commitInBatches('saveMultipleNotes', allOps)
         const result = new Map<string, Map<number, string>>()
@@ -347,13 +457,16 @@ export class NoteRepository {
    *
    * [opId] is the same value for every doc in the batch; the listener uses
    * it to identify our own server echo and skip the editor reload.
+   * [item.localBase], when non-null, is the `containedNotes` value the editor
+   * observed at edit-session start; used to 3-way merge against the current
+   * remote so concurrent edits from other clients aren't silently overwritten.
    */
   private planSave(
-    noteId: string,
-    trackedLines: NoteLine[],
+    item: SaveItem,
     userId: string,
     opId: string,
   ): SavePlan {
+    const { noteId, trackedLines, localBase } = item
     this.assertNoteStoreLoaded('saveNoteWithChildren', noteId)
     this.warnIfDescendantsLikelyStale('saveNoteWithChildren', noteId)
 
@@ -416,6 +529,13 @@ export class NoteRepository {
     for (let i = 1; i < linesToSave.length; i++) {
       survivingIds.add(effectiveId(i))
     }
+    // Subtrees a concurrent client added at root level since [localBase] was
+    // captured aren't represented in our trackedLines — without this, the
+    // soft-delete pass would wipe their work.
+    const remoteRoot = noteStore.getRawNoteById(noteId)?.containedNotes ?? []
+    for (const id of findConcurrentSubtree(localBase, remoteRoot, existingDescendantIds, (n) => noteStore.getRawNoteById(n))) {
+      survivingIds.add(id)
+    }
     const toDelete = new Set<string>()
     for (const id of existingDescendantIds) {
       if (!survivingIds.has(id)) toDelete.add(id)
@@ -436,8 +556,17 @@ export class NoteRepository {
       for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return false
       return true
     }
-    const rootContainedList = childrenOfLine[0]!
     const existingRoot = noteStore.getRawNoteById(noteId)
+    // 3-way merge of root containedNotes against the in-memory remote, using
+    // [localBase] as the editor's snapshot at edit-session start. Picks up
+    // concurrent additions by other clients and respects their removals.
+    // When [localBase] is null (legacy callers / no session tracking), or
+    // matches remote (no concurrent edit), this is a no-op.
+    const rootContainedList = mergeContainedNotes(
+      childrenOfLine[0]!,
+      localBase,
+      existingRoot?.containedNotes ?? [],
+    )
     const rootUnchanged =
       !hasCycle &&
       existingRoot != null &&
@@ -494,9 +623,13 @@ export class NoteRepository {
     if (!rootUnchanged) {
       const rootData: Record<string, unknown> = {
         ...this.baseNoteData(userId, rootContent),
-        containedNotes: childrenOfLine[0]!,
+        containedNotes: rootContainedList,
         ...stampWrite(opId, existingRoot ?? undefined),
       }
+      // Stamp the base only when there's a real anchor to record. Skipping
+      // when localBase is null avoids writing a tautological field on legacy
+      // paths that don't track an edit-session anchor.
+      if (localBase != null) rootData.containedNotesBase = localBase
       if (hasCycle) {
         rootData.parentNoteId = null
         rootData.rootNoteId = null
@@ -709,7 +842,8 @@ export class NoteRepository {
       const trackedLines = await this.prepareInlineEditTrackedLines(
         noteId, newContent, 'saveNoteWithFullContent', editorNoteIds,
       )
-      return this.saveNoteWithChildren(noteId, trackedLines)
+      // No edit-session anchor on this legacy path — skip the 3-way merge.
+      return this.saveNoteWithChildren(noteId, trackedLines, null)
     })
   }
 

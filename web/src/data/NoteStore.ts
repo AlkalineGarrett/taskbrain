@@ -324,6 +324,15 @@ export class NoteStore {
     this.updateNote(noteId, { ...existing, content })
   }
 
+  /**
+   * Defensive copy of [noteId]'s `containedNotes`. Returns `[]` if absent.
+   * Editors capture this at edit-session start as the base for the 3-way
+   * merge in NoteRepository.planSave.
+   */
+  snapshotContainedNotes(noteId: string): string[] {
+    return this.getRawNoteById(noteId)?.containedNotes.slice() ?? []
+  }
+
   /** Register a save's `clientOpId` so its own-echo can be suppressed. */
   registerPendingOp(opId: string): void {
     this.pendingOpIds.set(opId, Date.now() + PENDING_OP_TTL_MS)

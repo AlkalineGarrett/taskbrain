@@ -182,7 +182,8 @@ export function RecoverScreen() {
         { content: title, noteId },
         ...group.notes.map(n => ({ content: n.content, noteId: null })),
       ]
-      await noteStore.enqueueSave(() => repo.saveNoteWithChildren(noteId, trackedLines))
+      // Fresh note — no pre-existing edit-session anchor.
+      await noteStore.enqueueSave(() => repo.saveNoteWithChildren(noteId, trackedLines, null))
       setGroups(prev => prev.filter((_, i) => i !== index))
     } catch (e) {
       console.error('Create note failed:', e)
