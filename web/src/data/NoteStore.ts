@@ -8,6 +8,7 @@ import {
 } from 'firebase/firestore'
 import type { Auth } from 'firebase/auth'
 import { noteFromFirestore, type Note, type NoteLine } from './Note'
+import { isLive } from './NoteState'
 import { firestoreUsage } from './FirestoreUsage'
 import {
   rebuildAllNotes,
@@ -333,7 +334,7 @@ export class NoteStore {
     const result = new Map<string, Note[]>()
     for (const note of this.rawNotes.values()) {
       if (note.rootNoteId !== rootId) continue
-      if (note.state === 'deleted') continue
+      if (!isLive(note.state)) continue
       const p = note.parentNoteId
       if (p == null) continue
       const list = result.get(p)
@@ -351,7 +352,7 @@ export class NoteStore {
   getDescendantIds(noteId: string): Set<string> {
     const result = new Set<string>()
     for (const note of this.rawNotes.values()) {
-      if (note.rootNoteId === noteId && note.state !== 'deleted') result.add(note.id)
+      if (note.rootNoteId === noteId && isLive(note.state)) result.add(note.id)
     }
     return result
   }
@@ -472,7 +473,7 @@ export class NoteStore {
       const prevLineCount = prev.content.split('\n').length
       const nextLineCount = next.content.split('\n').length
       const rootNoteIdDescendantsPresent = Array.from(this.rawNotes.values()).some(
-        n => n.rootNoteId === rootId && n.state !== 'deleted',
+        n => n.rootNoteId === rootId && isLive(n.state),
       )
       const suspicious = prevLineCount >= 3 && nextLineCount <= 1 && rootNoteIdDescendantsPresent
       if (!suspicious) continue

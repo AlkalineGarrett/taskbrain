@@ -423,16 +423,16 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         // Clean cache entries are not useful — NoteStore has fresher data
         recentTabsViewModel?.invalidateCache(noteId)
 
-        // Path 2: NoteStore — instant display from the collection listener's data
+        // Path 2: NoteStore — instant display from the collection listener's data.
+        // Requires both the raw note AND a structured line list with full noteIds
+        // (getNoteLinesById walks the parent/child tree). If either is missing,
+        // fall through to Path 3 — never synthesize null child noteIds, since
+        // the editor is supposed to carry real IDs end-to-end and a null arrival
+        // at save forces reconcile-by-content to recover them.
         val storeNote = NoteStore.getNoteById(noteId)
-        if (storeNote != null) {
-            // Use getNoteLinesById to get proper noteId mappings from the in-memory tree,
-            // avoiding the race condition where a save could happen before a background
-            // Firestore refresh provides the real IDs.
-            val storeLines = NoteStore.getNoteLinesById(noteId) ?: storeNote.content.lines().mapIndexed { index, line ->
-                NoteLine(content = line, noteId = if (index == 0) noteId else null)
-            }
-            Log.d(TAG, "loadContent: using NoteStore content for $noteId (${storeLines.size} lines, noteIds: ${storeLines.count { it.noteId != null }}/${storeLines.size})")
+        val storeLines = if (storeNote != null) NoteStore.getNoteLinesById(noteId) else null
+        if (storeNote != null && storeLines != null) {
+            Log.d(TAG, "loadContent: using NoteStore content for $noteId (${storeLines.size} lines)")
             applyNoteContent(
                 noteId, storeLines,
                 isDeleted = storeNote.state == "deleted",
@@ -442,7 +442,8 @@ class CurrentNoteViewModel @JvmOverloads constructor(
             return
         }
 
-        // Path 3: Firestore — full load (first visit or store not ready)
+        // Path 3: Firestore — full load (first visit, store not ready, or
+        // store had the note but couldn't reconstruct its line tree).
         Log.d(TAG, "loadContent: cache miss for $noteId, fetching from Firebase")
 
         // Cache miss - fetch from Firebase

@@ -132,7 +132,7 @@ fun reconstructNoteLines(
             when {
                 id.isEmpty() -> "<empty-string>"
                 child == null -> "$id=absent"
-                child.state == "deleted" -> "$id=deleted"
+                !isLive(child.state) -> "$id=${child.state ?: "deleted"}"
                 child.parentNoteId != note.id ->
                     "$id=mis-parented(parentNoteId=${child.parentNoteId})"
                 else -> "$id=ok?"
@@ -195,12 +195,12 @@ private fun renderChildrenOf(
             continue
         }
         val child = rawNotes[childId]
-        if (child == null || child.state == "deleted" || child.parentNoteId != parent.id) {
+        if (child == null || !isLive(child.state) || child.parentNoteId != parent.id) {
             fixed = true
             Log.w(
                 TAG,
                 "reconstructNoteLines: dropping orphan ref $childId from parent ${parent.id} " +
-                    "(missing/deleted/mis-parented). parentContent='${parent.content.take(40)}'"
+                    "(missing/deleted/cut-deleted/mis-parented). parentContent='${parent.content.take(40)}'"
             )
             continue
         }
@@ -241,7 +241,7 @@ fun indexChildrenByParent(rawNotes: Map<String, Note>): Map<String, List<Note>> 
     val result = mutableMapOf<String, MutableList<Note>>()
     for (note in rawNotes.values) {
         val parentId = note.parentNoteId ?: continue
-        if (note.state == "deleted") continue
+        if (!isLive(note.state)) continue
         result.getOrPut(parentId) { mutableListOf() }.add(note)
     }
     return result
@@ -257,6 +257,6 @@ fun descendantIdsOf(
     includeDeleted: Boolean = false
 ): Set<String> =
     rawNotes.values
-        .filter { it.rootNoteId == noteId && (includeDeleted || it.state != "deleted") }
+        .filter { it.rootNoteId == noteId && (includeDeleted || isLive(it.state)) }
         .map { it.id }
         .toSet()

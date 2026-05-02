@@ -136,6 +136,22 @@ class NoteReconstructionTest {
     }
 
     @Test
+    fun `rebuildAll - cut-delete child dropped and marks needsFix`() {
+        // cut-delete docs are parked awaiting paste; they must be filtered
+        // out of reconstructed trees the same way soft-deleted docs are.
+        // The doc is still in Firestore and may be reclaimed by a later paste,
+        // but until then the parent should render as if the line is gone.
+        val root = note("r", "Root", containedNotes = listOf("c1", "c2"))
+        val c1 = note("c1", "Live", parentNoteId = "r")
+        val cutChild = note("c2", "Parked for paste", parentNoteId = "r", state = "cut-delete")
+        val rawNotes = mapOf("r" to root, "c1" to c1, "c2" to cutChild)
+
+        val result = rebuildAllNotes(rawNotes)
+        assertEquals("Root\nLive", result.notes[0].content)
+        assertEquals(setOf("r"), result.notesNeedingFix)
+    }
+
+    @Test
     fun `rebuildAll - child with mismatched parentNoteId dropped from ref list`() {
         // Parent claims c1, but c1's parentNoteId points elsewhere
         val root = note("r", "Root", containedNotes = listOf("c1"))

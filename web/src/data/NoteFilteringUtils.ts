@@ -1,4 +1,5 @@
 import { firstLineOf, type Note } from './Note'
+import { isLive } from './NoteState'
 import type { NoteStats } from './NoteStats'
 
 export type NoteSortMode = 'recent' | 'frequent' | 'consistent' | 'alphabetical'
@@ -11,7 +12,7 @@ function isTopLevel(note: Note): boolean {
 }
 
 function isNotDeleted(note: Note): boolean {
-  return note.state !== 'deleted'
+  return isLive(note.state)
 }
 
 function timestampMillis(ts: { toMillis(): number } | null | undefined): number {

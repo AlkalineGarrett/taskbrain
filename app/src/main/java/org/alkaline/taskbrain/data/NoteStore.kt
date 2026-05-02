@@ -256,7 +256,7 @@ object NoteStore {
 
     /** Find a note by its path from in-memory data. */
     fun getNoteByPath(path: String): Note? = rawNotesLock.read {
-        rawNotes.values.find { it.path == path && it.state != "deleted" }
+        rawNotes.values.find { it.path == path && isLive(it.state) }
     }
 
     /** IDs of all non-deleted descendants of [noteId] from in-memory state. */
@@ -473,7 +473,7 @@ object NoteStore {
             // children are loaded but parentNoteId walking didn't find them,
             // which points to a partial-sync window).
             val suspicious = prevLineCount >= 3 && nextLineCount <= 1 &&
-                rawNotes.values.any { it.rootNoteId == rootId && it.state != "deleted" }
+                rawNotes.values.any { it.rootNoteId == rootId && isLive(it.state) }
             if (!suspicious) continue
 
             Log.w(

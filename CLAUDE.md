@@ -81,6 +81,11 @@ in `firestore.rules` and are deployed manually via the Firebase console.
 - No auto-appended trailing-empty UI line; no trailing-empty stripping on save
 - New empty lines get a TYPED/SPLIT sentinel noteId at edit time so save can allocate fresh docs for them
 
+**Line identity invariant:**
+- Child lines must carry their real `noteId` end-to-end through load → edit → save → reload. A null `noteId` arriving at save means an upstream path is lossy and should be fixed at the source.
+- New lines (typed, pasted, split, agent-generated) get a sentinel `noteId` at edit time. Sentinels are NEVER content-matched against existing siblings during save — they always allocate fresh docs. Aliasing a typed line to an existing line because their content matches would silently merge two distinct lines into one Firestore doc.
+- `reconcileNullNoteIdsByContent` is a defensive recovery layer for null arrivals only. It logs at error level (with stack) every time it fires; clean logs in production are the prerequisite for deleting it.
+
 **Note structure in Firestore:**
 - First line = parent note content
 - Additional lines = contained child notes (via `containedNotes` array, ordered list of real document IDs only)

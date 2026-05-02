@@ -339,10 +339,13 @@ class NoteRepositoryTest {
     }
 
     @Test
-    fun `saveNoteWithChildren does NOT raise warning when only sentinel noteIds were recovered`() = runTest {
-        // Sentinels are expected placeholders from paste / split / etc. Matching
-        // a sentinel to an existing doc via content is normal (cut+paste within
-        // the same note) and should be silent — no dialog to the user.
+    fun `saveNoteWithChildren does not alias sentinel to an existing line with identical content`() = runTest {
+        // A sentinel marks a brand-new line (typed/pasted/split). Even when its
+        // content happens to match an existing sibling under the same parent,
+        // the save must allocate a FRESH doc — never alias to the existing id.
+        // Identity is preserved through proper line tracking, not through
+        // content matching at save time. (Cut/paste identity preservation is
+        // handled separately via the cut-delete state in Phase 8.)
         mockDocument("note_1", Note(id = "note_1", containedNotes = listOf("c1")))
         mockDocument("c1", null)
         val existingChild = Note(id = "c1", content = "• Item A", parentNoteId = "note_1", rootNoteId = "note_1")
@@ -350,15 +353,19 @@ class NoteRepositoryTest {
         every { NoteStore.getRawNoteById("c1") } returns existingChild
         every { NoteStore.getLiveDescendantsByParent("note_1") } returns
             mapOf("note_1" to ArrayDeque(listOf(existingChild)))
+        val freshRef = mockk<DocumentReference> { every { id } returns "fresh_id" }
+        every { mockCollection.document() } returns freshRef
         mockBatch()
 
         val sentinel = NoteIdSentinel.new(NoteIdSentinel.Origin.PASTE)
-        repository.saveNoteWithChildren(
+        val assigned = repository.saveNoteWithChildren(
             "note_1",
             listOf(NoteLine("Parent", "note_1"), NoteLine("• Item A", sentinel)),
             extraOpsBuilder = null,
         ).getOrThrow()
 
+        assertEquals("sentinel allocates a fresh doc, never aliases to c1", "fresh_id", assigned[1])
+        // No null id was ever present, so no user-facing warning is raised.
         verify(exactly = 0) { NoteStore.raiseWarning(any()) }
     }
 

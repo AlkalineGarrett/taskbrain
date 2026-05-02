@@ -18,6 +18,7 @@ import { reconstructNoteContent, reconstructNoteLines } from './NoteReconstructi
 import { noteStore, NoteStoreNotLoadedError } from './NoteStore'
 import { firestoreUsage } from './FirestoreUsage'
 import { isSentinelNoteId, isRealNoteId } from './NoteIdSentinel'
+import { isLive } from './NoteState'
 import { performSimilarityMatching } from '@/editor/ContentSimilarity'
 
 export interface NoteLoadResult {
@@ -149,7 +150,7 @@ export class NoteRepository {
 
     const descendants = descendantSnap.docs
       .map((d) => noteFromFirestore(d.id, d.data()))
-      .filter((n) => n.state !== 'deleted')
+      .filter((n) => isLive(n.state))
 
     if (descendants.length === 0) {
       return [{ content: note.content, noteId: note.id }]
@@ -181,7 +182,7 @@ export class NoteRepository {
 
       const allNotes = snapshot.docs
         .map((d) => noteFromFirestore(d.id, d.data()))
-        .filter((n) => n.state !== 'deleted')
+        .filter((n) => isLive(n.state))
 
       const topLevelNotes = allNotes.filter((n) => n.parentNoteId == null)
       const rawById = new Map<string, Note>()
@@ -211,7 +212,7 @@ export class NoteRepository {
 
       return snapshot.docs
         .map((d) => noteFromFirestore(d.id, d.data()))
-        .filter((n) => n.parentNoteId == null && n.state !== 'deleted')
+        .filter((n) => n.parentNoteId == null && isLive(n.state))
     })
   }
 
@@ -907,7 +908,6 @@ function reconcileNullNoteIdsByContent(
   lineIds[0] = rootNoteId
 
   let reconciledFromNull = 0 // upstream bug signal
-  let reconciledFromSentinel = 0 // expected placeholder
   type NullIdRecovery = {
     lineIndex: number
     parentLineIndex: number
@@ -919,11 +919,16 @@ function reconcileNullNoteIdsByContent(
   for (let i = 1; i < result.length; i++) {
     const content = result[i]!.content.replace(/^\t+/, '')
     const existing = result[i]!.noteId
-    if (isRealNoteId(existing)) {
+    // A real id means we already know which doc this line maps to.
+    // A sentinel means "this is a brand-new line, allocate a fresh
+    // doc downstream" — never match by content (would alias new
+    // typed/pasted content to an unrelated existing sibling). Only
+    // bare nulls go through content matching, since null is the
+    // signal of an upstream lossy path that wiped a real id.
+    if (existing !== null) {
       lineIds[i] = existing
       continue
     }
-    const existingIsSentinel = isSentinelNoteId(existing)
     const parentId = lineIds[parentLineOf[i]!] ?? null
     const candidates = parentId ? byParent.get(parentId) : undefined
     let matchId: string | null = null
@@ -936,35 +941,30 @@ function reconcileNullNoteIdsByContent(
         lineIds[i] = match.id
         result[i] = { ...result[i]!, noteId: match.id }
         matchId = match.id
-        if (existingIsSentinel) reconciledFromSentinel++
-        else reconciledFromNull++
+        reconciledFromNull++
       }
     }
-    if (!existingIsSentinel) {
-      nullTrace.push({
-        lineIndex: i,
-        parentLineIndex: parentLineOf[i]!,
-        parentId,
-        contentPreview: content.slice(0, 60),
-        recoveredId: matchId,
-      })
-    }
+    nullTrace.push({
+      lineIndex: i,
+      parentLineIndex: parentLineOf[i]!,
+      parentId,
+      contentPreview: content.slice(0, 60),
+      recoveredId: matchId,
+    })
   }
 
-  if (reconciledFromSentinel > 0) {
-    console.debug(
-      `reconcileNullNoteIdsByContent(${rootNoteId}): matched ` +
-      `${reconciledFromSentinel} sentinel line(s) to existing docs.`,
+  if (nullTrace.length > 0) {
+    // Upstream lossy path produced bare null ids on non-empty lines. Logged
+    // at error level — null arrival at save means an editor or load path is
+    // dropping ids and should be fixed upstream. Includes a stack so the
+    // failing site can be investigated without repro.
+    console.error(
+      buildNullIdRecoveryDiagnostics(
+        rootNoteId, linesToSave, byParent, nullTrace,
+        reconciledFromNull,
+      ),
+      new Error('null noteId reached saveNoteWithChildren'),
     )
-  }
-  if (reconciledFromNull > 0 || nullTrace.some(e => e.recoveredId === null)) {
-    // Upstream lossy path produced bare null ids on non-empty lines. Log a
-    // detailed diagnostic block (mirrors the Android content-drop guard style)
-    // so the failing site can be investigated without repro.
-    console.warn(buildNullIdRecoveryDiagnostics(
-      rootNoteId, linesToSave, byParent, nullTrace,
-      reconciledFromNull, reconciledFromSentinel,
-    ))
   }
   if (reconciledFromNull > 0) {
     noteStore.raiseWarning(
@@ -988,7 +988,6 @@ function buildNullIdRecoveryDiagnostics(
     recoveredId: string | null
   }>,
   reconciledFromNull: number,
-  reconciledFromSentinel: number,
 ): string {
   const lines: string[] = []
   const unrecovered = nullTrace.filter(e => e.recoveredId === null).length
@@ -996,7 +995,6 @@ function buildNullIdRecoveryDiagnostics(
   lines.push(`rootNoteId: ${rootNoteId}`)
   lines.push(`linesToSave: ${linesToSave.length}`)
   lines.push(`null-id lines: ${nullTrace.length} (recovered=${reconciledFromNull}, unrecovered=${unrecovered})`)
-  lines.push(`sentinel lines matched to existing docs: ${reconciledFromSentinel}`)
 
   lines.push('--- null-id line detail ---')
   for (const e of nullTrace) {

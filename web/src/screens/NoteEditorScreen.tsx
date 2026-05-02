@@ -1,6 +1,7 @@
 import { useParams } from 'react-router-dom'
 import { useEffect, useState, useMemo } from 'react'
 import { noteStore } from '@/data/NoteStore'
+import { isLive } from '@/data/NoteState'
 import { useAllNotes, useNoteStoreError } from '@/hooks/useNoteStore'
 import { NoteRepositoryOperations } from '@/dsl/runtime/NoteRepositoryOperations'
 import { useEditor } from '@/hooks/useEditor'
@@ -57,7 +58,7 @@ export function NoteEditorScreen() {
   }, [])
 
   const activeNotes = useMemo(
-    () => allNotes.filter((n) => n.state !== 'deleted'),
+    () => allNotes.filter((n) => isLive(n.state)),
     [allNotes],
   )
 

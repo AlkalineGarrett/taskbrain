@@ -21,7 +21,7 @@ Path: `/notes/{noteId}`
     "String (noteId)",
     "String (noteId)"
   ],
-  "state": "String: null or 'deleted'",
+  "state": "String: null (active), 'deleted' (soft-delete), or 'cut-delete' (parked awaiting paste)",
   "path": "String: Unique path identifier (URL-safe: alphanumeric, -, _, /). Used by DSL find().",
   "rootNoteId": "String (noteId) [optional]: Root note ID for tree queries. Null for root notes, set on all descendants.",
   "showCompleted": "Boolean [optional]: Whether completed (checked) lines are visible. Defaults to true. Per-note toggle.",
@@ -30,7 +30,10 @@ Path: `/notes/{noteId}`
       "type": "String: DslValue type (number, string, date, time, datetime, etc.)",
       "value": "Any: Serialized DslValue payload"
     }
-  }
+  },
+  "version": "Number: monotonic per-note write counter. Bumped on every successful save. Defaults to 0 on legacy docs.",
+  "lastWriterOpId": "String [optional]: UUID identity stamp from the save batch. Listeners drop echoes whose lastWriterOpId is in the local in-flight set.",
+  "containedNotesBase": "Array<String> [optional]: Snapshot of containedNotes the saving client read before applying its diff. Receivers use this for 3-way merge of the children list."
 }
 ```
 
@@ -46,6 +49,10 @@ Path: `/notes/{noteId}`
 - **path**: Unique identifier for the note, used by DSL `find(path: ...)` for pattern matching.
   - URL-safe characters only: alphanumeric, `-`, `_`, `/` (for hierarchy).
   - Can be set via DSL: `[.path: "journal/2026-01-25"]`
+- **state**: Lifecycle marker. `null` (or `"active"`) = live, visible in reconstruction and queries. `"deleted"` = soft-deleted, excluded from reconstruction. `"cut-delete"` = doc was cut from its parent and is parked awaiting paste; excluded from reconstruction but can be reclaimed by a paste that knows the doc's id (preserves identity through cut/paste across save boundaries). Use `isLive(state)` from `NoteState.kt` / `NoteState.ts` to test for the live state — never compare strings directly.
+- **version**: Advisory monotonic counter. Each save reads the current value from NoteStore and writes `version + 1`. Listeners maintain `lastAppliedVersion[noteId]` per session and drop incoming echoes whose `version <= lastAppliedVersion`. Not enforced via Firestore transactions — concurrent writes from two clients can both produce the same version, in which case Firestore's last-write-wins applies. The version is purely a *receiver-side* gate against stale or out-of-order arrivals.
+- **lastWriterOpId**: Identity stamp set by the save batch. The save adds `opId` to its in-flight set before committing; the listener checks each echo's `lastWriterOpId` against that set. Match → our own echo (raw cache update only, no editor reload). No match → external change. Replaces the earlier heuristic stack of `dirty`/`saving`/content-equality guards.
+- **containedNotesBase**: Snapshot of `containedNotes` as the saving client read it before applying its diff. Used for 3-way merge of cross-device concurrent edits to the children list (different positions, different inserts, etc.). Only present on writes that staged a 3-way-merge-eligible change.
 
 ## Potential future fields
 

@@ -71,6 +71,19 @@ describe('rebuildAllNotes', () => {
     expect([...result.notesNeedingFix]).toEqual(['r1'])
   })
 
+  it('cut-delete child dropped and marks needsFix', () => {
+    // cut-delete docs are parked awaiting paste; they must be filtered out of
+    // reconstructed trees the same way soft-deleted docs are. The doc is still
+    // in Firestore and may be reclaimed by a later paste, but until then the
+    // parent should render as if the line is gone.
+    const root = note({ id: 'r1', content: 'Root', containedNotes: ['c1', 'c2'] })
+    const c1 = note({ id: 'c1', content: 'Live', parentNoteId: 'r1' })
+    const cutChild = note({ id: 'c2', content: 'Parked for paste', parentNoteId: 'r1', state: 'cut-delete' })
+    const result = rebuildAllNotes(toMap([root, c1, cutChild]))
+    expect(result.notes[0]!.content).toBe('Root\nLive')
+    expect([...result.notesNeedingFix]).toEqual(['r1'])
+  })
+
   it('child with mismatched parentNoteId dropped from ref list', () => {
     const root = note({ id: 'r1', content: 'Root', containedNotes: ['c1'] })
     const c1 = note({ id: 'c1', content: 'Not mine', parentNoteId: 'someone-else' })

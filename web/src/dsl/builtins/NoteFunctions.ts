@@ -1,4 +1,5 @@
 import type { Note } from '@/data/Note'
+import { isLive } from '@/data/NoteState'
 import type { DslValue, LambdaVal } from '../runtime/DslValue'
 import { listVal, noteVal, viewVal } from '../runtime/DslValue'
 import { typeName } from '../runtime/DslValue'
@@ -25,7 +26,7 @@ const findFunction: BuiltinFunction = {
     const currentNoteId = env.getCurrentNoteRaw()?.id
 
     const filtered = notes.filter((note) => {
-      if (note.state === 'deleted') return false
+      if (!isLive(note.state)) return false
       if (currentNoteId && note.id === currentNoteId) return false
       return (
         matchesFilter(pathArg, note.path, 'path') &&

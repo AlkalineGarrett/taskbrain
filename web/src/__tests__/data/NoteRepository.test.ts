@@ -387,6 +387,55 @@ describe('NoteRepository', () => {
       expect(writeToSentinel).toBeUndefined()
     })
 
+    it('does not alias sentinel to an existing line with identical content', async () => {
+      // A sentinel marks a brand-new line (typed/pasted/split). Even when its
+      // content happens to match an existing sibling under the same parent,
+      // the save must allocate a FRESH doc — never alias to the existing id.
+      // Identity is preserved through proper line tracking, not through
+      // content matching at save time. (Cut/paste identity preservation is
+      // handled separately via the cut-delete state in Phase 8.)
+      const existingChild: Note = note({
+        id: 'c1',
+        userId: USER_ID,
+        parentNoteId: 'note_1',
+        rootNoteId: 'note_1',
+        content: '• Item A',
+      })
+      vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c1']))
+      vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
+        id === 'c1' ? existingChild : undefined,
+      )
+      vi.spyOn(noteStore, 'getLiveDescendantsByParent').mockReturnValue(
+        new Map([['note_1', [existingChild]]]),
+      )
+      const raiseWarningSpy = vi.spyOn(noteStore, 'raiseWarning').mockImplementation(() => {})
+
+      const freshRef = { id: 'fresh_id' } as any
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
+        if (args.length === 1) return freshRef
+        return { id: args[args.length - 1] } as any
+      })
+      const setSpy = vi.fn()
+      vi.mocked(mockRunTransaction).mockImplementation(async (_db, fn) => {
+        const transaction = {
+          get: vi.fn().mockResolvedValue({ exists: () => false, data: () => ({}) }),
+          set: setSpy,
+          update: vi.fn(),
+        }
+        return fn(transaction as any)
+      })
+
+      const sentinel = '@paste_abc123'
+      const result = await repository.saveNoteWithChildren('note_1', [
+        { content: 'Parent', noteId: 'note_1' },
+        { content: '• Item A', noteId: sentinel },
+      ])
+
+      expect(result.get(1)).toBe('fresh_id')
+      // Sentinels carry no null-id signal, so no user-facing warning is raised.
+      expect(raiseWarningSpy).not.toHaveBeenCalled()
+    })
+
     it('treats whitespace-only lines as content', async () => {
       vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
         if (args.length === 1) return { id: 'new_child' } as any

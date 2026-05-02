@@ -1,6 +1,7 @@
 package org.alkaline.taskbrain.dsl.builtins
 
 import kotlinx.coroutines.runBlocking
+import org.alkaline.taskbrain.data.isLive
 import org.alkaline.taskbrain.dsl.directives.DirectiveFinder
 import org.alkaline.taskbrain.dsl.runtime.Arguments
 import org.alkaline.taskbrain.dsl.runtime.values.BooleanVal
@@ -80,8 +81,8 @@ object NoteFunctions {
         // Filter notes based on path, name, and where arguments (AND logic)
         // Also exclude the current note to prevent self-reference
         val filtered = notes.filter { note ->
-            // Exclude soft-deleted notes from results
-            if (note.state == "deleted") return@filter false
+            // Exclude non-live notes (soft-delete and cut-delete) from results
+            if (!isLive(note.state)) return@filter false
             // Exclude current note from results
             if (currentNoteId != null && note.id == currentNoteId) {
                 return@filter false

@@ -12,6 +12,7 @@
  */
 
 import type { Note } from './Note'
+import { isLive } from './NoteState'
 
 /**
  * Result of a rebuild pass.
@@ -158,11 +159,11 @@ function renderChildrenOf(
       continue
     }
     const child = rawNotes.get(childId)
-    if (!child || child.state === 'deleted' || child.parentNoteId !== parent.id) {
+    if (!child || !isLive(child.state) || child.parentNoteId !== parent.id) {
       fixed = true
       console.warn(
         `reconstructNoteLines: dropping orphan ref ${childId} from parent ${parent.id} ` +
-        `(missing/deleted/mis-parented). parentContent='${parent.content.slice(0, 40)}'`
+        `(missing/deleted/cut-deleted/mis-parented). parentContent='${parent.content.slice(0, 40)}'`
       )
       continue
     }
@@ -201,7 +202,7 @@ export function indexChildrenByParent(rawNotes: Map<string, Note>): Map<string, 
   const result = new Map<string, Note[]>()
   for (const note of rawNotes.values()) {
     if (note.parentNoteId == null) continue
-    if (note.state === 'deleted') continue
+    if (!isLive(note.state)) continue
     const list = result.get(note.parentNoteId)
     if (list) list.push(note)
     else result.set(note.parentNoteId, [note])
