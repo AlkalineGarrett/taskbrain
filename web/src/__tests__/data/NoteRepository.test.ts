@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NoteRepository, matchLinesToIds, ContentDropAbortError } from '../../data/NoteRepository'
 import { noteStore } from '../../data/NoteStore'
 import type { Firestore, DocumentReference } from 'firebase/firestore'
@@ -886,6 +886,142 @@ describe('NoteRepository', () => {
       expect(rootWrite).toBeDefined()
       // Remote removed c1 → final containedNotes drops it.
       expect(rootWrite![1].containedNotes).toEqual(['c2'])
+    })
+  })
+
+  // endregion
+
+  // region Cross-note move via cut-delete (Phase 5)
+
+  describe('saveNoteWithChildren — cut buffer integration', () => {
+    afterEach(() => {
+      // Singleton noteStore — clear the cut buffer so tests don't leak.
+      for (const id of noteStore.getPendingCuts().keys()) noteStore.clearPendingCut(id)
+    })
+
+    it('skips soft-delete for a line in the cut buffer (cross-note move pending)', async () => {
+      // Editor cut line c1 from note_1; pendingCuts has c1. The editor saves
+      // note_1 (no longer has c1). Without Phase 5, c1 would be soft-deleted —
+      // and the destination's revive would race the delete.
+      const root = note({ id: 'note_1', containedNotes: ['c1'] })
+      const c1 = note({ id: 'c1', content: 'cut me', parentNoteId: 'note_1', rootNoteId: 'note_1' })
+      vi.spyOn(noteStore, 'getNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root : id === 'c1' ? c1 : undefined,
+      )
+      vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root : id === 'c1' ? c1 : undefined,
+      )
+      vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c1']))
+      noteStore.recordCut('c1', 'cut me')
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => ({ id: args[args.length - 1] } as any))
+      const { setSpy } = setupSaveBatch()
+
+      await repository.saveNoteWithChildren(
+        'note_1',
+        [{ content: 'parent', noteId: 'note_1' }],
+        ['c1'],
+      )
+
+      const c1Writes = setSpy.mock.calls.filter((c: any[]) => (c[0] as { id: string }).id === 'c1')
+      const softDelete = c1Writes.find((c: any[]) => (c[1] as { state?: string }).state === 'deleted')
+      expect(softDelete).toBeUndefined()
+      const cutDelete = c1Writes.find((c: any[]) => (c[1] as { state?: string }).state === 'cut-delete')
+      expect(cutDelete).toBeDefined()
+    })
+
+    it('writes cut-delete for an unreclaimed cut whose source note is not in the batch', async () => {
+      // c1 was cut but the user is saving an unrelated note (note_2). c1's
+      // source-note save isn't part of this batch, so we still need to park
+      // it via cut-delete so it doesn't reappear via reconstruction.
+      const root2 = note({ id: 'note_2', containedNotes: [] })
+      const c1 = note({ id: 'c1', content: 'cut me', parentNoteId: 'note_1', rootNoteId: 'note_1' })
+      vi.spyOn(noteStore, 'getNoteById').mockImplementation((id) =>
+        id === 'note_2' ? root2 : id === 'c1' ? c1 : undefined,
+      )
+      vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
+        id === 'note_2' ? root2 : id === 'c1' ? c1 : undefined,
+      )
+      vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set())
+      noteStore.recordCut('c1', 'cut me')
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => ({ id: args[args.length - 1] } as any))
+      const { setSpy } = setupSaveBatch()
+
+      await repository.saveNoteWithChildren(
+        'note_2',
+        [{ content: 'note 2', noteId: 'note_2' }],
+        [],
+      )
+
+      const cutDelete = setSpy.mock.calls.find(
+        (c: any[]) => (c[0] as { id: string }).id === 'c1' && (c[1] as { state?: string }).state === 'cut-delete',
+      )
+      expect(cutDelete).toBeDefined()
+    })
+
+    it('does NOT write cut-delete for a line revived in the same batch', async () => {
+      // c1 cut from note_1 then pasted into note_2 (same session). Both notes
+      // save in the atomic batch: source drops c1 (without soft-delete), dest
+      // includes c1 in its tracked lines (revives state=null). buildCutDeleteOps
+      // sees c1 in note_2's survivingIds and skips the cut-delete write.
+      const root1 = note({ id: 'note_1', containedNotes: ['c1'] })
+      const root2 = note({ id: 'note_2', containedNotes: [] })
+      const c1 = note({ id: 'c1', content: 'moved', parentNoteId: 'note_1', rootNoteId: 'note_1' })
+      vi.spyOn(noteStore, 'getNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root1 : id === 'note_2' ? root2 : id === 'c1' ? c1 : undefined,
+      )
+      vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root1 : id === 'note_2' ? root2 : id === 'c1' ? c1 : undefined,
+      )
+      vi.spyOn(noteStore, 'getDescendantIds').mockImplementation((id: string) =>
+        id === 'note_1' ? new Set(['c1']) : new Set(),
+      )
+      noteStore.recordCut('c1', 'moved')
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => ({ id: args[args.length - 1] } as any))
+      const { setSpy } = setupSaveBatch()
+
+      await repository.saveMultipleNotes([
+        { noteId: 'note_1', localBase: ['c1'], trackedLines: [
+          { content: 'note 1', noteId: 'note_1' },
+        ] },
+        { noteId: 'note_2', localBase: [], trackedLines: [
+          { content: 'note 2', noteId: 'note_2' },
+          { content: '\tmoved', noteId: 'c1' },
+        ] },
+      ])
+
+      const c1Writes = setSpy.mock.calls.filter((c: any[]) => (c[0] as { id: string }).id === 'c1')
+      // Should be revived (state=null via merge) — not soft-deleted, not cut-delete.
+      const softDelete = c1Writes.find((c: any[]) => (c[1] as { state?: string }).state === 'deleted')
+      const cutDelete = c1Writes.find((c: any[]) => (c[1] as { state?: string }).state === 'cut-delete')
+      expect(softDelete).toBeUndefined()
+      expect(cutDelete).toBeUndefined()
+      // The revive write sets state=null and reparents.
+      const revive = c1Writes.find((c: any[]) => (c[1] as { state?: string | null }).state === null)
+      expect(revive).toBeDefined()
+      expect(revive![1].parentNoteId).toBe('note_2')
+    })
+
+    it('clears pendingCuts after commit', async () => {
+      const root = note({ id: 'note_1', containedNotes: [] })
+      const c1 = note({ id: 'c1', content: 'orphan', parentNoteId: 'old_root', rootNoteId: 'old_root' })
+      vi.spyOn(noteStore, 'getNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root : id === 'c1' ? c1 : undefined,
+      )
+      vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root : id === 'c1' ? c1 : undefined,
+      )
+      vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set())
+      noteStore.recordCut('c1', 'orphan')
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => ({ id: args[args.length - 1] } as any))
+      setupSaveBatch()
+
+      expect(noteStore.getPendingCuts().has('c1')).toBe(true)
+      await repository.saveNoteWithChildren(
+        'note_1',
+        [{ content: 'note 1', noteId: 'note_1' }],
+        [],
+      )
+      expect(noteStore.getPendingCuts().has('c1')).toBe(false)
     })
   })
 

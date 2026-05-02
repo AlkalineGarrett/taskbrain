@@ -324,6 +324,10 @@ class NoteRepository(
         val noteId: String,
         val ops: List<BatchOp>,
         val createdIds: Map<Int, String>,
+        /** Doc ids the plan keeps alive: local survivors + concurrent-subtree
+         *  preservation. Used by [buildCutDeleteOps] to decide whether a
+         *  pendingCut is being revived in this batch. */
+        val survivingIds: Set<String>,
     )
 
     /**
@@ -360,8 +364,11 @@ class NoteRepository(
         val opId = newClientOpId()
         NoteStore.registerPendingOp(opId)
         try {
-            val plan = planSaveNoteWithChildren(noteId, trackedLines, extraOpsBuilder, opId, localBase)
-            commitInBatches("saveNoteWithChildren", plan.ops)
+            val pendingCuts = NoteStore.getPendingCuts()
+            val plan = planSaveNoteWithChildren(noteId, trackedLines, extraOpsBuilder, opId, localBase, pendingCuts)
+            val cutDelete = buildCutDeleteOps(pendingCuts, listOf(plan.survivingIds), opId)
+            commitInBatches("saveNoteWithChildren", plan.ops + cutDelete.ops)
+            for (id in cutDelete.committedCutIds) NoteStore.clearPendingCut(id)
             plan.createdIds
         } finally {
             NoteStore.releasePendingOp(opId)
@@ -382,20 +389,61 @@ class NoteRepository(
         val opId = newClientOpId()
         NoteStore.registerPendingOp(opId)
         try {
+            val pendingCuts = NoteStore.getPendingCuts()
             val plans = items
                 .filter { it.trackedLines.isNotEmpty() }
                 .map { item ->
                     planSaveNoteWithChildren(
                         item.noteId, item.trackedLines, extraOpsBuilder = null,
-                        opId = opId, localBase = item.localBase,
+                        opId = opId, localBase = item.localBase, pendingCuts = pendingCuts,
                     )
                 }
-            val allOps = plans.flatMap { it.ops }
+            val cutDelete = buildCutDeleteOps(pendingCuts, plans.map { it.survivingIds }, opId)
+            val allOps = plans.flatMap { it.ops } + cutDelete.ops
             commitInBatches("saveMultipleNotes", allOps)
+            for (id in cutDelete.committedCutIds) NoteStore.clearPendingCut(id)
             plans.associate { it.noteId to it.createdIds }
         } finally {
             NoteStore.releasePendingOp(opId)
         }
+    }
+
+    private data class CutDeleteOps(val ops: List<BatchOp>, val committedCutIds: List<String>)
+
+    /**
+     * For each pendingCut whose lineId isn't a survivor in any of [survivingIdSets]
+     * (i.e., not being revived as a child of some destination note in this batch),
+     * append a `state='cut-delete'` write so the line is parked rather than left
+     * orphaned in its old parent's tree. Returns the ids actually scheduled so
+     * the caller can clear them from the buffer after commit.
+     */
+    private fun buildCutDeleteOps(
+        pendingCuts: Map<String, String>,
+        survivingIdSets: List<Set<String>>,
+        opId: String,
+    ): CutDeleteOps {
+        val ops = mutableListOf<BatchOp>()
+        val committedCutIds = mutableListOf<String>()
+        for ((lineId, _) in pendingCuts) {
+            val reviving = survivingIdSets.any { lineId in it }
+            if (reviving) {
+                committedCutIds.add(lineId)
+                continue
+            }
+            val existing = NoteStore.getRawNoteById(lineId) ?: continue
+            ops.add(
+                BatchOp(
+                    noteRef(lineId),
+                    mapOf(
+                        "state" to NoteState.CUT_DELETE,
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    ) + stampWrite(opId, existing),
+                    merge = true,
+                ),
+            )
+            committedCutIds.add(lineId)
+        }
+        return CutDeleteOps(ops, committedCutIds)
     }
 
     /**
@@ -410,6 +458,9 @@ class NoteRepository(
      * [localBase] anchors a 3-way merge of root containedNotes against the
      * in-memory remote, so concurrent edits from other clients aren't
      * silently overwritten.
+     * [pendingCuts] is the editor's cut buffer; planSave excludes its keys
+     * from soft-delete so cross-note moves aren't lost when this note's save
+     * runs ahead of the destination's.
      */
     private fun planSaveNoteWithChildren(
         noteId: String,
@@ -417,6 +468,7 @@ class NoteRepository(
         extraOpsBuilder: ExtraOpsBuilder?,
         opId: String,
         localBase: List<String>?,
+        pendingCuts: Map<String, String>,
     ): SavePlan {
         assertNoteStoreLoaded("saveNoteWithChildren", noteId)
         warnIfDescendantsLikelyStale("saveNoteWithChildren", noteId)
@@ -526,7 +578,11 @@ class NoteRepository(
         // the soft-delete pass below would wipe their work.
         val remoteRoot = NoteStore.getRawNoteById(noteId)?.containedNotes ?: emptyList()
         survivingIds += findConcurrentSubtree(localBase, remoteRoot, existingDescendantIds)
-        val toDelete = existingDescendantIds - survivingIds
+        // Cut lines awaiting paste in this session aren't local survivors here,
+        // but their destination's planSave (or the cut-delete pass) handles
+        // them — exclude from toDelete so this save doesn't soft-delete a
+        // line that's being moved cross-note.
+        val toDelete = existingDescendantIds - survivingIds - pendingCuts.keys
 
         // Content-drop guard: compare against the note's containedNotes
         // intersected with real descendants. Orphan refs (containedNotes
@@ -683,6 +739,7 @@ class NoteRepository(
             noteId = noteId,
             ops = ops,
             createdIds = newRefs.mapValues { it.value.id },
+            survivingIds = survivingIds,
         )
     }
 

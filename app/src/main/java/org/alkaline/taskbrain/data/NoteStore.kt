@@ -263,6 +263,44 @@ object NoteStore {
         return getRawNoteById(noteId)?.containedNotes?.toList() ?: emptyList()
     }
 
+    /** Mirrors web NoteStore.pendingCuts — see that file for full rationale. */
+    private val pendingCuts = ConcurrentHashMap<String, String>()
+
+    /** Add a cut line's id + content to the reclaim buffer. */
+    fun recordCut(lineId: String, content: String) {
+        pendingCuts[lineId] = content
+    }
+
+    /**
+     * Find a pendingCut with matching content; remove it from the buffer and
+     * return its lineId. Returns `null` on miss (the paste then falls back
+     * to sentinel allocation). Removal is one-shot so duplicate-content
+     * paste doesn't double-claim a single cut line.
+     */
+    fun tryReclaim(content: String): String? {
+        for ((lineId, c) in pendingCuts) {
+            if (c == content) {
+                pendingCuts.remove(lineId)
+                return lineId
+            }
+        }
+        return null
+    }
+
+    /** Snapshot of pending cuts for save planning. */
+    fun getPendingCuts(): Map<String, String> = pendingCuts.toMap()
+
+    /** Drop a single entry — used after the cut-delete write commits. */
+    fun clearPendingCut(lineId: String) {
+        pendingCuts.remove(lineId)
+    }
+
+    /** Test-only hatch — singleton state leaks across tests. */
+    @androidx.annotation.VisibleForTesting
+    fun clearPendingCutsForTest() {
+        pendingCuts.clear()
+    }
+
     /** Mirrors web NoteStore.pendingOpIds — see that file for full rationale. */
     private val pendingOpIds = ConcurrentHashMap<String, Long>()
 

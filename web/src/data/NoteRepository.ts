@@ -17,7 +17,7 @@ import { reconstructNoteContent, reconstructNoteLines } from './NoteReconstructi
 import { noteStore, NoteStoreNotLoadedError } from './NoteStore'
 import { firestoreUsage } from './FirestoreUsage'
 import { isSentinelNoteId, isRealNoteId } from './NoteIdSentinel'
-import { isLive } from './NoteState'
+import { isLive, NoteState } from './NoteState'
 import { performSimilarityMatching } from '@/editor/ContentSimilarity'
 
 export interface NoteLoadResult {
@@ -36,6 +36,10 @@ interface SavePlan {
   noteId: string
   ops: BatchWriteOp[]
   createdIds: Map<number, string>
+  /** Doc ids the plan keeps alive: local survivors + concurrent-subtree
+   *  preservation. Used by [NoteRepository.buildCutDeleteOps] to decide
+   *  whether a pendingCut is being revived in this batch. */
+  survivingIds: Set<string>
 }
 
 /**
@@ -408,8 +412,11 @@ export class NoteRepository {
       const opId = newClientOpId()
       noteStore.registerPendingOp(opId)
       try {
-        const plan = this.planSave({ noteId, trackedLines, localBase }, userId, opId)
-        await this.commitInBatches('saveNoteWithChildren', plan.ops)
+        const pendingCuts = noteStore.getPendingCuts()
+        const plan = this.planSave({ noteId, trackedLines, localBase }, userId, opId, pendingCuts)
+        const cutDeleteOps = this.buildCutDeleteOps(pendingCuts, [plan.survivingIds], opId)
+        await this.commitInBatches('saveNoteWithChildren', [...plan.ops, ...cutDeleteOps.ops])
+        for (const id of cutDeleteOps.committedCutIds) noteStore.clearPendingCut(id)
         return plan.createdIds
       } finally {
         noteStore.releasePendingOp(opId)
@@ -433,11 +440,14 @@ export class NoteRepository {
       const opId = newClientOpId()
       noteStore.registerPendingOp(opId)
       try {
+        const pendingCuts = noteStore.getPendingCuts()
         const plans = items
           .filter((item) => item.trackedLines.length > 0)
-          .map((item) => this.planSave(item, userId, opId))
-        const allOps = plans.flatMap((p) => p.ops)
+          .map((item) => this.planSave(item, userId, opId, pendingCuts))
+        const cutDeleteOps = this.buildCutDeleteOps(pendingCuts, plans.map((p) => p.survivingIds), opId)
+        const allOps = plans.flatMap((p) => p.ops).concat(cutDeleteOps.ops)
         await this.commitInBatches('saveMultipleNotes', allOps)
+        for (const id of cutDeleteOps.committedCutIds) noteStore.clearPendingCut(id)
         const result = new Map<string, Map<number, string>>()
         for (const plan of plans) {
           result.set(plan.noteId, plan.createdIds)
@@ -447,6 +457,45 @@ export class NoteRepository {
         noteStore.releasePendingOp(opId)
       }
     })
+  }
+
+  /**
+   * For each pendingCut whose lineId isn't a survivor in any of [survivingIdSets]
+   * (i.e., not being revived as a child of some destination note in this batch),
+   * append a `state='cut-delete'` write so the line is parked rather than left
+   * orphaned in its old parent's tree. Returns the ids actually scheduled so
+   * the caller can clear them from the buffer after commit.
+   */
+  private buildCutDeleteOps(
+    pendingCuts: Map<string, string>,
+    survivingIdSets: Set<string>[],
+    opId: string,
+  ): { ops: BatchWriteOp[]; committedCutIds: string[] } {
+    const ops: BatchWriteOp[] = []
+    const committedCutIds: string[] = []
+    for (const [lineId] of pendingCuts) {
+      const reviving = survivingIdSets.some((s) => s.has(lineId))
+      if (reviving) {
+        // The line is being saved as a child of some note in this batch —
+        // its destination's planSave will write state=null. Just clear the
+        // buffer entry; no cut-delete write needed.
+        committedCutIds.push(lineId)
+        continue
+      }
+      const existing = noteStore.getRawNoteById(lineId)
+      if (!existing) continue
+      ops.push({
+        ref: this.noteRef(lineId),
+        data: {
+          state: NoteState.CUT_DELETE,
+          updatedAt: serverTimestamp(),
+          ...stampWrite(opId, existing),
+        },
+        merge: true,
+      })
+      committedCutIds.push(lineId)
+    }
+    return { ops, committedCutIds }
   }
 
   /**
@@ -460,11 +509,15 @@ export class NoteRepository {
    * [item.localBase], when non-null, is the `containedNotes` value the editor
    * observed at edit-session start; used to 3-way merge against the current
    * remote so concurrent edits from other clients aren't silently overwritten.
+   * [pendingCuts] is the editor's cut buffer; planSave excludes its keys
+   * from soft-delete so cross-note moves aren't lost when this note's save
+   * runs ahead of the destination's.
    */
   private planSave(
     item: SaveItem,
     userId: string,
     opId: string,
+    pendingCuts: Map<string, string>,
   ): SavePlan {
     const { noteId, trackedLines, localBase } = item
     this.assertNoteStoreLoaded('saveNoteWithChildren', noteId)
@@ -536,9 +589,13 @@ export class NoteRepository {
     for (const id of findConcurrentSubtree(localBase, remoteRoot, existingDescendantIds, (n) => noteStore.getRawNoteById(n))) {
       survivingIds.add(id)
     }
+    // Cut lines awaiting paste in this session aren't local survivors here,
+    // but their destination's planSave (or saveMultipleNotes' cut-delete pass)
+    // handles them — exclude from toDelete so this save doesn't soft-delete
+    // a line that's being moved cross-note.
     const toDelete = new Set<string>()
     for (const id of existingDescendantIds) {
-      if (!survivingIds.has(id)) toDelete.add(id)
+      if (!survivingIds.has(id) && !pendingCuts.has(id)) toDelete.add(id)
     }
 
     this.assertNotContentDrop(noteId, trackedLines, linesToSave, existingDescendantIds, survivingIds, toDelete)
@@ -694,7 +751,7 @@ export class NoteRepository {
     for (const [lineIndex, ref] of newRefs) {
       createdIds.set(lineIndex, ref.id)
     }
-    return { noteId, ops, createdIds }
+    return { noteId, ops, createdIds, survivingIds }
   }
 
   private async commitInBatches(operation: string, ops: BatchWriteOp[]): Promise<void> {

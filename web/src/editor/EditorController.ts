@@ -6,7 +6,8 @@ import { parseClipboardContent } from './ClipboardParser'
 import { sortCompletedToBottomIndexed } from './CompletedLineUtils'
 import { executePaste } from './PasteHandler'
 import { splitNoteIds } from './ContentSimilarity'
-import { isSentinelNoteId } from '@/data/NoteIdSentinel'
+import { isSentinelNoteId, isRealNoteId } from '@/data/NoteIdSentinel'
+import { noteStore } from '@/data/NoteStore'
 
 export enum OperationType {
   COMMAND_BULLET = 'COMMAND_BULLET',
@@ -232,6 +233,25 @@ export class EditorController {
         parsed,
         cutLines.length > 0 ? cutLines : undefined,
       )
+      // The sharedCutLines path inside executePaste recovered each cut line's
+      // real noteId already — drop those ids from the cross-save buffer so
+      // a second paste of the same content doesn't double-claim them.
+      for (const cl of cutLines) {
+        const id = cl.noteIds[0]
+        if (id != null && isRealNoteId(id)) noteStore.clearPendingCut(id)
+      }
+      // Cross-save reclaim: a pasted line whose head is a sentinel (new-line
+      // marker) didn't recover from this session's sharedCutLines. Try the
+      // NoteStore cut buffer — content match recovers cuts parked as
+      // cut-delete by an intervening save.
+      for (const line of result.lines) {
+        const head = line.noteIds[0]
+        if (head != null && isSentinelNoteId(head)) {
+          const stripped = line.text.replace(/^\t+/, '')
+          const reclaimed = noteStore.tryReclaim(stripped)
+          if (reclaimed != null) line.noteIds = [reclaimed]
+        }
+      }
       this.state.lines = result.lines
       this.state.focusedLineIndex = result.cursorLineIndex
       this.state.lines[result.cursorLineIndex]?.updateFull(
@@ -279,6 +299,18 @@ export class EditorController {
       const [rangeFirst, rangeLast] = this.state.getSelectedLineRange()
       sharedCutLines = this.state.lines.slice(rangeFirst, rangeLast + 1)
         .map(l => new LineState(l.text, undefined, [...l.noteIds]))
+
+      // Feed every cut line with a real noteId into the cross-save reclaim
+      // buffer. Source-note save will skip soft-delete; if a paste in this
+      // session matches by content, the line keeps its original noteId.
+      // Unmatched cuts get cut-delete on save so they're parked, not orphaned.
+      // Content key is tab-stripped so paste at any indent level can match.
+      for (const line of sharedCutLines) {
+        const id = line.noteIds[0]
+        if (id != null && isRealNoteId(id)) {
+          noteStore.recordCut(id, line.text.replace(/^\t+/, ''))
+        }
+      }
 
       const clipText = this.getSelectedTextWithPrefix()
       if (clipText.length > 0) {

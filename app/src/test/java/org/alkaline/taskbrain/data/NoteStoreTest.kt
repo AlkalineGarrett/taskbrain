@@ -19,6 +19,7 @@ class NoteStoreTest {
     fun resetSingleton() {
         // The singleton's pendingOpIds map is timer-pruned; reset between tests.
         NoteStore.clearPendingOpsForTest()
+        NoteStore.clearPendingCutsForTest()
     }
 
     @Test
@@ -94,5 +95,34 @@ class NoteStoreTest {
         assertTrue(NoteStore.isOurEcho("op-a"))
         assertTrue(NoteStore.isOurEcho("op-b"))
         assertFalse(NoteStore.isOurEcho("op-c"))
+    }
+
+    // ── Phase 5: cut buffer ────────────────────────────────────────────
+
+    @Test
+    fun `recordCut and tryReclaim match by content`() {
+        NoteStore.recordCut("line-1", "Buy milk")
+        assertEquals("line-1", NoteStore.tryReclaim("Buy milk"))
+    }
+
+    @Test
+    fun `tryReclaim is one-shot — second match falls through`() {
+        NoteStore.recordCut("line-1", "Buy milk")
+        assertEquals("line-1", NoteStore.tryReclaim("Buy milk"))
+        org.junit.Assert.assertNull(NoteStore.tryReclaim("Buy milk"))
+    }
+
+    @Test
+    fun `tryReclaim returns null on miss without consuming buffered entries`() {
+        NoteStore.recordCut("line-1", "apples")
+        org.junit.Assert.assertNull(NoteStore.tryReclaim("oranges"))
+        assertEquals("line-1", NoteStore.tryReclaim("apples"))
+    }
+
+    @Test
+    fun `clearPendingCut drops a single entry`() {
+        NoteStore.recordCut("a", "alpha")
+        NoteStore.clearPendingCut("a")
+        org.junit.Assert.assertNull(NoteStore.tryReclaim("alpha"))
     }
 }

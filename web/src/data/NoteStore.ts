@@ -333,6 +333,59 @@ export class NoteStore {
     return this.getRawNoteById(noteId)?.containedNotes.slice() ?? []
   }
 
+  /**
+   * In-memory buffer of lines cut from any editor in this client session.
+   * Phase 5 cross-note move identity preservation:
+   *
+   *   - Cut: editor calls [recordCut] for each cut line that has a real noteId.
+   *   - Paste: editor calls [tryReclaim] per pasted text line; on hit, the
+   *     line keeps its original noteId instead of getting a fresh sentinel.
+   *   - Save: planSave excludes [pendingCutIds] from soft-delete; saveMultipleNotes
+   *     appends a `state='cut-delete'` write for any unreclaimed entries so
+   *     the line is parked rather than orphaned.
+   *
+   * Keyed by lineId; value is the line's content at cut time (the matcher
+   * for reclaim). Buffer survives across saveAll commits — a cut now and a
+   * paste in 5 minutes (after any number of auto-saves) still preserves
+   * identity, because the cut-delete state on the doc is reclaimable.
+   */
+  private pendingCuts = new Map<string, string>()
+
+  /** Add a cut line's id + content to the reclaim buffer. */
+  recordCut(lineId: string, content: string): void {
+    this.pendingCuts.set(lineId, content)
+  }
+
+  /**
+   * Find a pendingCut with matching content; remove it from the buffer and
+   * return its lineId. Returns `null` on miss (the paste then falls back to
+   * sentinel allocation). Removal is one-shot so duplicate-content paste
+   * doesn't double-claim a single cut line.
+   *
+   * Match key is `content` exactly. Two cut lines with identical content
+   * resolve to one of the buffered ids non-deterministically (Map iteration
+   * order = insertion order in JS, but callers shouldn't rely on it).
+   */
+  tryReclaim(content: string): string | null {
+    for (const [lineId, c] of this.pendingCuts) {
+      if (c === content) {
+        this.pendingCuts.delete(lineId)
+        return lineId
+      }
+    }
+    return null
+  }
+
+  /** Snapshot of pending cuts for save planning. */
+  getPendingCuts(): Map<string, string> {
+    return new Map(this.pendingCuts)
+  }
+
+  /** Drop a single entry — used after the cut-delete write commits. */
+  clearPendingCut(lineId: string): void {
+    this.pendingCuts.delete(lineId)
+  }
+
   /** Register a save's `clientOpId` so its own-echo can be suppressed. */
   registerPendingOp(opId: string): void {
     this.pendingOpIds.set(opId, Date.now() + PENDING_OP_TTL_MS)

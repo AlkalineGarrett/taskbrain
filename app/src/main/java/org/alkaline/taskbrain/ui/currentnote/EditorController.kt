@@ -2,6 +2,7 @@ package org.alkaline.taskbrain.ui.currentnote
 
 import androidx.compose.runtime.Composable
 import org.alkaline.taskbrain.data.NoteIdSentinel
+import org.alkaline.taskbrain.data.NoteStore
 import org.alkaline.taskbrain.ui.currentnote.undo.CommandType
 import org.alkaline.taskbrain.ui.currentnote.undo.UndoManager
 import org.alkaline.taskbrain.ui.currentnote.undo.AlarmSnapshot
@@ -329,6 +330,25 @@ class EditorController(
             parsed,
             cutLines.takeIf { it.isNotEmpty() },
         )
+        // The sharedCutLines path inside PasteHandler recovered each cut
+        // line's real noteId already — drop those ids from the cross-save
+        // buffer so a second paste of the same content doesn't double-claim.
+        for (cl in cutLines) {
+            val id = cl.noteIds.firstOrNull()
+            if (id != null && NoteIdSentinel.isRealNoteId(id)) NoteStore.clearPendingCut(id)
+        }
+        // Cross-save reclaim: a pasted line whose head is a sentinel (new-line
+        // marker) didn't recover from this session's sharedCutLines. Try the
+        // NoteStore cut buffer — content match recovers cuts parked as
+        // cut-delete by an intervening save.
+        for (line in result.lines) {
+            val head = line.noteIds.firstOrNull()
+            if (head != null && NoteIdSentinel.isSentinel(head)) {
+                val stripped = line.text.trimStart('\t')
+                val reclaimed = NoteStore.tryReclaim(stripped)
+                if (reclaimed != null) line.noteIds = listOf(reclaimed)
+            }
+        }
         state.lines.clear()
         state.lines.addAll(result.lines)
         state.focusedLineIndex = result.cursorLineIndex
@@ -353,6 +373,19 @@ class EditorController(
             val range = state.getSelectedLineRange()
             sharedCutLines = state.lines.subList(range.first, range.last + 1)
                 .map { LineState(it.text, noteIds = it.noteIds.toList()) }
+
+            // Feed every cut line with a real noteId into the cross-save
+            // reclaim buffer. Source-note save will skip soft-delete; if a
+            // paste in this session matches by content, the line keeps its
+            // original noteId. Unmatched cuts get cut-delete on save so
+            // they're parked, not orphaned. Content key is tab-stripped so
+            // paste at any indent level can match.
+            for (line in sharedCutLines) {
+                val id = line.noteIds.firstOrNull()
+                if (id != null && NoteIdSentinel.isRealNoteId(id)) {
+                    NoteStore.recordCut(id, line.text.trimStart('\t'))
+                }
+            }
 
             val clipText = getSelectedTextWithPrefix()
             if (clipText.isNotEmpty()) {

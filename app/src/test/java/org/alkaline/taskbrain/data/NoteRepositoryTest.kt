@@ -6,6 +6,7 @@ import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.*
 import io.mockk.*
 import kotlinx.coroutines.test.runTest
+import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -35,12 +36,22 @@ class NoteRepositoryTest {
         every { NoteStore.getNoteById(any()) } returns null
         every { NoteStore.getRawNoteById(any()) } returns null
         every { NoteStore.raiseWarning(any()) } just Runs
+        every { NoteStore.getPendingCuts() } returns emptyMap()
+        every { NoteStore.clearPendingCut(any()) } just Runs
         // Save/delete ops require NoteStore to be loaded; default to loaded for
         // tests that aren't exercising the load guard. Tests for the guard
         // itself override this.
         every { NoteStore.isLoaded() } returns true
 
         repository = NoteRepository(mockFirestore, mockAuth)
+    }
+
+    @After
+    fun tearDown() {
+        // mockkObject persists until unmockked — without this, the stubs above
+        // leak into NoteStoreTest (which uses the real singleton) and
+        // clearPendingCut/etc. silently no-op.
+        unmockkObject(NoteStore)
     }
 
     private fun signOut() {
@@ -1027,6 +1038,90 @@ class NoteRepositoryTest {
         assertTrue(result.isFailure)
         assertTrue(result.exceptionOrNull() is ContentDropAbortException)
         verify(exactly = 0) { batch.commit() }
+    }
+
+    // endregion
+
+    // region Cross-note move via cut-delete (Phase 5)
+
+    @Test
+    fun `saveNoteWithChildren skips soft-delete for a line in the cut buffer`() = runTest {
+        // Editor cut c1 from note_1; pendingCuts has c1. note_1's save no
+        // longer references c1. Without Phase 5 c1 would be soft-deleted —
+        // and the destination's revive would race the delete.
+        val root = Note(id = "note_1", containedNotes = listOf("c1"))
+        val c1 = Note(id = "c1", content = "cut me", parentNoteId = "note_1", rootNoteId = "note_1")
+        every { NoteStore.getNoteById("note_1") } returns root
+        every { NoteStore.getRawNoteById("note_1") } returns root
+        every { NoteStore.getRawNoteById("c1") } returns c1
+        every { NoteStore.getDescendantIds("note_1") } returns setOf("c1")
+        every { NoteStore.getPendingCuts() } returns mapOf("c1" to "cut me")
+        mockDocument("note_1", root)
+        mockDocument("c1", c1)
+        val batch = mockBatch()
+        val captured = mutableListOf<Map<String, Any?>>()
+        every { batch.set(any(), capture(captured), any<SetOptions>()) } returns batch
+        every { batch.set(any(), capture(captured)) } returns batch
+
+        repository.saveNoteWithChildren(
+            "note_1",
+            listOf(NoteLine("parent", "note_1")),
+            extraOpsBuilder = null,
+            localBase = listOf("c1"),
+        ).getOrThrow()
+
+        // No soft-delete for c1.
+        val softDeletes = captured.filter { it["state"] == "deleted" }
+        assertEquals("expected no soft-deletes, got: $softDeletes", 0, softDeletes.size)
+        // But a cut-delete write IS appended (no destination is reviving c1).
+        val cutDeletes = captured.filter { it["state"] == "cut-delete" }
+        assertEquals(1, cutDeletes.size)
+    }
+
+    @Test
+    fun `saveMultipleNotes does not write cut-delete when a destination revives the line`() = runTest {
+        // c1 cut from note_1, then pasted into note_2 in the same session.
+        // Both notes save in the atomic batch: source drops c1 (without
+        // soft-delete), dest includes c1 in trackedLines (revives state=null).
+        // buildCutDeleteOps sees c1 in note_2's survivingIds → no cut-delete.
+        val root1 = Note(id = "note_1", containedNotes = listOf("c1"))
+        val root2 = Note(id = "note_2", containedNotes = emptyList())
+        val c1 = Note(id = "c1", content = "moved", parentNoteId = "note_1", rootNoteId = "note_1")
+        every { NoteStore.getNoteById("note_1") } returns root1
+        every { NoteStore.getRawNoteById("note_1") } returns root1
+        every { NoteStore.getNoteById("note_2") } returns root2
+        every { NoteStore.getRawNoteById("note_2") } returns root2
+        every { NoteStore.getRawNoteById("c1") } returns c1
+        every { NoteStore.getDescendantIds("note_1") } returns setOf("c1")
+        every { NoteStore.getDescendantIds("note_2") } returns emptySet()
+        every { NoteStore.getPendingCuts() } returns mapOf("c1" to "moved")
+        mockDocument("note_1", root1)
+        mockDocument("note_2", root2)
+        mockDocument("c1", c1)
+        val batch = mockBatch()
+        val captured = mutableListOf<Map<String, Any?>>()
+        every { batch.set(any(), capture(captured), any<SetOptions>()) } returns batch
+        every { batch.set(any(), capture(captured)) } returns batch
+
+        repository.saveMultipleNotes(
+            listOf(
+                NoteRepository.SaveItem("note_1", listOf(NoteLine("note 1", "note_1")), localBase = listOf("c1")),
+                NoteRepository.SaveItem("note_2", listOf(
+                    NoteLine("note 2", "note_2"),
+                    NoteLine("\tmoved", "c1"),
+                ), localBase = emptyList()),
+            ),
+        ).getOrThrow()
+
+        // c1 should be revived (state=null, parent=note_2). No cut-delete write.
+        // c1's revive write is identified by parentNoteId=note_2 (only c1
+        // gets that — root notes don't carry parentNoteId in the merge map).
+        val cutDelete = captured.find { it["state"] == "cut-delete" }
+        assertNull("expected no cut-delete write, got: $cutDelete", cutDelete)
+        val revive = captured.find { it["parentNoteId"] == "note_2" }
+        assertNotNull("expected revive write reparenting c1 to note_2", revive)
+        assertEquals(null, revive!!["state"])
+        assertEquals("moved", revive["content"])
     }
 
     // endregion
