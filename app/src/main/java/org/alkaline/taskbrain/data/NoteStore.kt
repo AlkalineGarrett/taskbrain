@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
 import kotlin.concurrent.write
@@ -104,6 +105,13 @@ object NoteStore {
     private val pendingPersistRunnables = mutableMapOf<String, Runnable>()
     private val persistHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private const val PERSIST_DEBOUNCE_MS = 500L
+
+    /**
+     * Window for suppressing own-save echoes. Long enough for a Firestore
+     * round-trip plus listener delivery; short enough that a stale opId can't
+     * mask a genuine concurrent edit on a different client.
+     */
+    private const val PENDING_OP_TTL_MS = 5000L
 
     fun setPersistCallback(callback: (noteId: String, content: String) -> Unit) {
         persistCallback = callback
@@ -244,6 +252,44 @@ object NoteStore {
         val existing = getNoteById(noteId) ?: return
         if (existing.content == content) return
         updateNote(noteId, existing.copy(content = content), persist = false)
+    }
+
+    /** Mirrors web NoteStore.pendingOpIds — see that file for full rationale. */
+    private val pendingOpIds = ConcurrentHashMap<String, Long>()
+
+    /** Register a save's `clientOpId` so its own-echo can be suppressed. */
+    fun registerPendingOp(opId: String) {
+        pendingOpIds[opId] = System.currentTimeMillis() + PENDING_OP_TTL_MS
+    }
+
+    /**
+     * Schedule release of a `clientOpId` after [PENDING_OP_TTL_MS] — long
+     * enough for the server echo to round-trip, short enough to not mask a
+     * genuine external change that arrives later.
+     */
+    fun releasePendingOp(opId: String) {
+        persistHandler.postDelayed({ pendingOpIds.remove(opId) }, PENDING_OP_TTL_MS)
+    }
+
+    /** True when [opId] matches a recently-registered local save. */
+    fun isOurEcho(opId: String?): Boolean {
+        if (opId == null) return false
+        val expireAt = pendingOpIds[opId] ?: return false
+        if (expireAt < System.currentTimeMillis()) {
+            pendingOpIds.remove(opId)
+            return false
+        }
+        return true
+    }
+
+    /**
+     * Test-only hatch: clear pendingOpIds. The singleton leaks state across
+     * tests via the timer-pruned map; tests that exercise the registry call
+     * this in `@Before` to start clean.
+     */
+    @androidx.annotation.VisibleForTesting
+    fun clearPendingOpsForTest() {
+        pendingOpIds.clear()
     }
 
     /** Add a new note to the reconstructed list. */
@@ -420,7 +466,12 @@ object NoteStore {
                 } else {
                     rawNotes[change.document.id] = note
                 }
-                affectedRoots.add(rootId)
+                // Skip the changedNoteIds emission for our own save echoes —
+                // the editor already has this content (or newer); reloading
+                // would clobber characters typed since the save started.
+                if (!isOurEcho(note.lastWriterOpId)) {
+                    affectedRoots.add(rootId)
+                }
             }
 
             if (affectedRoots.isNotEmpty()) {

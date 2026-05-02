@@ -339,9 +339,15 @@ class NoteRepository(
         extraOpsBuilder: ExtraOpsBuilder?,
     ): Result<Map<Int, String>> = ioLogged("saveNoteWithChildren") body@{
         if (trackedLines.isEmpty()) return@body emptyMap()
-        val plan = planSaveNoteWithChildren(noteId, trackedLines, extraOpsBuilder)
-        commitInBatches("saveNoteWithChildren", plan.ops)
-        plan.createdIds
+        val opId = newClientOpId()
+        NoteStore.registerPendingOp(opId)
+        try {
+            val plan = planSaveNoteWithChildren(noteId, trackedLines, extraOpsBuilder, opId)
+            commitInBatches("saveNoteWithChildren", plan.ops)
+            plan.createdIds
+        } finally {
+            NoteStore.releasePendingOp(opId)
+        }
     }
 
     /**
@@ -355,14 +361,20 @@ class NoteRepository(
         items: List<Pair<String, List<NoteLine>>>,
     ): Result<Map<String, Map<Int, String>>> = ioLogged("saveMultipleNotes") body@{
         if (items.isEmpty()) return@body emptyMap()
-        val plans = items
-            .filter { it.second.isNotEmpty() }
-            .map { (noteId, trackedLines) ->
-                planSaveNoteWithChildren(noteId, trackedLines, extraOpsBuilder = null)
-            }
-        val allOps = plans.flatMap { it.ops }
-        commitInBatches("saveMultipleNotes", allOps)
-        plans.associate { it.noteId to it.createdIds }
+        val opId = newClientOpId()
+        NoteStore.registerPendingOp(opId)
+        try {
+            val plans = items
+                .filter { it.second.isNotEmpty() }
+                .map { (noteId, trackedLines) ->
+                    planSaveNoteWithChildren(noteId, trackedLines, extraOpsBuilder = null, opId = opId)
+                }
+            val allOps = plans.flatMap { it.ops }
+            commitInBatches("saveMultipleNotes", allOps)
+            plans.associate { it.noteId to it.createdIds }
+        } finally {
+            NoteStore.releasePendingOp(opId)
+        }
     }
 
     /**
@@ -371,11 +383,15 @@ class NoteRepository(
      * [saveMultipleNotes] (combined batch). Runs the same assertions and
      * content-drop guard as before — assertions throw inline so a bad item in
      * a multi-note save aborts the whole batch before any commit.
+     *
+     * [opId] is the same value for every doc in the batch; the listener uses
+     * it to identify our own server echo and skip the editor reload.
      */
     private fun planSaveNoteWithChildren(
         noteId: String,
         trackedLines: List<NoteLine>,
         extraOpsBuilder: ExtraOpsBuilder?,
+        opId: String,
     ): SavePlan {
         assertNoteStoreLoaded("saveNoteWithChildren", noteId)
         warnIfDescendantsLikelyStale("saveNoteWithChildren", noteId)
@@ -542,6 +558,7 @@ class NoteRepository(
         } else {
             val rootData = baseNoteData(userId, rootContent).apply {
                 put("containedNotes", rootContainedList)
+                putAll(stampWrite(opId, existingRoot))
                 if (hasCycle) {
                     put("parentNoteId", FieldValue.delete())
                     put("rootNoteId", FieldValue.delete())
@@ -578,13 +595,13 @@ class NoteRepository(
                         "containedNotes" to containedList,
                         "state" to null,
                         "updatedAt" to FieldValue.serverTimestamp(),
-                    ),
+                    ) + stampWrite(opId, existingDescendant),
                     merge = true
                 ))
             } else {
                 ops.add(BatchOp(
                     newRefs[i]!!,
-                    hashMapOf(
+                    hashMapOf<String, Any?>(
                         "userId" to userId,
                         "content" to content,
                         "parentNoteId" to parentId,
@@ -592,7 +609,7 @@ class NoteRepository(
                         "containedNotes" to containedList,
                         "createdAt" to FieldValue.serverTimestamp(),
                         "updatedAt" to FieldValue.serverTimestamp(),
-                    ),
+                    ).apply { putAll(stampWrite(opId, existing = null)) },
                     merge = false
                 ))
             }
@@ -610,7 +627,7 @@ class NoteRepository(
                 mapOf(
                     "state" to "deleted",
                     "updatedAt" to FieldValue.serverTimestamp(),
-                ),
+                ) + stampWrite(opId, NoteStore.getRawNoteById(id)),
                 merge = true
             ))
         }
@@ -1161,6 +1178,25 @@ class NoteRepository(
         val merge: Boolean
     )
 
+    /**
+     * Generates a fresh `clientOpId` for a save operation. Stamped on every
+     * doc the save writes; the listener uses it to identify and suppress the
+     * server echo so the editor doesn't reload over characters typed since
+     * the save started.
+     */
+    private fun newClientOpId(): String = java.util.UUID.randomUUID().toString()
+
+    /**
+     * Per-write fields tagging this commit so the listener can identify our
+     * own server echo and skip the editor reload that would otherwise clobber
+     * characters typed since the save started. Also bumps `version` (monotonic
+     * per-doc counter; new docs start at 1).
+     */
+    private fun stampWrite(opId: String, existing: Note?): Map<String, Any> = mapOf(
+        FIELD_LAST_WRITER_OP_ID to opId,
+        FIELD_VERSION to (existing?.version ?: 0L) + 1L,
+    )
+
     private suspend fun commitInBatches(operation: String, ops: List<BatchOp>) {
         for (chunk in ops.chunked(MAX_BATCH_SIZE)) {
             val batch = db.batch()
@@ -1180,6 +1216,8 @@ class NoteRepository(
         private const val TAG = "NoteRepository"
         private const val MAX_BATCH_SIZE = 500
         private const val NOTE_STORE_AWAIT_MS = 1500L
+        private const val FIELD_LAST_WRITER_OP_ID = "lastWriterOpId"
+        private const val FIELD_VERSION = "version"
     }
 }
 

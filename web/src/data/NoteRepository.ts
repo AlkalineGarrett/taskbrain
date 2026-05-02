@@ -42,6 +42,27 @@ const NOTE_STORE_AWAIT_MS = 1500
 const MAX_BATCH_SIZE = 500
 
 /**
+ * Generates a fresh `clientOpId` for a save operation. Stamped on every doc
+ * the save writes; the listener uses it to identify and suppress the server
+ * echo so the editor doesn't reload over characters typed since the save
+ * started. `crypto.randomUUID` is widely available in modern browsers and
+ * the test environment (jsdom + node ≥19).
+ */
+function newClientOpId(): string {
+  return crypto.randomUUID()
+}
+
+/**
+ * Per-write fields tagging this commit so the listener can identify our own
+ * server echo and skip the editor reload that would otherwise clobber
+ * characters typed since the save started. Also bumps `version` (monotonic
+ * per-doc counter; new docs start at 1).
+ */
+function stampWrite(opId: string, existing: Note | undefined): { lastWriterOpId: string; version: number } {
+  return { lastWriterOpId: opId, version: (existing?.version ?? 0) + 1 }
+}
+
+/**
  * Repository for managing composable notes in Firestore.
  *
  * Notes form a tree: parentNoteId points to immediate parent, rootNoteId enables
@@ -274,9 +295,15 @@ export class NoteRepository {
     return this.logged('saveNoteWithChildren', async () => {
       if (trackedLines.length === 0) return new Map()
       const userId = this.requireUserId()
-      const plan = this.planSave(noteId, trackedLines, userId)
-      await this.commitInBatches('saveNoteWithChildren', plan.ops)
-      return plan.createdIds
+      const opId = newClientOpId()
+      noteStore.registerPendingOp(opId)
+      try {
+        const plan = this.planSave(noteId, trackedLines, userId, opId)
+        await this.commitInBatches('saveNoteWithChildren', plan.ops)
+        return plan.createdIds
+      } finally {
+        noteStore.releasePendingOp(opId)
+      }
     })
   }
 
@@ -293,16 +320,22 @@ export class NoteRepository {
     return this.logged('saveMultipleNotes', async () => {
       if (items.length === 0) return new Map()
       const userId = this.requireUserId()
-      const plans = items
-        .filter((item) => item.trackedLines.length > 0)
-        .map((item) => this.planSave(item.noteId, item.trackedLines, userId))
-      const allOps = plans.flatMap((p) => p.ops)
-      await this.commitInBatches('saveMultipleNotes', allOps)
-      const result = new Map<string, Map<number, string>>()
-      for (const plan of plans) {
-        result.set(plan.noteId, plan.createdIds)
+      const opId = newClientOpId()
+      noteStore.registerPendingOp(opId)
+      try {
+        const plans = items
+          .filter((item) => item.trackedLines.length > 0)
+          .map((item) => this.planSave(item.noteId, item.trackedLines, userId, opId))
+        const allOps = plans.flatMap((p) => p.ops)
+        await this.commitInBatches('saveMultipleNotes', allOps)
+        const result = new Map<string, Map<number, string>>()
+        for (const plan of plans) {
+          result.set(plan.noteId, plan.createdIds)
+        }
+        return result
+      } finally {
+        noteStore.releasePendingOp(opId)
       }
-      return result
     })
   }
 
@@ -311,11 +344,15 @@ export class NoteRepository {
    * by [saveNoteWithChildren] (single note) and [saveMultipleNotes] (combined
    * batch). Assertions throw inline so a bad item in a multi-note save aborts
    * the whole batch before any commit.
+   *
+   * [opId] is the same value for every doc in the batch; the listener uses
+   * it to identify our own server echo and skip the editor reload.
    */
   private planSave(
     noteId: string,
     trackedLines: NoteLine[],
     userId: string,
+    opId: string,
   ): SavePlan {
     this.assertNoteStoreLoaded('saveNoteWithChildren', noteId)
     this.warnIfDescendantsLikelyStale('saveNoteWithChildren', noteId)
@@ -458,6 +495,7 @@ export class NoteRepository {
       const rootData: Record<string, unknown> = {
         ...this.baseNoteData(userId, rootContent),
         containedNotes: childrenOfLine[0]!,
+        ...stampWrite(opId, existingRoot ?? undefined),
       }
       if (hasCycle) {
         rootData.parentNoteId = null
@@ -481,6 +519,7 @@ export class NoteRepository {
             rootNoteId: noteId,
             containedNotes: childrenOfLine[i]!,
             state: null, // Clear deleted state for reparented notes
+            ...stampWrite(opId, noteStore.getRawNoteById(id)),
             updatedAt: serverTimestamp(),
           },
           merge: true,
@@ -494,6 +533,7 @@ export class NoteRepository {
             parentNoteId: parentId,
             rootNoteId: noteId,
             containedNotes: childrenOfLine[i]!,
+            ...stampWrite(opId, undefined),
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           },
@@ -510,6 +550,7 @@ export class NoteRepository {
         ref: this.noteRef(id),
         data: {
           state: 'deleted',
+          ...stampWrite(opId, noteStore.getRawNoteById(id)),
           updatedAt: serverTimestamp(),
         },
         merge: true,

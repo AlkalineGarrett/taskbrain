@@ -46,6 +46,14 @@ export class NoteStoreNotLoadedError extends Error {
 }
 
 /**
+ * Window for suppressing own-save echoes. Long enough for a Firestore
+ * round-trip plus listener delivery; short enough that a stale opId can't
+ * mask a genuine concurrent edit on a different client. 5s is conservative
+ * for typical commit latencies (~200-800ms).
+ */
+const PENDING_OP_TTL_MS = 5000
+
+/**
  * Singleton reactive store for all notes with reconstructed content.
  * Single source of truth for directive execution context.
  *
@@ -71,6 +79,16 @@ export class NoteStore {
   private errorListeners = new Set<() => void>()
   private needsFixListeners = new Set<() => void>()
   private pendingSaves = new Map<string, Promise<unknown>>()
+
+  /**
+   * `clientOpId` values for saves whose server echo we may still receive.
+   * Maps opId → expiry timestamp. The listener consults this to suppress
+   * own-echo emissions: server-confirmed snapshots whose `lastWriterOpId`
+   * matches an entry update rawNotes (Firestore truth) but do NOT fire the
+   * `changedNoteIds` event that would otherwise pull the editor into the
+   * just-saved content — losing whatever the user has typed since.
+   */
+  private pendingOpIds = new Map<string, number>()
 
   // Tail of the global save queue. Every save is appended via `enqueueSave`,
   // so concurrent saves of different notes (e.g., A's autosave on tab switch
@@ -215,7 +233,13 @@ export class NoteStore {
           } else {
             this.rawNotes.set(change.doc.id, note)
           }
-          affectedRoots.add(rootId)
+          // Always update rawNotes (Firestore truth), but skip the
+          // changedNoteIds emission for our own save echoes — the editor
+          // already has this content (or newer) and a reload would clobber
+          // characters typed since the save started.
+          if (!this.isOurEcho(note.lastWriterOpId)) {
+            affectedRoots.add(rootId)
+          }
         }
 
         if (affectedRoots.size > 0) {
@@ -298,6 +322,32 @@ export class NoteStore {
     const existing = this.getNoteById(noteId)
     if (!existing || existing.content === content) return
     this.updateNote(noteId, { ...existing, content })
+  }
+
+  /** Register a save's `clientOpId` so its own-echo can be suppressed. */
+  registerPendingOp(opId: string): void {
+    this.pendingOpIds.set(opId, Date.now() + PENDING_OP_TTL_MS)
+  }
+
+  /**
+   * Schedule release of a `clientOpId` after [PENDING_OP_TTL_MS] — long
+   * enough for the server echo to round-trip, short enough to not mask a
+   * genuine external change that arrives later.
+   */
+  releasePendingOp(opId: string): void {
+    setTimeout(() => this.pendingOpIds.delete(opId), PENDING_OP_TTL_MS)
+  }
+
+  /** True when [opId] matches a recently-registered local save. */
+  isOurEcho(opId: string | null | undefined): boolean {
+    if (!opId) return false
+    const expireAt = this.pendingOpIds.get(opId)
+    if (expireAt === undefined) return false
+    if (expireAt < Date.now()) {
+      this.pendingOpIds.delete(opId)
+      return false
+    }
+    return true
   }
 
   /**

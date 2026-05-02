@@ -297,6 +297,54 @@ class NoteRepositoryTest {
     }
 
     @Test
+    fun `saveNoteWithChildren stamps lastWriterOpId and version on every write`() = runTest {
+        // Echo-suppression contract: every doc the save writes carries the
+        // same clientOpId so the listener can drop the server echo, plus a
+        // version bumped from the in-memory note's version (or 1 for new docs).
+        val rootNote = Note(id = "note_1", content = "Old", containedNotes = listOf("c1"), version = 7L)
+        val existingChild = Note(
+            id = "c1", content = "old child",
+            parentNoteId = "note_1", rootNoteId = "note_1", version = 3L,
+        )
+        every { NoteStore.getNoteById("note_1") } returns rootNote
+        every { NoteStore.getRawNoteById("note_1") } returns rootNote
+        every { NoteStore.getRawNoteById("c1") } returns existingChild
+        every { NoteStore.getDescendantIds("note_1") } returns setOf("c1")
+        mockDocument("note_1", rootNote)
+        mockDocument("c1", existingChild)
+        val newChildRef = mockk<DocumentReference> { every { id } returns "new_id" }
+        every { mockCollection.document() } returns newChildRef
+        val batch = mockBatch()
+        val captured = mutableListOf<Map<String, Any?>>()
+        every { batch.set(any(), capture(captured), any<SetOptions>()) } returns batch
+        every { batch.set(any(), capture(captured)) } returns batch
+
+        repository.saveNoteWithChildren(
+            "note_1",
+            listOf(
+                NoteLine("New root content", "note_1"),
+                NoteLine("\tedited", "c1"),
+                NoteLine("\tbrand new", null),
+            ),
+            extraOpsBuilder = null,
+        ).getOrThrow()
+
+        // Every write must carry a non-null lastWriterOpId, all the same.
+        val opIds = captured.map { it["lastWriterOpId"] }
+        assertTrue("expected non-empty opIds, got $opIds", opIds.isNotEmpty())
+        assertTrue("opIds must be non-null: $opIds", opIds.all { it is String && (it as String).isNotEmpty() })
+        assertTrue("opIds must all match: $opIds", opIds.toSet().size == 1)
+
+        // Version bumps: root 7→8, edited child 3→4, fresh child=1.
+        val rootWrite = captured.first { it["content"] == "New root content" }
+        assertEquals(8L, rootWrite["version"])
+        val editedWrite = captured.first { it["content"] == "edited" }
+        assertEquals(4L, editedWrite["version"])
+        val freshWrite = captured.first { it["content"] == "brand new" }
+        assertEquals(1L, freshWrite["version"])
+    }
+
+    @Test
     fun `saveNoteWithChildren creates new child notes and returns their IDs`() = runTest {
         mockDocument("note_1", null)
         val childRef = mockk<DocumentReference> { every { id } returns "new_child" }

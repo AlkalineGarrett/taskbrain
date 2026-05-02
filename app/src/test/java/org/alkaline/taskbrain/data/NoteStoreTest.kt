@@ -7,11 +7,19 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class NoteStoreTest {
+
+    @Before
+    fun resetSingleton() {
+        // The singleton's pendingOpIds map is timer-pruned; reset between tests.
+        NoteStore.clearPendingOpsForTest()
+    }
 
     @Test
     fun `enqueueSave runs operations sequentially in submission order`() = runTest(StandardTestDispatcher()) {
@@ -63,5 +71,28 @@ class NoteStoreTest {
         // Queue must still accept and run subsequent operations.
         val result = NoteStore.enqueueSave { "ok" }
         assertEquals("ok", result)
+    }
+
+    // ── Pending-op echo suppression ────────────────────────────────────
+
+    @Test
+    fun `isOurEcho returns true while a registered op is in-window`() {
+        NoteStore.registerPendingOp("op-1")
+        assertTrue(NoteStore.isOurEcho("op-1"))
+    }
+
+    @Test
+    fun `isOurEcho returns false for null and unknown opId`() {
+        assertFalse(NoteStore.isOurEcho(null))
+        assertFalse(NoteStore.isOurEcho("never-registered"))
+    }
+
+    @Test
+    fun `multiple opIds coexist independently`() {
+        NoteStore.registerPendingOp("op-a")
+        NoteStore.registerPendingOp("op-b")
+        assertTrue(NoteStore.isOurEcho("op-a"))
+        assertTrue(NoteStore.isOurEcho("op-b"))
+        assertFalse(NoteStore.isOurEcho("op-c"))
     }
 }
