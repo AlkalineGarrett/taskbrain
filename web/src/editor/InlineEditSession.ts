@@ -18,16 +18,17 @@ export class InlineEditSession {
   readonly undoManager: UndoManager
   private originalContent: string
   /**
-   * `containedNotes` snapshot captured at session start. Anchors the 3-way
-   * merge in NoteRepository.planSave. Refreshed after each save via
+   * `containedNotes` snapshots captured at session start, keyed by id for
+   * the root and every live descendant. Anchors the 3-way merge in
+   * NoteRepository.planSave at every depth. Refreshed after each save via
    * [refreshLocalBase].
    */
-  private localBase: string[]
+  private localBases: Map<string, string[]>
 
   constructor(noteId: string, content: string, lineNoteIds?: string[][]) {
     this.noteId = noteId
     this.originalContent = content
-    this.localBase = noteStore.snapshotContainedNotes(noteId)
+    this.localBases = noteStore.snapshotLocalBases(noteId)
     this.editorState = new EditorState()
     this.undoManager = new UndoManager()
     this.controller = new EditorController(this.editorState, this.undoManager)
@@ -46,13 +47,13 @@ export class InlineEditSession {
     this.updateHiddenIndices()
   }
 
-  getLocalBase(): string[] {
-    return this.localBase
+  getLocalBases(): Map<string, string[]> {
+    return this.localBases
   }
 
   /** Refresh from rawNote — call after a successful save. */
   refreshLocalBase(): void {
-    this.localBase = noteStore.snapshotContainedNotes(this.noteId)
+    this.localBases = noteStore.snapshotLocalBases(this.noteId)
   }
 
   /** Recompute hidden indices. When this session is rendered inside a parent

@@ -230,7 +230,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         extraOpsBuilder: NoteRepository.ExtraOpsBuilder?,
     ): Result<Map<Int, String>> {
         val result = NoteStore.enqueueSave {
-            repository.saveNoteWithChildren(noteId, trackedLines, extraOpsBuilder, currentLocalBase)
+            repository.saveNoteWithChildren(noteId, trackedLines, extraOpsBuilder, currentLocalBases)
         }
         result.fold(
             onSuccess = { newIdsMap ->
@@ -279,15 +279,16 @@ class CurrentNoteViewModel @JvmOverloads constructor(
     private var currentNoteLines: List<NoteLine> = emptyList()
 
     /**
-     * Snapshot of the current note's `containedNotes` at edit-session start.
-     * Anchors the 3-way merge in [NoteRepository.planSaveNoteWithChildren].
+     * Snapshot of the current note's `containedNotes` at edit-session start,
+     * keyed by id for the root and every live descendant. Anchors the 3-way
+     * merge in [NoteRepository.planSaveNoteWithChildren] at every depth.
      * Refreshed on every [applyNoteContent] (load / external-change reload)
      * and after a successful save.
      */
-    private var currentLocalBase: List<String>? = null
+    private var currentLocalBases: Map<String, List<String>>? = null
 
     private fun captureLocalBase(noteId: String) {
-        currentLocalBase = NoteStore.snapshotContainedNotes(noteId)
+        currentLocalBases = NoteStore.snapshotLocalBases(noteId)
     }
 
     /**
@@ -901,7 +902,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         viewModelScope.launch {
             try {
                 val items = mutableListOf<NoteRepository.SaveItem>()
-                items.add(NoteRepository.SaveItem(savedNoteId, trackedLines, currentLocalBase))
+                items.add(NoteRepository.SaveItem(savedNoteId, trackedLines, currentLocalBases))
 
                 // Pre-build each dirty inline session's tracked lines in
                 // parallel: a NoteStore miss falls through to loadNoteWithChildren
@@ -917,7 +918,9 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                     }.awaitAll()
                 }
                 for ((session, tracked) in inlinePairs) {
-                    items.add(NoteRepository.SaveItem(session.noteId, tracked, session.getLocalBase()))
+                    items.add(NoteRepository.SaveItem(
+                        session.noteId, tracked, session.getLocalBases(),
+                    ))
                 }
 
                 val result = NoteStore.enqueueSave {

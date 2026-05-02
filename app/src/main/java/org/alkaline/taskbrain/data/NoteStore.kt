@@ -255,12 +255,20 @@ object NoteStore {
     }
 
     /**
-     * Defensive copy of [noteId]'s `containedNotes`. Returns empty list if
-     * absent. Editors capture this at edit-session start as the base for the
-     * 3-way merge in [NoteRepository.planSaveNoteWithChildren].
+     * `containedNotes` snapshot for [rootNoteId] and every live descendant
+     * under it, keyed by id. Editors capture this at edit-session start so
+     * the 3-way merge in [NoteRepository.planSaveNoteWithChildren] runs
+     * uniformly at every depth (concurrent additions another client made
+     * under any descendant survive, not just additions to the root). Returns
+     * an empty Map if the root isn't loaded yet.
      */
-    fun snapshotContainedNotes(noteId: String): List<String> {
-        return getRawNoteById(noteId)?.containedNotes?.toList() ?: emptyList()
+    fun snapshotLocalBases(rootNoteId: String): Map<String, List<String>> = rawNotesLock.read {
+        val result = HashMap<String, List<String>>()
+        rawNotes[rootNoteId]?.let { result[rootNoteId] = it.containedNotes.toList() }
+        for (id in descendantIdsOf(rootNoteId, rawNotes)) {
+            rawNotes[id]?.let { result[id] = it.containedNotes.toList() }
+        }
+        result
     }
 
     /** Mirrors web NoteStore.pendingCuts — see that file for full rationale. */

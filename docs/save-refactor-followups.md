@@ -1,6 +1,6 @@
 # Save-refactor follow-ups
 
-Deferred items, known limitations, and follow-up work from Phases 0–8 of the
+Deferred items, known limitations, and follow-up work from Phases 0–9 of the
 save-path refactor (plus the cleanup pass that followed). Review after the
 plan completes; not all of these are worth doing.
 
@@ -10,10 +10,6 @@ Organized by phase, with priority hints:
 - **Low** — style/cosmetic; only worth touching if you're already in the area
 
 ## Cross-cutting
-
-- **Per-descendant 3-way merge for `containedNotes`.** Phase 4 only merges the
-  root note's `containedNotes`. Concurrent edits to a deeply-nested doc's
-  child list still last-writer-wins. Realistic but rare conflict. **Low.**
 
 - **Move-vs-no-move cross-note conflicts.** If client A reparents `c2` to a
   different note while client B keeps `c2` as a child of the original parent
@@ -100,6 +96,38 @@ Organized by phase, with priority hints:
   test helper (in `EditorStateTestHelpers.kt`); 4 redundant reconciliation
   tests in `NoteIdPropagationTest` were dropped (covered by
   `LineReconciliationTest`); production `updateFromText` is gone.
+
+## Phase 9 (done — kept here for context)
+
+- **Per-descendant 3-way merge for `containedNotes`** — completed. Phase 4's
+  merge now runs uniformly at every depth instead of just the root.
+  - `NoteStore.snapshotLocalBases(rootId)` captures `containedNotes` for
+    the root + every live descendant in a single map (keyed by id).
+  - `SaveItem.localBases: Map<id, base>` replaces the previous
+    `localBase + descendantBases` split — root and descendants travel as
+    one anchor; null on legacy paths (RecoverScreen, etc.).
+  - `findConcurrentSubtree` takes the same map and BFS-expands seeds drawn
+    from every anchored parent — concurrent additions another client made
+    under any depth are kept alive instead of soft-deleted by our save.
+  - The merge loop runs once over `childrenOfLine`, producing a uniform
+    `mergedContained: string[][]` that the root write and the descendant
+    write loop both consume. Sentinel (new) lines fall through to the
+    local list. `containedNotesBase` is stamped per-doc whenever an
+    anchor exists for that id.
+  - Captured + refreshed in `useEditor` / `InlineEditSession` (web) and
+    `CurrentNoteViewModel` / `InlineEditSession` (Android), threaded
+    through `useSaveCoordinator` (web) / `saveAll` (Android) as a single
+    field per layer.
+
+A few observations from the cleanup pass that became their own follow-ups:
+
+- **`snapshotLocalBases` is O(total live notes) per call.** Every edit-session
+  start and every successful save calls it; `getDescendantIds` scans the
+  whole `rawNotes` map. For workspaces with M total notes and a root with N
+  descendants, that's O(M) + O(N) per save. A precomputed `id → descendantIds`
+  index on `NoteStore` (invalidated on listener delta) would reduce both
+  this and `findConcurrentSubtree`'s BFS-index rebuild. **Low** until
+  profiling flags it on a real workspace.
 
 ## Cleanup pass (after Phase 8 — done, kept for context)
 

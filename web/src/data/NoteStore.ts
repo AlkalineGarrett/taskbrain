@@ -325,12 +325,22 @@ export class NoteStore {
   }
 
   /**
-   * Defensive copy of [noteId]'s `containedNotes`. Returns `[]` if absent.
-   * Editors capture this at edit-session start as the base for the 3-way
-   * merge in NoteRepository.planSave.
+   * `containedNotes` snapshot for [rootNoteId] and every live descendant
+   * under it, keyed by id. Editors capture this at edit-session start so the
+   * 3-way merge in NoteRepository.planSave runs uniformly at every depth
+   * (concurrent additions another client made under any descendant survive,
+   * not just additions to the root). Returns an empty Map if the root
+   * isn't loaded yet.
    */
-  snapshotContainedNotes(noteId: string): string[] {
-    return this.getRawNoteById(noteId)?.containedNotes.slice() ?? []
+  snapshotLocalBases(rootNoteId: string): Map<string, string[]> {
+    const result = new Map<string, string[]>()
+    const root = this.getRawNoteById(rootNoteId)
+    if (root) result.set(rootNoteId, root.containedNotes.slice())
+    for (const id of this.getDescendantIds(rootNoteId)) {
+      const note = this.getRawNoteById(id)
+      if (note) result.set(id, note.containedNotes.slice())
+    }
+    return result
   }
 
   /**

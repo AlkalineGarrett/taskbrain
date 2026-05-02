@@ -102,7 +102,7 @@ class NoteRepositoryTest {
 
         val results = listOf(
             repository.loadNoteWithChildren("note_1"),
-            repository.saveNoteWithChildren("note_1", listOf(NoteLine("Content", "note_1")), extraOpsBuilder = null, localBase = null),
+            repository.saveNoteWithChildren("note_1", listOf(NoteLine("Content", "note_1")), extraOpsBuilder = null, localBases = null),
             repository.loadUserNotes(),
             repository.createNote(),
             repository.createMultiLineNote("Line 1\nLine 2")
@@ -301,7 +301,7 @@ class NoteRepositoryTest {
         mockDocument("note_1", null)
         val batch = mockBatch()
 
-        val result = repository.saveNoteWithChildren("note_1", listOf(NoteLine("Content", "note_1")), extraOpsBuilder = null, localBase = null)
+        val result = repository.saveNoteWithChildren("note_1", listOf(NoteLine("Content", "note_1")), extraOpsBuilder = null, localBases = null)
 
         assertTrue(result.isSuccess)
         verify { batch.set(any(), any<Map<String, Any?>>(), any<SetOptions>()) }
@@ -337,7 +337,7 @@ class NoteRepositoryTest {
                 NoteLine("\tedited", "c1"),
                 NoteLine("\tbrand new", null),
             ),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
         // Every write must carry a non-null lastWriterOpId, all the same.
@@ -365,7 +365,7 @@ class NoteRepositoryTest {
         val result = repository.saveNoteWithChildren(
             "note_1",
             listOf(NoteLine("Parent", "note_1"), NoteLine("\tNew child", null)),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
         assertEquals("new_child", result[1])
@@ -389,7 +389,7 @@ class NoteRepositoryTest {
         repository.saveNoteWithChildren(
             "note_1",
             listOf(NoteLine("Parent", "note_1"), NoteLine("• Item A", null)),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
         // Warning must reach the user via NoteStore.raiseWarning (which the VM
@@ -420,7 +420,7 @@ class NoteRepositoryTest {
         val assigned = repository.saveNoteWithChildren(
             "note_1",
             listOf(NoteLine("Parent", "note_1"), NoteLine("• Item A", sentinel)),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
         assertEquals("sentinel allocates a fresh doc, never aliases to c1", "fresh_id", assigned[1])
@@ -442,7 +442,7 @@ class NoteRepositoryTest {
         val result = repository.saveNoteWithChildren(
             "note_1",
             listOf(NoteLine("Parent", "note_1"), NoteLine("\tPasted line", sentinel)),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
         assertEquals("fresh Firestore id replaces the sentinel", "fresh_id", result[1])
@@ -465,7 +465,7 @@ class NoteRepositoryTest {
         val result = repository.saveNoteWithChildren(
             "note_1",
             listOf(NoteLine("Parent", "note_1"), NoteLine("\tUpdated", "child_1")),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         )
 
         assertTrue(result.isSuccess)
@@ -480,7 +480,7 @@ class NoteRepositoryTest {
         val result = repository.saveNoteWithChildren(
             "note_1",
             listOf(NoteLine("Parent only", "note_1")),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         )
 
         assertTrue(result.isSuccess)
@@ -502,7 +502,7 @@ class NoteRepositoryTest {
                 NoteLine("\tChild content", null),
                 NoteLine("", null),
             ),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
         assertEquals(2, result.size)
@@ -541,7 +541,7 @@ class NoteRepositoryTest {
                 NoteLine("\t• Dining table", null), // was aE5e-style; lost its id
                 NoteLine("• Undecided", null),     // was wvKV-style; lost its id
             ),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         )
 
         // Reconciliation should have matched the three lines against existing
@@ -567,7 +567,7 @@ class NoteRepositoryTest {
                 NoteLine("", null),
                 NoteLine("", null)
             ),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
         assertEquals(4, result.size)
@@ -595,7 +595,7 @@ class NoteRepositoryTest {
                 NoteLine("\tChild", null),
                 NoteLine("", null),
             ),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
         assertEquals(3, result.size)
@@ -617,7 +617,7 @@ class NoteRepositoryTest {
                 NoteLine("Parent", "note_1"),
                 NoteLine("\t   ", null)  // Tab + whitespace — whitespace is content
             ),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
         assertEquals("new_child", result[1])
@@ -659,7 +659,7 @@ class NoteRepositoryTest {
         val result = repository.saveNoteWithChildren(
             "note_1",
             listOf(NoteLine("Parent", "note_1"), NoteLine("\tUntouched", "c1")),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         )
 
         assertTrue(result.isSuccess)
@@ -683,7 +683,7 @@ class NoteRepositoryTest {
                 NoteLine("\tSecond EDITED", "c2"),
                 NoteLine("\tThird", "c3"),
             ),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
         // Root: containedNotes still [c1,c2,c3] → skip. c1, c3: unchanged →
@@ -701,7 +701,7 @@ class NoteRepositoryTest {
         repository.saveNoteWithChildren(
             "note_1",
             listOf(NoteLine("New parent", "note_1"), NoteLine("\tUntouched", "c1")),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
         verify(exactly = 1) { batch.set(any(), any<Map<String, Any?>>(), any<SetOptions>()) }
@@ -724,7 +724,7 @@ class NoteRepositoryTest {
                 NoteLine("\tB", "b"),
                 NoteLine("\tA", "a"),
             ),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
         // Root: containedNotes flipped → write. a, b: unchanged → skip.
@@ -749,7 +749,7 @@ class NoteRepositoryTest {
                 NoteLine("\tA", "a"),
                 NoteLine("\t\tB", "b"),
             ),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
         verify(exactly = 3) { batch.set(any(), any<Map<String, Any?>>(), any<SetOptions>()) }
@@ -771,7 +771,7 @@ class NoteRepositoryTest {
         repository.saveNoteWithChildren(
             "note_1",
             listOf(NoteLine("Parent", "note_1"), NoteLine("\tSame", "c1")),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
         verify(exactly = 1) { batch.set(any(), any<Map<String, Any?>>(), any<SetOptions>()) }
@@ -791,7 +791,7 @@ class NoteRepositoryTest {
         repository.saveNoteWithChildren(
             "note_1",
             listOf(NoteLine("Parent", "note_1"), NoteLine("\tSame", "c1")),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
         verify(exactly = 1) { batch.set(any(), any<Map<String, Any?>>(), any<SetOptions>()) }
@@ -814,7 +814,7 @@ class NoteRepositoryTest {
         repository.saveNoteWithChildren(
             "note_1",
             listOf(NoteLine("Parent", "note_1")),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
         val deletePayload = slot<Map<String, Any?>>()
@@ -866,7 +866,7 @@ class NoteRepositoryTest {
                 NoteLine("\tour-add", null),
             ),
             extraOpsBuilder = null,
-            localBase = listOf("c1"),
+            localBases = mapOf("note_1" to listOf("c1")),
         ).getOrThrow()
 
         val rootWrite = captured.first { it["content"] == "parent" }
@@ -908,7 +908,7 @@ class NoteRepositoryTest {
             "note_1",
             listOf(NoteLine("parent", "note_1"), NoteLine("\tfirst", "c1")),
             extraOpsBuilder = null,
-            localBase = listOf("c1"),
+            localBases = mapOf("note_1" to listOf("c1")),
         ).getOrThrow()
 
         val deletedContents = captured.filter { it["state"] == "deleted" }
@@ -945,11 +945,161 @@ class NoteRepositoryTest {
                 NoteLine("\tkept", "c2"),
             ),
             extraOpsBuilder = null,
-            localBase = listOf("c1", "c2"),
+            localBases = mapOf("note_1" to listOf("c1", "c2")),
         ).getOrThrow()
 
         val rootWrite = captured.first { it["content"] == "parent" }
         assertEquals(listOf("c2"), rootWrite["containedNotes"])
+    }
+
+    @Test
+    fun `saveNoteWithChildren merges concurrent additions to a deeply-nested descendant`() = runTest {
+        // Tree at session start: note_1 → c1 → [g1]. Other client added g2
+        // under c1 (remote c1.containedNotes = [g1, g2]). User adds g3 locally.
+        // localBases anchors c1 at [g1], so c1's write should merge to
+        // [g1, g3, g2] — not just overwrite to [g1, g3] as the legacy path did.
+        val root = Note(id = "note_1", containedNotes = listOf("c1"))
+        val c1 = Note(
+            id = "c1", content = "mid", parentNoteId = "note_1", rootNoteId = "note_1",
+            containedNotes = listOf("g1", "g2"),
+        )
+        val g1 = Note(id = "g1", content = "g1", parentNoteId = "c1", rootNoteId = "note_1")
+        val g2 = Note(id = "g2", content = "g2-concurrent", parentNoteId = "c1", rootNoteId = "note_1")
+        every { NoteStore.getNoteById("note_1") } returns root
+        every { NoteStore.getRawNoteById("note_1") } returns root
+        every { NoteStore.getRawNoteById("c1") } returns c1
+        every { NoteStore.getRawNoteById("g1") } returns g1
+        every { NoteStore.getRawNoteById("g2") } returns g2
+        every { NoteStore.getDescendantIds("note_1") } returns setOf("c1", "g1", "g2")
+        mockDocument("note_1", root)
+        mockDocument("c1", c1)
+        mockDocument("g1", g1)
+        mockDocument("g2", g2)
+        val newRef = mockk<DocumentReference> { every { id } returns "g3" }
+        every { mockCollection.document() } returns newRef
+        val batch = mockBatch()
+        val capturedRefs = mutableListOf<DocumentReference>()
+        val capturedData = mutableListOf<Map<String, Any?>>()
+        every { batch.set(capture(capturedRefs), capture(capturedData), any<SetOptions>()) } returns batch
+        every { batch.set(capture(capturedRefs), capture(capturedData)) } returns batch
+
+        repository.saveNoteWithChildren(
+            "note_1",
+            listOf(
+                NoteLine("parent", "note_1"),
+                NoteLine("\tmid", "c1"),
+                NoteLine("\t\tg1", "g1"),
+                NoteLine("\t\tour-add", null),
+            ),
+            extraOpsBuilder = null,
+            localBases = mapOf("note_1" to listOf("c1"), "c1" to listOf("g1")),
+        ).getOrThrow()
+
+        val c1WriteIdx = capturedData.indexOfFirst { it["content"] == "mid" }
+        assertTrue("expected c1 write", c1WriteIdx >= 0)
+        // local [g1, g3] + remote-only [g2] = [g1, g3, g2]
+        assertEquals(listOf("g1", "g3", "g2"), capturedData[c1WriteIdx]["containedNotes"])
+        // c1's base is stamped on its merge write.
+        assertEquals(listOf("g1"), capturedData[c1WriteIdx]["containedNotesBase"])
+    }
+
+    @Test
+    fun `saveNoteWithChildren does not soft-delete a subtree concurrently added under a descendant`() = runTest {
+        // descendantBase for c1 = [g1]. Remote added g2 (with grandchild g2a)
+        // under c1. Without per-descendant survivor extension, the save would
+        // soft-delete g2 + g2a since they aren't in our trackedLines.
+        val root = Note(id = "note_1", containedNotes = listOf("c1"))
+        val c1 = Note(
+            id = "c1", content = "mid", parentNoteId = "note_1", rootNoteId = "note_1",
+            containedNotes = listOf("g1", "g2"),
+        )
+        val g1 = Note(id = "g1", content = "g1", parentNoteId = "c1", rootNoteId = "note_1")
+        val g2 = Note(
+            id = "g2", content = "g2-concurrent",
+            parentNoteId = "c1", rootNoteId = "note_1",
+            containedNotes = listOf("g2a"),
+        )
+        val g2a = Note(id = "g2a", content = "g2a-concurrent", parentNoteId = "g2", rootNoteId = "note_1")
+        every { NoteStore.getNoteById("note_1") } returns root
+        every { NoteStore.getRawNoteById("note_1") } returns root
+        every { NoteStore.getRawNoteById("c1") } returns c1
+        every { NoteStore.getRawNoteById("g1") } returns g1
+        every { NoteStore.getRawNoteById("g2") } returns g2
+        every { NoteStore.getRawNoteById("g2a") } returns g2a
+        every { NoteStore.getDescendantIds("note_1") } returns setOf("c1", "g1", "g2", "g2a")
+        mockDocument("note_1", root)
+        mockDocument("c1", c1)
+        mockDocument("g1", g1)
+        mockDocument("g2", g2)
+        mockDocument("g2a", g2a)
+        val batch = mockBatch()
+        val capturedData = mutableListOf<Map<String, Any?>>()
+        every { batch.set(any(), capture(capturedData), any<SetOptions>()) } returns batch
+        every { batch.set(any(), capture(capturedData)) } returns batch
+
+        repository.saveNoteWithChildren(
+            "note_1",
+            listOf(
+                NoteLine("parent", "note_1"),
+                NoteLine("\tmid", "c1"),
+                NoteLine("\t\tg1", "g1"),
+            ),
+            extraOpsBuilder = null,
+            localBases = mapOf("note_1" to listOf("c1"), "c1" to listOf("g1")),
+        ).getOrThrow()
+
+        // Soft-delete writes carry state="deleted". Neither g2 nor g2a should
+        // be among them.
+        val deletePayloads = capturedData.filter { it["state"] == "deleted" }
+        // The captured data contains only payloads, not refs, so we can't
+        // directly tie payloads to ids — but the test mocks make these notes
+        // the only candidates for soft-delete, and there should be zero such
+        // writes since both are concurrent additions.
+        assertEquals("expected no soft-deletes, got: $deletePayloads", 0, deletePayloads.size)
+    }
+
+    @Test
+    fun `saveNoteWithChildren writes through with no merge for descendants added during this session`() = runTest {
+        // c1 was created during the session, so localBases doesn't have
+        // it. Its containedNotes write should be the local list with no merge
+        // and no containedNotesBase stamp — same as the legacy descendant path.
+        val root = Note(id = "note_1", containedNotes = listOf("c1"))
+        val c1 = Note(
+            id = "c1", content = "mid", parentNoteId = "note_1", rootNoteId = "note_1",
+            containedNotes = emptyList(),
+        )
+        every { NoteStore.getNoteById("note_1") } returns root
+        every { NoteStore.getRawNoteById("note_1") } returns root
+        every { NoteStore.getRawNoteById("c1") } returns c1
+        every { NoteStore.getDescendantIds("note_1") } returns setOf("c1")
+        mockDocument("note_1", root)
+        mockDocument("c1", c1)
+        val newRef = mockk<DocumentReference> { every { id } returns "g1" }
+        every { mockCollection.document() } returns newRef
+        val batch = mockBatch()
+        val capturedData = mutableListOf<Map<String, Any?>>()
+        every { batch.set(any(), capture(capturedData), any<SetOptions>()) } returns batch
+        every { batch.set(any(), capture(capturedData)) } returns batch
+
+        repository.saveNoteWithChildren(
+            "note_1",
+            listOf(
+                NoteLine("parent", "note_1"),
+                NoteLine("\tmid", "c1"),
+                NoteLine("\t\tnew-grandchild", null),
+            ),
+            extraOpsBuilder = null,
+            // c1 NOT in localBases (only the root) — no anchor for it.
+            localBases = mapOf("note_1" to listOf("c1")),
+        ).getOrThrow()
+
+        val c1Write = capturedData.first { it["content"] == "mid" }
+        assertEquals(listOf("g1"), c1Write["containedNotes"])
+        // No base recorded → no containedNotesBase stamped on this write.
+        assertFalse(
+            "expected containedNotesBase to be absent, got: $c1Write",
+            c1Write.containsKey("containedNotesBase"),
+        )
     }
 
     // endregion
@@ -1067,7 +1217,7 @@ class NoteRepositoryTest {
             "note_1",
             listOf(NoteLine("parent", "note_1")),
             extraOpsBuilder = null,
-            localBase = listOf("c1"),
+            localBases = mapOf("note_1" to listOf("c1")),
         ).getOrThrow()
 
         // No soft-delete for c1.
@@ -1105,11 +1255,12 @@ class NoteRepositoryTest {
 
         repository.saveMultipleNotes(
             listOf(
-                NoteRepository.SaveItem("note_1", listOf(NoteLine("note 1", "note_1")), localBase = listOf("c1")),
+                NoteRepository.SaveItem("note_1", listOf(NoteLine("note 1", "note_1")),
+                    localBases = mapOf("note_1" to listOf("c1"))),
                 NoteRepository.SaveItem("note_2", listOf(
                     NoteLine("note 2", "note_2"),
                     NoteLine("\tmoved", "c1"),
-                ), localBase = emptyList()),
+                ), localBases = mapOf("note_2" to emptyList())),
             ),
         ).getOrThrow()
 
@@ -1400,7 +1551,7 @@ class NoteRepositoryTest {
                 NoteLine("\tA", null),
                 NoteLine("\t\tB", null),
             ),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
         assertEquals("child_a", result[1])
@@ -1409,7 +1560,7 @@ class NoteRepositoryTest {
 
     @Test
     fun `saveNoteWithChildren returns empty map for empty lines`() = runTest {
-        val result = repository.saveNoteWithChildren("note_1", emptyList(), extraOpsBuilder = null, localBase = null).getOrThrow()
+        val result = repository.saveNoteWithChildren("note_1", emptyList(), extraOpsBuilder = null, localBases = null).getOrThrow()
 
         assertEquals(emptyMap<Int, String>(), result)
     }
@@ -1430,7 +1581,7 @@ class NoteRepositoryTest {
             lines.add(NoteLine("\tChild $i", null))
         }
 
-        val result = repository.saveNoteWithChildren("root", lines, extraOpsBuilder = null, localBase = null).getOrThrow()
+        val result = repository.saveNoteWithChildren("root", lines, extraOpsBuilder = null, localBases = null).getOrThrow()
 
         assertEquals(501, result.size)
         // Should commit multiple batches (502 ops: 1 root + 501 children)
@@ -1513,7 +1664,7 @@ class NoteRepositoryTest {
         val result = repository.saveNoteWithChildren(
             "note_1",
             listOf(NoteLine("Hello", "note_1")),
-            extraOpsBuilder = null, localBase = null,
+            extraOpsBuilder = null, localBases = null,
         )
         val ex = result.exceptionOrNull()
         assertTrue(ex is NoteStore.NoteStoreNotLoadedException)

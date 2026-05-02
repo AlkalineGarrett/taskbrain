@@ -42,17 +42,18 @@ class InlineEditSession(
         private set
 
     /**
-     * `containedNotes` snapshot captured at session start. Anchors the 3-way
-     * merge in [NoteRepository.planSaveNoteWithChildren]. Refreshed after
-     * each save via [refreshLocalBase].
+     * `containedNotes` snapshot captured at session start, keyed by id for
+     * the root and every live descendant. Anchors the 3-way merge in
+     * [NoteRepository.planSaveNoteWithChildren] at every depth. Refreshed
+     * after each save via [refreshLocalBase].
      */
-    private var localBase: List<String> = NoteStore.snapshotContainedNotes(noteId)
+    private var localBases: Map<String, List<String>> = NoteStore.snapshotLocalBases(noteId)
 
-    fun getLocalBase(): List<String> = localBase
+    fun getLocalBases(): Map<String, List<String>> = localBases
 
     /** Refresh from rawNote — call after a successful save. */
     fun refreshLocalBase() {
-        localBase = NoteStore.snapshotContainedNotes(noteId)
+        localBases = NoteStore.snapshotLocalBases(noteId)
     }
 
     val isDirty: Boolean

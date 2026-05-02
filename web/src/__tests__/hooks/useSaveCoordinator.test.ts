@@ -33,7 +33,7 @@ vi.mock('@/data/NoteStore', () => ({
     updateContentIfChanged: updateContentIfChangedSpy,
     getNoteById: getNoteByIdSpy,
     getRawNoteById: getNoteByIdSpy,
-    snapshotContainedNotes: () => [],
+    snapshotLocalBases: () => new Map(),
     trackSave: trackSaveSpy,
     getNoteLinesById: getNoteLinesByIdSpy,
     enqueueSave: enqueueSaveSpy,

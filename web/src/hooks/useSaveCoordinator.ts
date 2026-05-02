@@ -13,7 +13,7 @@ interface UseSaveCoordinatorOptions {
   noteId: string | null | undefined
   prepareMainSaveItem: (targetNoteId: string) => {
     trackedLines: NoteLine[]
-    localBase: string[] | null
+    localBases: Map<string, string[]> | null
     text: string
     applyResult: (createdIds: Map<number, string>) => void
   }
@@ -27,7 +27,7 @@ interface UseSaveCoordinatorOptions {
 interface SaveSlot {
   noteId: string
   trackedLines: NoteLine[]
-  localBase: string[] | null
+  localBases: Map<string, string[]> | null
   applyResult: (createdIds: Map<number, string>) => void
 }
 
@@ -106,7 +106,7 @@ export function useSaveCoordinator({
         slots.push({
           noteId,
           trackedLines: main.trackedLines,
-          localBase: main.localBase,
+          localBases: main.localBases,
           applyResult: main.applyResult,
         })
         noteStore.updateContentIfChanged(noteId, main.text)
@@ -124,7 +124,7 @@ export function useSaveCoordinator({
           return {
             noteId: session.noteId,
             trackedLines: tracked,
-            localBase: session.getLocalBase(),
+            localBases: session.getLocalBases(),
             applyResult: (createdIds) => {
               session.applyCreatedIds(createdIds)
               session.markSaved(content)
@@ -142,7 +142,7 @@ export function useSaveCoordinator({
       const items = slots.map((s) => ({
         noteId: s.noteId,
         trackedLines: s.trackedLines,
-        localBase: s.localBase,
+        localBases: s.localBases,
       }))
       const savePromise = noteStore.enqueueSave(() => noteRepo.saveMultipleNotes(items))
       // Single-promise fan-out: every dirty noteId sees the batch in

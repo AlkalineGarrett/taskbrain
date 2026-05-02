@@ -114,12 +114,13 @@ export function useEditor(noteId: string | undefined) {
   const dirtyRef = useRef(dirty)
   dirtyRef.current = dirty
 
-  // Snapshot of `containedNotes` at edit-session start (or last save). Anchors
-  // the 3-way merge in NoteRepository.planSave. Refreshed on load, on
+  // Snapshot of `containedNotes` at edit-session start (or last save), keyed
+  // by id for the root and every live descendant. Anchors the 3-way merge
+  // in NoteRepository.planSave at every depth. Refreshed on load, on
   // external-change reload, and after a successful save.
-  const localBaseRef = useRef<string[] | null>(null)
+  const localBasesRef = useRef<Map<string, string[]> | null>(null)
   const captureLocalBase = useCallback((targetNoteId: string) => {
-    localBaseRef.current = noteStore.snapshotContainedNotes(targetNoteId)
+    localBasesRef.current = noteStore.snapshotLocalBases(targetNoteId)
   }, [])
 
   // Load note
@@ -297,11 +298,11 @@ export function useEditor(noteId: string | undefined) {
    * Builds the main editor's tracked lines for inclusion in a multi-note
    * save. The returned [applyResult] writes created ids back to the original
    * EditorState — guarded so a mid-save tab switch doesn't cross-pollinate.
-   * [localBase] anchors the 3-way merge of containedNotes in planSave.
+   * [localBases] anchors the 3-way merge in planSave at every depth.
    */
   const prepareMainSaveItem = useCallback((targetNoteId: string): {
     trackedLines: NoteLine[]
-    localBase: string[] | null
+    localBases: Map<string, string[]> | null
     /** Joined text of the editor's current lines — used by the save
      *  coordinator for optimistic NoteStore updates. */
     text: string
@@ -317,7 +318,7 @@ export function useEditor(noteId: string | undefined) {
       newTracked = [{ ...newTracked[0]!, noteId: targetNoteId }, ...newTracked.slice(1)]
     }
 
-    const localBase = localBaseRef.current
+    const localBases = localBasesRef.current
     const text = editorState.text
 
     const applyResult = (createdIds: Map<number, string>) => {
@@ -333,7 +334,7 @@ export function useEditor(noteId: string | undefined) {
       setDirty(false)
     }
 
-    return { trackedLines: newTracked, localBase, text, applyResult }
+    return { trackedLines: newTracked, localBases, text, applyResult }
   }, [editorState, controller, captureLocalBase])
 
   // Core save logic — accepts noteId to avoid stale closure bugs. Used by
@@ -343,9 +344,9 @@ export function useEditor(noteId: string | undefined) {
       setSaving(true)
       savingRef.current = true
 
-      const { trackedLines, localBase, applyResult } = prepareMainSaveItem(targetNoteId)
+      const { trackedLines, localBases, applyResult } = prepareMainSaveItem(targetNoteId)
       const createdIds = await noteStore.enqueueSave(() =>
-        repo.saveNoteWithChildren(targetNoteId, trackedLines, localBase),
+        repo.saveNoteWithChildren(targetNoteId, trackedLines, localBases),
       )
       applyResult(createdIds)
     } catch (e) {

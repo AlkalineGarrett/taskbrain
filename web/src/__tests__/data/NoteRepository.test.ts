@@ -722,11 +722,11 @@ describe('NoteRepository', () => {
       const { batch, setSpy } = setupSaveBatch()
 
       const result = await repository.saveMultipleNotes([
-        { noteId: 'r1', localBase: null, trackedLines: [
+        { noteId: 'r1', localBases: null, trackedLines: [
           { content: 'New r1', noteId: 'r1' },
           { content: '\ta', noteId: 'c1' },
         ] },
-        { noteId: 'r2', localBase: null, trackedLines: [
+        { noteId: 'r2', localBases: null, trackedLines: [
           { content: 'New r2', noteId: 'r2' },
           { content: '\tb', noteId: 'c2' },
         ] },
@@ -757,11 +757,11 @@ describe('NoteRepository', () => {
       // batch must abort before commit so r2 isn't saved alone.
       await expect(
         repository.saveMultipleNotes([
-          { noteId: 'r1', localBase: null, trackedLines: [
+          { noteId: 'r1', localBases: null, trackedLines: [
             { content: 'r1', noteId: 'r1' },
             { content: '\tA', noteId: 'a' },
           ] },
-          { noteId: 'r2', localBase: null, trackedLines: [
+          { noteId: 'r2', localBases: null, trackedLines: [
             { content: 'New r2', noteId: 'r2' },
           ] },
         ]),
@@ -803,7 +803,7 @@ describe('NoteRepository', () => {
           { content: '\tfirst', noteId: 'c1' },
           { content: '\tour-add', noteId: null },
         ],
-        ['c1'], // localBase: editor saw [c1] only
+        new Map([['note_1', ['c1']]]), // editor saw [c1] under note_1 only
       )
 
       const rootWrite = setSpy.mock.calls.find((c: any[]) => (c[0] as { id: string }).id === 'note_1')
@@ -845,7 +845,7 @@ describe('NoteRepository', () => {
           { content: 'parent', noteId: 'note_1' },
           { content: '\tfirst', noteId: 'c1' },
         ],
-        ['c1'], // localBase
+        new Map([['note_1', ['c1']]]),
       )
 
       // Neither c2 nor c2a should be soft-deleted: each would carry state='deleted'.
@@ -879,13 +879,142 @@ describe('NoteRepository', () => {
           { content: '\tc1-stale', noteId: 'c1' },
           { content: '\tkept', noteId: 'c2' },
         ],
-        ['c1', 'c2'], // localBase: editor still believes c1 exists
+        new Map([['note_1', ['c1', 'c2']]]), // editor still believes c1 exists
       )
 
       const rootWrite = setSpy.mock.calls.find((c: any[]) => (c[0] as { id: string }).id === 'note_1')
       expect(rootWrite).toBeDefined()
       // Remote removed c1 → final containedNotes drops it.
       expect(rootWrite![1].containedNotes).toEqual(['c2'])
+    })
+
+    it('merges concurrent additions to a deeply-nested descendant', async () => {
+      // Tree at session start: note_1 → c1 → [g1]. Other client added g2 under
+      // c1 (remote c1.containedNotes = [g1, g2]). User adds g3 locally.
+      // localBases anchors c1 at [g1], so c1's write should merge to
+      // [g1, g3, g2] — not just overwrite to [g1, g3] as the legacy path did.
+      const root = note({ id: 'note_1', containedNotes: ['c1'] })
+      const c1 = note({
+        id: 'c1', content: 'mid', parentNoteId: 'note_1', rootNoteId: 'note_1',
+        containedNotes: ['g1', 'g2'],
+      })
+      const g1 = note({ id: 'g1', content: 'g1', parentNoteId: 'c1', rootNoteId: 'note_1' })
+      const g2 = note({ id: 'g2', content: 'g2-concurrent', parentNoteId: 'c1', rootNoteId: 'note_1' })
+      vi.spyOn(noteStore, 'getNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root : id === 'c1' ? c1 : id === 'g1' ? g1 : id === 'g2' ? g2 : undefined,
+      )
+      vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root : id === 'c1' ? c1 : id === 'g1' ? g1 : id === 'g2' ? g2 : undefined,
+      )
+      vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c1', 'g1', 'g2']))
+      const newRef = { id: 'g3' } as any
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
+        if (args.length === 1) return newRef
+        return { id: args[args.length - 1] } as any
+      })
+      const { setSpy } = setupSaveBatch()
+
+      await repository.saveNoteWithChildren(
+        'note_1',
+        [
+          { content: 'parent', noteId: 'note_1' },
+          { content: '\tmid', noteId: 'c1' },
+          { content: '\t\tg1', noteId: 'g1' },
+          { content: '\t\tour-add', noteId: null },
+        ],
+        new Map<string, string[]>([['note_1', ['c1']], ['c1', ['g1']]]),
+      )
+
+      const c1Write = setSpy.mock.calls.find((c: any[]) => (c[0] as { id: string }).id === 'c1')
+      expect(c1Write).toBeDefined()
+      // local [g1, g3] + remote-only [g2] = [g1, g3, g2]
+      expect(c1Write![1].containedNotes).toEqual(['g1', 'g3', 'g2'])
+      // c1's base is stamped on its merge write.
+      expect(c1Write![1].containedNotesBase).toEqual(['g1'])
+    })
+
+    it('does not soft-delete a subtree a concurrent client added under a descendant', async () => {
+      // descendantBase for c1 = [g1]. Remote added g2 (with grandchild g2a)
+      // under c1. Without the per-descendant survivor extension, our save —
+      // which only sees [g1] locally under c1 — would soft-delete g2 + g2a.
+      const root = note({ id: 'note_1', containedNotes: ['c1'] })
+      const c1 = note({
+        id: 'c1', content: 'mid', parentNoteId: 'note_1', rootNoteId: 'note_1',
+        containedNotes: ['g1', 'g2'],
+      })
+      const g1 = note({ id: 'g1', content: 'g1', parentNoteId: 'c1', rootNoteId: 'note_1' })
+      const g2 = note({
+        id: 'g2', content: 'g2-concurrent', parentNoteId: 'c1', rootNoteId: 'note_1',
+        containedNotes: ['g2a'],
+      })
+      const g2a = note({ id: 'g2a', content: 'g2a-concurrent', parentNoteId: 'g2', rootNoteId: 'note_1' })
+      vi.spyOn(noteStore, 'getNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root : id === 'c1' ? c1 : id === 'g1' ? g1
+          : id === 'g2' ? g2 : id === 'g2a' ? g2a : undefined,
+      )
+      vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root : id === 'c1' ? c1 : id === 'g1' ? g1
+          : id === 'g2' ? g2 : id === 'g2a' ? g2a : undefined,
+      )
+      vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c1', 'g1', 'g2', 'g2a']))
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => ({ id: args[args.length - 1] } as any))
+      const { setSpy } = setupSaveBatch()
+
+      await repository.saveNoteWithChildren(
+        'note_1',
+        [
+          { content: 'parent', noteId: 'note_1' },
+          { content: '\tmid', noteId: 'c1' },
+          { content: '\t\tg1', noteId: 'g1' },
+        ],
+        new Map<string, string[]>([['note_1', ['c1']], ['c1', ['g1']]]),
+      )
+
+      const deletes = setSpy.mock.calls.filter((c: any[]) => (c[1] as { state?: string }).state === 'deleted')
+      const deleteIds = deletes.map((c: any[]) => (c[0] as { id: string }).id)
+      expect(deleteIds).not.toContain('g2')
+      expect(deleteIds).not.toContain('g2a')
+    })
+
+    it('writes through with no merge for descendants added during this session', async () => {
+      // c1 was created during the session, so localBases doesn't have it.
+      // Its containedNotes write should be the local list with no merge and
+      // no containedNotesBase stamp — same as the legacy descendant path.
+      const root = note({ id: 'note_1', containedNotes: ['c1'] })
+      const c1 = note({
+        id: 'c1', content: 'mid', parentNoteId: 'note_1', rootNoteId: 'note_1',
+        containedNotes: [],
+      })
+      vi.spyOn(noteStore, 'getNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root : id === 'c1' ? c1 : undefined,
+      )
+      vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
+        id === 'note_1' ? root : id === 'c1' ? c1 : undefined,
+      )
+      vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c1']))
+      const newRef = { id: 'g1' } as any
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
+        if (args.length === 1) return newRef
+        return { id: args[args.length - 1] } as any
+      })
+      const { setSpy } = setupSaveBatch()
+
+      await repository.saveNoteWithChildren(
+        'note_1',
+        [
+          { content: 'parent', noteId: 'note_1' },
+          { content: '\tmid', noteId: 'c1' },
+          { content: '\t\tnew-grandchild', noteId: null },
+        ],
+        // c1 NOT in localBases (only the root) — no anchor for it.
+        new Map([['note_1', ['c1']]]),
+      )
+
+      const c1Write = setSpy.mock.calls.find((c: any[]) => (c[0] as { id: string }).id === 'c1')
+      expect(c1Write).toBeDefined()
+      expect(c1Write![1].containedNotes).toEqual(['g1'])
+      // No base recorded → no containedNotesBase stamped on this write.
+      expect(c1Write![1].containedNotesBase).toBeUndefined()
     })
   })
 
@@ -919,7 +1048,7 @@ describe('NoteRepository', () => {
       await repository.saveNoteWithChildren(
         'note_1',
         [{ content: 'parent', noteId: 'note_1' }],
-        ['c1'],
+        new Map([['note_1', ['c1']]]),
       )
 
       const c1Writes = setSpy.mock.calls.filter((c: any[]) => (c[0] as { id: string }).id === 'c1')
@@ -949,7 +1078,7 @@ describe('NoteRepository', () => {
       await repository.saveNoteWithChildren(
         'note_2',
         [{ content: 'note 2', noteId: 'note_2' }],
-        [],
+        new Map([['note_2', []]]),
       )
 
       const cutDelete = setSpy.mock.calls.find(
@@ -980,10 +1109,10 @@ describe('NoteRepository', () => {
       const { setSpy } = setupSaveBatch()
 
       await repository.saveMultipleNotes([
-        { noteId: 'note_1', localBase: ['c1'], trackedLines: [
+        { noteId: 'note_1', localBases: new Map([['note_1', ['c1']]]), trackedLines: [
           { content: 'note 1', noteId: 'note_1' },
         ] },
-        { noteId: 'note_2', localBase: [], trackedLines: [
+        { noteId: 'note_2', localBases: new Map([['note_2', []]]), trackedLines: [
           { content: 'note 2', noteId: 'note_2' },
           { content: '\tmoved', noteId: 'c1' },
         ] },
@@ -1019,7 +1148,7 @@ describe('NoteRepository', () => {
       await repository.saveNoteWithChildren(
         'note_1',
         [{ content: 'note 1', noteId: 'note_1' }],
-        [],
+        new Map([['note_1', []]]),
       )
       expect(noteStore.getPendingCuts().has('c1')).toBe(false)
     })
