@@ -11,8 +11,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
@@ -105,6 +107,8 @@ object NoteStore {
     private val pendingPersistRunnables = mutableMapOf<String, Runnable>()
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private const val PERSIST_DEBOUNCE_MS = 500L
+    /** Cap for waiting on the listener to surface a specific note. */
+    private const val NOTE_STORE_AWAIT_MS = 1500L
 
     /**
      * Window for suppressing own-save echoes. Long enough for a Firestore
@@ -426,35 +430,6 @@ object NoteStore {
         return lines
     }
 
-    /**
-     * Like [getNoteLinesById], but never returns null. When the note isn't loaded into
-     * NoteStore yet, synthesizes a flat list from [fallbackContent], assigning the parent
-     * id to line 0 and leaving the rest with null noteIds (a new save will allocate fresh
-     * ids for them, matching the behavior of a never-saved single-line note).
-     *
-     * Use this from any embedded-editor / inline-edit init path so the editor can always
-     * be initialized via [org.alkaline.taskbrain.ui.currentnote.EditorState.initFromNoteLines]
-     * — no caller should ever fall back to the lossy `updateFromText` path.
-     */
-    fun getNoteLinesByIdOrSynthesize(noteId: String, fallbackContent: String): List<NoteLine> {
-        getNoteLinesById(noteId)?.let { return it }
-        val lines = fallbackContent.split("\n")
-        val nonRootCount = (lines.size - 1).coerceAtLeast(0)
-        if (nonRootCount > 0) {
-            android.util.Log.w(
-                "NoteStore",
-                "getNoteLinesByIdOrSynthesize($noteId): NoteStore miss — synthesizing " +
-                    "$nonRootCount non-root line(s) with null noteIds. Caller should only " +
-                    "use this for NEW sessions, never for sync-on-external-change paths (those " +
-                    "must skip the update when NoteStore has no structured lines). " +
-                    "firstLine='${lines.firstOrNull()?.take(40)}'",
-            )
-        }
-        return lines.mapIndexed { index, line ->
-            NoteLine(line, if (index == 0) noteId else null)
-        }
-    }
-
     /** Track an in-flight save so loaders can await it before reading from Firestore. */
     fun trackSave(noteId: String, deferred: Deferred<Unit>) {
         pendingSaves[noteId] = deferred
@@ -470,6 +445,21 @@ object NoteStore {
                 pendingSaves.remove(noteId)
             }
         }
+    }
+
+    /**
+     * Suspend until [noteId] is loaded into [rawNotes] or [timeoutMs] elapses.
+     * Editors call this at session start so the listener has a chance to
+     * deliver the doc before we fall through to a Firestore one-shot read.
+     */
+    suspend fun awaitNoteLoaded(noteId: String, timeoutMs: Long = NOTE_STORE_AWAIT_MS): Boolean {
+        if (getRawNoteById(noteId) != null) return true
+        awaitPendingSave(noteId)
+        if (getRawNoteById(noteId) != null) return true
+        return withTimeoutOrNull(timeoutMs) {
+            changedNoteIds.first { ids -> noteId in ids && getRawNoteById(noteId) != null }
+            true
+        } ?: false
     }
 
     /**

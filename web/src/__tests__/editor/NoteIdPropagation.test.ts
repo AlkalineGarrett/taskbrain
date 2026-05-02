@@ -614,7 +614,7 @@ describe('matchLinesToIds integration', () => {
     expect(result[2]!.noteId).toBe('childA')
   })
 
-  it('assigns null to genuinely new lines', () => {
+  it('assigns a fresh sentinel to genuinely new lines', () => {
     const existing: NoteLine[] = [
       { content: 'Parent', noteId: 'parent1' },
     ]
@@ -623,7 +623,7 @@ describe('matchLinesToIds integration', () => {
     const result = matchLinesToIds('parent1', existing, newContent)
 
     expect(result[0]!.noteId).toBe('parent1')
-    expect(result[1]!.noteId).toBeNull()
+    expect(result[1]!.noteId).toMatch(/^@/)
   })
 
   it('uses positional fallback for modified lines', () => {

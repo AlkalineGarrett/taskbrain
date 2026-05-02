@@ -110,7 +110,10 @@ describe('useSaveCoordinator', () => {
 
   it('reports partial-error and logs when the batched save rejects', async () => {
     const sessionManager = new InlineSessionManager()
-    sessionManager.ensureSessions([note({ id: 'view1', content: 'orig' })])
+    await sessionManager.ensureSessions(
+      [note({ id: 'view1', content: 'orig' })],
+      async (id) => [{ content: 'orig', noteId: id }],
+    )
     const session = sessionManager.getSession('view1')!
     session.editorState.lines[0]!.updateFull('mutated', 7)
 
@@ -137,7 +140,7 @@ describe('useSaveCoordinator', () => {
     await waitFor(() => expect(result.current.saveStatus).toBe('idle'))
   })
 
-  it('anyDirty reflects either main dirty OR a dirty session', () => {
+  it('anyDirty reflects either main dirty OR a dirty session', async () => {
     const sessionManager = new InlineSessionManager()
     const { result, rerender } = setup({ dirty: false, sessionManager })
     expect(result.current.anyDirty).toBe(false)
@@ -146,7 +149,10 @@ describe('useSaveCoordinator', () => {
     expect(result.current.anyDirty).toBe(true)
 
     rerender({ dirty: false })
-    sessionManager.ensureSessions([note({ id: 'view2', content: 'a' })])
+    await sessionManager.ensureSessions(
+      [note({ id: 'view2', content: 'a' })],
+      async (id) => [{ content: 'a', noteId: id }],
+    )
     sessionManager.getSession('view2')!.editorState.lines[0]!.updateFull('b', 1)
     rerender({ dirty: false })
     expect(result.current.anyDirty).toBe(true)
@@ -154,7 +160,13 @@ describe('useSaveCoordinator', () => {
 
   it('saving a dirty inline session optimistically updates the store and persists via the atomic batch', async () => {
     const sessionManager = new InlineSessionManager()
-    sessionManager.ensureSessions([note({ id: 'viewX', content: 'orig\nline2' })])
+    await sessionManager.ensureSessions(
+      [note({ id: 'viewX', content: 'orig\nline2' })],
+      async (id) => [
+        { content: 'orig', noteId: id },
+        { content: 'line2', noteId: `${id}-l1` },
+      ],
+    )
     const session = sessionManager.getSession('viewX')!
     session.editorState.lines[0]!.updateFull('changed', 7)
     getNoteByIdSpy.mockImplementation((id: string) => note({ id, content: 'old' }))
@@ -179,7 +191,10 @@ describe('useSaveCoordinator', () => {
 
   it('on unmount, dirty inline sessions are auto-saved', async () => {
     const sessionManager = new InlineSessionManager()
-    sessionManager.ensureSessions([note({ id: 'viewU', content: 'orig' })])
+    await sessionManager.ensureSessions(
+      [note({ id: 'viewU', content: 'orig' })],
+      async (id) => [{ content: 'orig', noteId: id }],
+    )
     const session = sessionManager.getSession('viewU')!
     session.editorState.lines[0]!.updateFull('changed', 7)
 

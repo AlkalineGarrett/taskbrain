@@ -39,6 +39,13 @@
   padding: 4px 0;
 }
 
+/* Static text shown while inline-edit sessions are being awaited. */
+.placeholderContent {
+  white-space: pre-wrap;
+  padding: 4px 0;
+  color: var(--color-text);
+}
+
 .separator {
   border: none;
   border-top: 1px solid var(--color-view-divider);

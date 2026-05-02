@@ -3,6 +3,7 @@ import { act, renderHook } from '@testing-library/react'
 import { EditorState } from '@/editor/EditorState'
 import { EditorController } from '@/editor/EditorController'
 import { InlineEditSession } from '@/editor/InlineEditSession'
+import { linesFromContent } from '../editor/inlineEditSessionTestHelpers'
 import { InlineSessionManager } from '@/editor/InlineSessionManager'
 import { useActiveEditorSession } from '@/hooks/useActiveEditorSession'
 
@@ -35,7 +36,7 @@ describe('useActiveEditorSession', () => {
   })
 
   it('activateSession routes commands to the inline controller/state', () => {
-    const session = new InlineEditSession('view1', 'A\nB')
+    const session = new InlineEditSession('view1', linesFromContent('view1', 'A\nB'))
     const { result } = renderHook(() =>
       useActiveEditorSession(parent.controller, parent.state, sessionManager),
     )
@@ -49,8 +50,8 @@ describe('useActiveEditorSession', () => {
   })
 
   it('activate clears parent selection and any prior view selection', () => {
-    const session1 = new InlineEditSession('view1', 'A\nB')
-    const session2 = new InlineEditSession('view2', 'C\nD')
+    const session1 = new InlineEditSession('view1', linesFromContent('view1', 'A\nB'))
+    const session2 = new InlineEditSession('view2', linesFromContent('view2', 'C\nD'))
 
     parent.state.setSelection(0, 6)
     session1.editorState.setSelection(0, 1)
@@ -67,7 +68,7 @@ describe('useActiveEditorSession', () => {
   })
 
   it('re-activating the same session does NOT clear its selection', () => {
-    const session = new InlineEditSession('view1', 'A')
+    const session = new InlineEditSession('view1', linesFromContent('view1', 'A'))
     const { result } = renderHook(() =>
       useActiveEditorSession(parent.controller, parent.state, sessionManager),
     )
@@ -80,7 +81,7 @@ describe('useActiveEditorSession', () => {
   })
 
   it('deactivateSession returns prior session and clears its selection', () => {
-    const session = new InlineEditSession('view1', 'A')
+    const session = new InlineEditSession('view1', linesFromContent('view1', 'A'))
     const { result } = renderHook(() =>
       useActiveEditorSession(parent.controller, parent.state, sessionManager),
     )
@@ -100,8 +101,8 @@ describe('useActiveEditorSession', () => {
   })
 
   it('expectedSession guard makes deactivate a no-op when current does not match', () => {
-    const sessionA = new InlineEditSession('viewA', 'A')
-    const sessionB = new InlineEditSession('viewB', 'B')
+    const sessionA = new InlineEditSession('viewA', linesFromContent('viewA', 'A'))
+    const sessionB = new InlineEditSession('viewB', linesFromContent('viewB', 'B'))
 
     const { result } = renderHook(() =>
       useActiveEditorSession(parent.controller, parent.state, sessionManager),
@@ -121,7 +122,7 @@ describe('useActiveEditorSession', () => {
   })
 
   it('activeEditorCtx exposes the manager and current active state', () => {
-    const session = new InlineEditSession('view1', 'A')
+    const session = new InlineEditSession('view1', linesFromContent('view1', 'A'))
     const { result } = renderHook(() =>
       useActiveEditorSession(parent.controller, parent.state, sessionManager),
     )

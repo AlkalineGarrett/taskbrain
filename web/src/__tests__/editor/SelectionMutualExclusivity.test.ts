@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { EditorState } from '../../editor/EditorState'
 import { EditorController } from '../../editor/EditorController'
 import { InlineEditSession } from '../../editor/InlineEditSession'
+import { linesFromContent } from './inlineEditSessionTestHelpers'
 
 /**
  * Tests for selection mutual exclusivity between parent and view editors.
@@ -31,7 +32,7 @@ describe('Selection mutual exclusivity', () => {
       parent.state.setSelection(0, 6) // Select "Line 1"
       expect(parent.state.hasSelection).toBe(true)
 
-      void new InlineEditSession('view1', 'View line 1\nView line 2')
+      void new InlineEditSession('view1', linesFromContent('view1', 'View line 1\nView line 2'))
 
       // Simulate activateSession: clear parent + previous session
       parent.state.clearSelection()
@@ -41,8 +42,8 @@ describe('Selection mutual exclusivity', () => {
 
     it('clears previous view selection when switching to different view', () => {
       const parent = createParentEditor()
-      const viewA = new InlineEditSession('viewA', 'Content A')
-      void new InlineEditSession('viewB', 'Content B')
+      const viewA = new InlineEditSession('viewA', linesFromContent('viewA', 'Content A'))
+      void new InlineEditSession('viewB', linesFromContent('viewB', 'Content B'))
 
       // View A has a selection
       viewA.editorState.setSelection(0, 5)
@@ -57,7 +58,7 @@ describe('Selection mutual exclusivity', () => {
 
     it('clears both parent and previous view when switching views', () => {
       const parent = createParentEditor()
-      const viewA = new InlineEditSession('viewA', 'Content A')
+      const viewA = new InlineEditSession('viewA', linesFromContent('viewA', 'Content A'))
 
       parent.state.setSelection(0, 6)
       viewA.editorState.setSelection(0, 5)
@@ -72,7 +73,7 @@ describe('Selection mutual exclusivity', () => {
 
     it('does not clear when re-activating the same session', () => {
       void createParentEditor()
-      const view = new InlineEditSession('view1', 'Content')
+      const view = new InlineEditSession('view1', linesFromContent('view1', 'Content'))
 
       view.editorState.setSelection(0, 3)
       expect(view.editorState.hasSelection).toBe(true)
@@ -85,7 +86,7 @@ describe('Selection mutual exclusivity', () => {
 
   describe('deactivateSession clears departing view', () => {
     it('clears view selection on deactivation', () => {
-      const view = new InlineEditSession('view1', 'Line 1\nLine 2')
+      const view = new InlineEditSession('view1', linesFromContent('view1', 'Line 1\nLine 2'))
       view.editorState.setSelection(0, 6)
       expect(view.editorState.hasSelection).toBe(true)
 
@@ -96,8 +97,8 @@ describe('Selection mutual exclusivity', () => {
     })
 
     it('expected-session guard prevents wrong deactivation', () => {
-      const viewA = new InlineEditSession('viewA', 'Content A')
-      const viewB = new InlineEditSession('viewB', 'Content B')
+      const viewA = new InlineEditSession('viewA', linesFromContent('viewA', 'Content A'))
+      const viewB = new InlineEditSession('viewB', linesFromContent('viewB', 'Content B'))
 
       viewB.editorState.setSelection(0, 5)
 
@@ -119,7 +120,7 @@ describe('Selection mutual exclusivity', () => {
   describe('parent gutter deactivates view', () => {
     it('parent gutter selection clears view selection', () => {
       const parent = createParentEditor()
-      const view = new InlineEditSession('view1', 'View content')
+      const view = new InlineEditSession('view1', linesFromContent('view1', 'View content'))
 
       // View has selection
       view.editorState.setSelection(0, 4)

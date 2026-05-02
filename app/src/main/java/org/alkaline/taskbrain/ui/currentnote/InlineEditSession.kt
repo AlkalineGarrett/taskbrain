@@ -5,9 +5,14 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import org.alkaline.taskbrain.data.Note
 import org.alkaline.taskbrain.data.NoteLine
 import org.alkaline.taskbrain.data.NoteStore
@@ -206,10 +211,11 @@ class InlineEditState {
         private set
 
     /**
-     * Display-mode sessions for view lines, keyed by noteId.
-     * Always populated so the gutter can render per-line boxes regardless of focus state.
+     * Display-mode sessions for view lines, keyed by noteId. SnapshotState
+     * map so consumers (e.g. [EditableViewNoteSection]) re-render when
+     * [ensureSessionsForNotes] finishes populating it asynchronously.
      */
-    internal val viewSessions = mutableMapOf<String, InlineEditSession>()
+    internal val viewSessions = mutableStateMapOf<String, InlineEditSession>()
 
     /**
      * Line layouts for view notes, keyed by noteId.
@@ -225,29 +231,42 @@ class InlineEditState {
     internal val viewGutterStates = mutableMapOf<String, org.alkaline.taskbrain.ui.currentnote.selection.GutterSelectionState>()
 
     /**
-     * Eagerly create sessions for all notes that don't already have one.
-     * Existing sessions (including dirty ones) are preserved.
-     * @return IDs of newly created sessions (caller can execute directives for them)
+     * Eagerly create sessions for [notes] that don't already have one.
+     * Returns the ids of newly created sessions. [loadLines] is the bridge
+     * to [NoteRepository.loadNoteLinesAwait] — sessions are always
+     * initialized from structurally-valid (non-synth) lines.
      */
-    fun ensureSessionsForNotes(notes: List<Note>): List<String> {
-        val newIds = mutableListOf<String>()
-        for (note in notes) {
+    suspend fun ensureSessionsForNotes(
+        notes: List<Note>,
+        loadLines: suspend (String) -> List<NoteLine>,
+    ): List<String> = coroutineScope {
+        val toCreate = notes.filterNot { viewSessions.containsKey(it.id) }
+        if (toCreate.isEmpty()) return@coroutineScope emptyList()
+        // Parallel: each loadLines call may await NoteStore + Firestore.
+        val resolved = toCreate.map { note ->
+            async { note to loadLines(note.id) }
+        }.awaitAll()
+        // Build sessions outside the snapshot, then publish all writes in a
+        // single atomic mutation so Compose dispatches one recomposition for
+        // the whole batch instead of N — important when a view directive
+        // arrives with many notes at once.
+        val newSessions = mutableListOf<Pair<String, InlineEditSession>>()
+        for ((note, lines) in resolved) {
             if (viewSessions.containsKey(note.id)) continue
             val editorState = EditorState()
-            // Always use NoteStore (with synthesized fallback) so the session is initialized
-            // via initFromNoteLines and never goes through the lossy updateFromText path.
-            val storeLines = NoteStore.getNoteLinesByIdOrSynthesize(note.id, note.content)
-            editorState.initFromNoteLines(storeLines, preserveCursor = false)
-            val session = InlineEditSession(
+            editorState.initFromNoteLines(lines, preserveCursor = false)
+            newSessions += note.id to InlineEditSession(
                 noteId = note.id,
                 originalContent = note.content,
                 editorState = editorState,
-                controller = EditorController(editorState)
+                controller = EditorController(editorState),
             )
-            viewSessions[note.id] = session
-            newIds.add(note.id)
         }
-        return newIds
+        if (newSessions.isEmpty()) return@coroutineScope emptyList()
+        Snapshot.withMutableSnapshot {
+            for ((id, session) in newSessions) viewSessions[id] = session
+        }
+        newSessions.map { it.first }
     }
 
     /**
@@ -318,23 +337,25 @@ class InlineEditState {
      * Start a new inline edit session for a note.
      * Automatically triggers directive execution for the content.
      *
+     * Caller must pre-resolve [lines] (e.g. via [NoteRepository.loadNoteLinesAwait])
+     * so the session is always initialized from structurally-valid lines —
+     * never from synthesized null-id lines.
+     *
      * @param noteId The ID of the note being edited
-     * @param content The note's content to edit
+     * @param lines Pre-resolved tracked lines (root + descendants with real ids)
      * @return The created session
      */
-    fun startSession(noteId: String, content: String): InlineEditSession {
+    fun startSession(noteId: String, lines: List<NoteLine>): InlineEditSession {
         val editorState = EditorState()
-        // Always go through initFromNoteLines (with synthesized fallback) so the session
-        // never starts in the lossy updateFromText path with empty parentNoteId.
-        val storeLines = NoteStore.getNoteLinesByIdOrSynthesize(noteId, content)
-        editorState.initFromNoteLines(storeLines, preserveCursor = false)
+        editorState.initFromNoteLines(lines, preserveCursor = false)
         val controller = EditorController(editorState)
+        val content = lines.joinToString("\n") { it.content }
 
         val session = InlineEditSession(
             noteId = noteId,
             originalContent = content,
             editorState = editorState,
-            controller = controller
+            controller = controller,
         )
         activeSession = session
 

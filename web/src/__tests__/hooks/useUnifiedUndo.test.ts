@@ -5,6 +5,7 @@ import { EditorState } from '@/editor/EditorState'
 import { EditorController } from '@/editor/EditorController'
 import { UndoManager } from '@/editor/UndoManager'
 import { InlineEditSession } from '@/editor/InlineEditSession'
+import { linesFromContent } from '../editor/inlineEditSessionTestHelpers'
 import { InlineSessionManager } from '@/editor/InlineSessionManager'
 import { useUnifiedUndo } from '@/hooks/useUnifiedUndo'
 
@@ -82,17 +83,20 @@ describe('useUnifiedUndo', () => {
     expect(invalidate).toHaveBeenCalled()
   })
 
-  it('routes undo to a different inline editor when its entry is on top', () => {
+  it('routes undo to a different inline editor when its entry is on top', async () => {
     const { controller, sessionManager, activate, result, rerender } = setup()
 
     // Add the inline session, then force a re-render so the
     // hook's effect picks it up and registers the inline controller.
-    sessionManager.ensureSessions([{
-      id: 'view1', userId: '', parentNoteId: null, content: 'A', createdAt: null, updatedAt: null,
-      tags: [], containedNotes: [], state: null, path: '', rootNoteId: null,
-      showCompleted: true, onceCache: {},
-      version: 0, lastWriterOpId: null, containedNotesBase: null,
-    }])
+    await sessionManager.ensureSessions(
+      [{
+        id: 'view1', userId: '', parentNoteId: null, content: 'A', createdAt: null, updatedAt: null,
+        tags: [], containedNotes: [], state: null, path: '', rootNoteId: null,
+        showCompleted: true, onceCache: {},
+        version: 0, lastWriterOpId: null, containedNotesBase: null,
+      }],
+      async (id) => [{ content: 'A', noteId: id }],
+    )
     rerender()
     const session = sessionManager.getSession('view1')!
 
@@ -106,7 +110,7 @@ describe('useUnifiedUndo', () => {
   })
 
   it('deactivates inline sessions when undo lands on the main editor', () => {
-    const inlineSession = new InlineEditSession('view2', 'A')
+    const inlineSession = new InlineEditSession('view2', linesFromContent('view2', 'A'))
     const { controller, deactivate, result } = setup({ activeSession: inlineSession })
 
     commitEdit(controller, 'main only')

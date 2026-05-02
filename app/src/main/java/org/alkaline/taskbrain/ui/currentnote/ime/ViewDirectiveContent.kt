@@ -167,21 +167,14 @@ private fun EditableViewNoteSection(
 
     val isActiveSession = inlineEditState?.activeSession?.noteId == note.id
 
-    // Session is eagerly created by InlineEditState.ensureSessionsForNotes() when
-    // directive results are computed. Look it up from viewSessions.
-    val session = inlineEditState?.viewSessions?.get(note.id) ?: remember(note.id) {
-        // Fallback: create on demand if not yet in viewSessions (shouldn't happen normally).
-        // Always go through initFromNoteLines (with synthesized fallback) so we never
-        // touch the lossy updateFromText path.
-        val s = EditorState()
-        val storeLines = NoteStore.getNoteLinesByIdOrSynthesize(note.id, editContent)
-        s.initFromNoteLines(storeLines, preserveCursor = false)
-        InlineEditSession(
-            noteId = note.id,
-            originalContent = editContent,
-            editorState = s,
-            controller = EditorController(s)
-        ).also { inlineEditState?.viewSessions?.set(note.id, it) }
+    // Sessions populate asynchronously via DirectiveResultsState's
+    // LaunchedEffect; render a static placeholder until they arrive.
+    val session = inlineEditState?.viewSessions?.get(note.id)
+    if (session == null) {
+        Box(modifier = modifier.fillMaxWidth()) {
+            Text(text = editContent, style = textStyle)
+        }
+        return
     }
 
     // Update existing session content in place on external changes (same pattern as
@@ -193,25 +186,22 @@ private fun EditableViewNoteSection(
             session.syncOriginalContent(editContent)
             session.editorState.requestFocusUpdate()
         } else {
-            // No structured lines available — the note vanished from NoteStore
-            // (mid-save echo gap, delete, etc.). Syncing via the synthesize
-            // fallback would wipe every non-root noteId in the existing session,
-            // producing bare-null ids at save. Skip the sync; a subsequent
-            // snapshot that restores structured lines will trigger again.
+            // The note vanished from NoteStore (mid-save echo gap, delete, etc.).
+            // Skip the sync; a subsequent snapshot that restores structured
+            // lines will trigger another sync via recomposition.
             android.util.Log.w(
                 "DirectiveAwareLineInput",
                 "Skipping external-change sync for ${note.id}: NoteStore has no " +
-                    "structured lines (would wipe session noteIds via synthesize fallback).",
+                    "structured lines (race with delete or mid-save echo gap).",
             )
         }
     }
 
-    // When editing starts, register the SAME session as active (no new session)
+    // When editing starts, register the SAME session as active (no new session).
+    // [inlineEditState] is non-null here — the session-null branch above returned.
     remember(isEditing, note.id, session) {
-        if (isEditing && inlineEditState != null) {
-            if (inlineEditState.activeSession?.noteId != note.id) {
-                inlineEditState.activateExistingSession(session)
-            }
+        if (isEditing && inlineEditState.activeSession?.noteId != note.id) {
+            inlineEditState.activateExistingSession(session)
         }
         Unit
     }

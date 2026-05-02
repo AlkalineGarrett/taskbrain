@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { resolveNoteIds } from '../../editor/resolveNoteIds'
+import { isSentinelNoteId, originOfSentinel } from '../../data/NoteIdSentinel'
 
 describe('resolveNoteIds', () => {
   it('passes through unique noteIds unchanged', () => {
@@ -12,22 +13,24 @@ describe('resolveNoteIds', () => {
     expect(result[2]!.noteId).toBe('id3')
   })
 
-  it('gives null to lines without noteIds', () => {
+  it('gives a fresh split sentinel to lines without noteIds', () => {
     const result = resolveNoteIds(
       ['Line A', 'New line', 'Line C'],
       [['id1'], [], ['id3']],
     )
     expect(result[0]!.noteId).toBe('id1')
-    expect(result[1]!.noteId).toBeNull()
+    expect(isSentinelNoteId(result[1]!.noteId)).toBe(true)
+    expect(originOfSentinel(result[1]!.noteId)).toBe('split')
     expect(result[2]!.noteId).toBe('id3')
   })
 
-  it('resolves duplicate noteIds by longest content', () => {
+  it('resolves duplicate noteIds by longest content (loser becomes split sentinel)', () => {
     const result = resolveNoteIds(
       ['He', 'Hello World'],
       [['id1'], ['id1']],
     )
-    expect(result[0]!.noteId).toBeNull()
+    expect(isSentinelNoteId(result[0]!.noteId)).toBe(true)
+    expect(originOfSentinel(result[0]!.noteId)).toBe('split')
     expect(result[1]!.noteId).toBe('id1')
   })
 
@@ -38,7 +41,7 @@ describe('resolveNoteIds', () => {
     )
     // "\tShort" content = "Short" (5 chars)
     // "Much longer content here" content = 24 chars
-    expect(result[0]!.noteId).toBeNull()
+    expect(isSentinelNoteId(result[0]!.noteId)).toBe(true)
     expect(result[1]!.noteId).toBe('id1')
   })
 
@@ -56,7 +59,7 @@ describe('resolveNoteIds', () => {
       [['idA', 'idB'], ['idA']],
     )
     expect(result[0]!.noteId).toBe('idA')
-    expect(result[1]!.noteId).toBeNull()
+    expect(isSentinelNoteId(result[1]!.noteId)).toBe(true)
   })
 
   it('returns empty for empty inputs', () => {
@@ -70,8 +73,8 @@ describe('resolveNoteIds', () => {
       [['id1']],
     )
     expect(result[0]!.noteId).toBe('id1')
-    expect(result[1]!.noteId).toBeNull()
-    expect(result[2]!.noteId).toBeNull()
+    expect(isSentinelNoteId(result[1]!.noteId)).toBe(true)
+    expect(isSentinelNoteId(result[2]!.noteId)).toBe(true)
   })
 
   it('preserves content in output', () => {

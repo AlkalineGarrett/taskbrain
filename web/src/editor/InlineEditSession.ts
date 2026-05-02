@@ -10,6 +10,10 @@ import { computeHiddenIndices } from './CompletedLineUtils'
  * Encapsulates a self-contained editing session for a view note.
  * Each session has its own EditorState, EditorController, and UndoManager,
  * isolated from the parent note's editor.
+ *
+ * Caller must pre-resolve [lines] (typically via
+ * `NoteRepository.loadNoteLinesAwait`) so the session is always initialized
+ * from structurally-valid lines — never from synthesized null-id lines.
  */
 export class InlineEditSession {
   readonly noteId: string
@@ -25,23 +29,20 @@ export class InlineEditSession {
    */
   private localBases: Map<string, string[]>
 
-  constructor(noteId: string, content: string, lineNoteIds?: string[][]) {
+  constructor(noteId: string, lines: NoteLine[]) {
     this.noteId = noteId
-    this.originalContent = content
     this.localBases = noteStore.snapshotLocalBases(noteId)
     this.editorState = new EditorState()
     this.undoManager = new UndoManager()
     this.controller = new EditorController(this.editorState, this.undoManager)
 
-    // Split content into lines and initialize the editor. Empty lines are
-    // first-class docs now, so whatever the source content provides — including
-    // any trailing empty — is loaded verbatim. No auto-append.
-    const rawLines = content.split('\n')
-    const noteLines = rawLines.map((text, i) => ({
-      text,
-      noteIds: lineNoteIds?.[i] ?? [],
-    }))
-    this.editorState.initFromNoteLines(noteLines)
+    const texts: string[] = new Array(lines.length)
+    const editorLines = lines.map((l, i) => {
+      texts[i] = l.content
+      return { text: l.content, noteIds: l.noteId ? [l.noteId] : [] }
+    })
+    this.originalContent = texts.join('\n')
+    this.editorState.initFromNoteLines(editorLines)
     this.undoManager.setBaseline(this.editorState.lines, this.editorState.focusedLineIndex)
 
     this.updateHiddenIndices()

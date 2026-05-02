@@ -1,5 +1,6 @@
 package org.alkaline.taskbrain.ui.currentnote
 
+import org.alkaline.taskbrain.data.NoteLine
 import org.alkaline.taskbrain.ui.currentnote.util.LinePrefixes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -236,7 +237,7 @@ class InlineEditStateTest {
     @Test
     fun `startSession creates active session`() {
         val state = InlineEditState()
-        val session = state.startSession("note1", "Content")
+        val session = state.startSession("note1", listOf(NoteLine("Content", "note1")))
         assertTrue(state.isActive)
         assertEquals(session, state.activeSession)
         assertEquals("note1", session.noteId)
@@ -246,7 +247,7 @@ class InlineEditStateTest {
     @Test
     fun `endSession returns and clears the session`() {
         val state = InlineEditState()
-        val session = state.startSession("note1", "Content")
+        val session = state.startSession("note1", listOf(NoteLine("Content", "note1")))
         val ended = state.endSession()
         assertEquals(session, ended)
         assertFalse(state.isActive)
@@ -262,7 +263,7 @@ class InlineEditStateTest {
     @Test
     fun `isEditingNote returns true for active note`() {
         val state = InlineEditState()
-        state.startSession("note1", "Content")
+        state.startSession("note1", listOf(NoteLine("Content", "note1")))
         assertTrue(state.isEditingNote("note1"))
         assertFalse(state.isEditingNote("note2"))
     }
@@ -270,8 +271,8 @@ class InlineEditStateTest {
     @Test
     fun `startSession replaces previous session`() {
         val state = InlineEditState()
-        state.startSession("note1", "First")
-        val second = state.startSession("note2", "Second")
+        state.startSession("note1", listOf(NoteLine("First", "note1")))
+        val second = state.startSession("note2", listOf(NoteLine("Second", "note2")))
         assertEquals(second, state.activeSession)
         assertTrue(state.isEditingNote("note2"))
         assertFalse(state.isEditingNote("note1"))
@@ -335,7 +336,7 @@ class InlineEditStateTest {
         inlineState.viewLineLayouts["note1"] = layouts
 
         // Start and end a session — layouts should survive
-        inlineState.startSession("note1", "Content")
+        inlineState.startSession("note1", listOf(NoteLine("Content", "note1")))
         inlineState.endSession()
 
         assertEquals(2, inlineState.viewLineLayouts["note1"]?.size)
@@ -348,7 +349,7 @@ class InlineEditStateTest {
         val gutterState = org.alkaline.taskbrain.ui.currentnote.selection.GutterSelectionState()
         inlineState.viewGutterStates["note1"] = gutterState
 
-        inlineState.startSession("note1", "Content")
+        inlineState.startSession("note1", listOf(NoteLine("Content", "note1")))
         inlineState.endSession()
 
         assertEquals(gutterState, inlineState.viewGutterStates["note1"])

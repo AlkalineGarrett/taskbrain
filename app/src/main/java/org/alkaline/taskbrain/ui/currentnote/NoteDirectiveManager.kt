@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import org.alkaline.taskbrain.data.Note
+import org.alkaline.taskbrain.data.NoteLine
 import org.alkaline.taskbrain.data.NoteRepository
 import org.alkaline.taskbrain.data.NoteStore
 import org.alkaline.taskbrain.dsl.cache.CachedDirectiveExecutor
@@ -55,6 +56,14 @@ class NoteDirectiveManager(
     private val noteOperationsProvider: (() -> NoteRepositoryOperations?)?,
     private val getCurrentNoteId: () -> String
 ) {
+    /**
+     * Resolve a view note's tracked lines for inline-edit-session init,
+     * awaiting the listener with a Firestore fallback. Bridges the
+     * Composable's [InlineEditState.ensureSessionsForNotes] to the
+     * repository's [NoteRepository.loadNoteLinesAwait].
+     */
+    suspend fun loadNoteLinesForSession(noteId: String): List<NoteLine> =
+        repository.loadNoteLinesAwait(noteId).getOrThrow()
 
     // Directive caching infrastructure
     private val directiveCacheManager = DirectiveCacheManager()

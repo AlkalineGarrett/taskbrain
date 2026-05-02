@@ -24,6 +24,7 @@ vi.mock('@/editor/useEditorInteractions', () => ({
 import { EditorState } from '@/editor/EditorState'
 import { EditorController } from '@/editor/EditorController'
 import { InlineEditSession } from '@/editor/InlineEditSession'
+import { linesFromContent } from '../editor/inlineEditSessionTestHelpers'
 import { useGutterRouting } from '@/hooks/useGutterRouting'
 
 function makeParent() {
@@ -81,7 +82,7 @@ describe('useGutterRouting', () => {
   })
 
   it('routes gutter clicks on a view line to the matching session and selects the line there', () => {
-    const session = new InlineEditSession('view1', 'view A\nview B')
+    const session = new InlineEditSession('view1', linesFromContent('view1', 'view A\nview B'))
     const setSelectionSpy = vi.spyOn(session.controller, 'setSelection').mockImplementation(() => {})
 
     const fakeEl = document.createElement('div')
@@ -100,7 +101,7 @@ describe('useGutterRouting', () => {
   })
 
   it('deactivates an active session when the parent gutter is clicked outside any view', () => {
-    const session = new InlineEditSession('view1', 'A')
+    const session = new InlineEditSession('view1', linesFromContent('view1', 'A'))
     elementsFromPointMock.mockReturnValue([])
 
     const { result, deactivate } = setup({ activeSession: session })
@@ -111,7 +112,7 @@ describe('useGutterRouting', () => {
   })
 
   it('extends an existing view-line gutter selection when dragging within the view', () => {
-    const session = new InlineEditSession('view1', 'L0\nL1\nL2\nL3')
+    const session = new InlineEditSession('view1', linesFromContent('view1', 'L0\nL1\nL2\nL3'))
     const setSelectionSpy = vi.spyOn(session.controller, 'setSelection').mockImplementation(() => {})
 
     const fakeEl = document.createElement('div')

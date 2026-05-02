@@ -1,12 +1,17 @@
 import type { NoteLine } from '@/data/Note'
+import { newSentinelNoteId } from '@/data/NoteIdSentinel'
 import { extractPrefix } from './LineState'
 
 /**
  * Resolves noteId conflicts at save time.
  *
  * When multiple lines claim the same noteId (e.g., after a split), the line with
- * the most content (excluding prefix) keeps the noteId. Others get null, causing
- * a new Firestore document to be created.
+ * the most content (excluding prefix) keeps the noteId. Others get a fresh
+ * `split` sentinel so the save planner allocates a new Firestore document.
+ *
+ * Lines arriving with no primary id at all also get a `split` sentinel — the
+ * editor is supposed to stamp a sentinel at edit time, but this is the
+ * defensive scaffolding so structural identity is unambiguous at save entry.
  *
  * For lines with multiple noteIds (from merges), the first (primary) noteId is used.
  */
@@ -57,7 +62,7 @@ export function resolveNoteIds(
     const resolvedId =
       primaryId != null && noteIdWinner.get(primaryId) === index
         ? primaryId
-        : null
+        : newSentinelNoteId('split')
     return { content, noteId: resolvedId }
   })
 }

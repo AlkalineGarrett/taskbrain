@@ -1,4 +1,4 @@
-import { toEditorLines, type Note } from '@/data/Note'
+import { toEditorLines, type Note, type NoteLine } from '@/data/Note'
 import { noteStore } from '@/data/NoteStore'
 import { InlineEditSession } from './InlineEditSession'
 
@@ -15,16 +15,27 @@ export class InlineSessionManager {
 
   /**
    * Ensure sessions exist for the given notes, creating new ones as needed.
-   * Existing sessions (including dirty ones) are preserved.
-   * Returns true if any new sessions were created.
+   * Existing sessions (including dirty ones) are preserved. Returns true
+   * if any new sessions were created.
+   *
+   * [loadLines] resolves a note's tracked lines (root + descendants with
+   * real noteIds) — typically backed by [NoteRepository.loadNoteLinesAwait],
+   * which awaits the listener and falls back to a Firestore read so we
+   * never initialize a session from synthesized null-id lines.
    */
-  ensureSessions(notes: Note[]): boolean {
+  async ensureSessions(
+    notes: Note[],
+    loadLines: (noteId: string) => Promise<NoteLine[]>,
+  ): Promise<boolean> {
+    const toCreate = notes.filter((n) => !this.sessions.has(n.id))
+    if (toCreate.length === 0) return false
+    const resolved = await Promise.all(
+      toCreate.map(async (note) => [note, await loadLines(note.id)] as const),
+    )
     let created = false
-    for (const note of notes) {
+    for (const [note, lines] of resolved) {
       if (this.sessions.has(note.id)) continue
-      const lineNoteIds = this.deriveLineNoteIds(note.id)
-      const session = new InlineEditSession(note.id, note.content, lineNoteIds)
-      this.sessions.set(note.id, session)
+      this.sessions.set(note.id, new InlineEditSession(note.id, lines))
       created = true
     }
     return created
@@ -94,11 +105,5 @@ export class InlineSessionManager {
 
   clear(): void {
     this.sessions.clear()
-  }
-
-  private deriveLineNoteIds(noteId: string): string[][] | undefined {
-    const noteLines = noteStore.getNoteLinesById(noteId)
-    if (!noteLines) return undefined
-    return noteLines.map(nl => nl.noteId ? [nl.noteId] : [])
   }
 }

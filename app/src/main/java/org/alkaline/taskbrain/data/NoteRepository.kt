@@ -125,6 +125,22 @@ class NoteRepository(
      * hasn't synced yet or doesn't contain this note (e.g., immediately after
      * createNote or a deep-link to a brand-new doc).
      */
+    /**
+     * Editor session-init entry point. Awaits the listener for [noteId]; on
+     * timeout, falls back to a one-shot Firestore read. Throws on hard
+     * failure. Replaces the deleted synth-on-miss path so sessions only
+     * ever start from structurally-valid lines.
+     */
+    suspend fun loadNoteLinesAwait(noteId: String): Result<List<NoteLine>> = ioLogged("loadNoteLinesAwait") {
+        if (NoteStore.awaitNoteLoaded(noteId)) {
+            NoteStore.getNoteLinesById(noteId)
+                ?: error("NoteStore awaitNoteLoaded($noteId) returned true but getNoteLinesById was null")
+        } else {
+            Log.w(TAG, "awaitNoteLoaded($noteId) timed out — falling back to Firestore read")
+            loadNoteWithChildren(noteId).getOrThrow().lines
+        }
+    }
+
     suspend fun loadNoteWithChildren(noteId: String): Result<NoteLoadResult> = ioLogged("loadNoteWithChildren") {
         requireUserId()
         val emptyResult = NoteLoadResult(listOf(NoteLine("", noteId)), isDeleted = false, showCompleted = true)
@@ -478,24 +494,21 @@ class NoteRepository(
         assertNoteStoreLoaded("saveNoteWithChildren", noteId)
         warnIfDescendantsLikelyStale("saveNoteWithChildren", noteId)
 
-        // One pass: categorize each descendant line as real-id, sentinel
-        // (with origin), or null (upstream-bug signal). Sentinels are an
-        // expected "needs allocation" marker; null = some lossy path
-        // wiped a real id and we can't tell where. Empty lines are
-        // first-class docs and must carry an id or sentinel like any other.
-        var descendantCount = 0
-        var nullCount = 0
+        // Identity invariant: every descendant line must arrive with a real
+        // id or a sentinel. Null is no longer legal — session-init paths
+        // await the listener via [loadNoteLinesAwait]; the recover-by-content
+        // layer is gone. Surface drift immediately rather than silently
+        // allocating fresh docs that would orphan real ones.
         val sentinelByOrigin = HashMap<String, Int>()
-        val firstNulls = ArrayList<Pair<Int, String>>(3)
         for (idx in 1 until trackedLines.size) {
-            val line = trackedLines[idx]
-            descendantCount++
-            val id = line.noteId
+            val id = trackedLines[idx].noteId
             when {
-                id == null -> {
-                    nullCount++
-                    if (firstNulls.size < 3) firstNulls.add(idx to line.content.take(40))
-                }
+                id == null -> error(
+                    "saveNoteWithChildren($noteId): null descendant noteId at line " +
+                        "$idx (content='${trackedLines[idx].content.take(40)}'). All " +
+                        "editor session-init paths must produce structurally-valid " +
+                        "lines via NoteRepository.loadNoteLinesAwait.",
+                )
                 NoteIdSentinel.isSentinel(id) -> {
                     val origin = NoteIdSentinel.originOf(id) ?: "unknown"
                     sentinelByOrigin.merge(origin, 1) { a, b -> a + b }
@@ -505,29 +518,15 @@ class NoteRepository(
         if (sentinelByOrigin.isNotEmpty()) {
             Log.d(TAG, "saveNoteWithChildren($noteId): sentinel origins=$sentinelByOrigin")
         }
-        if (nullCount > 0) {
-            // Promote to error when the ratio is bug-shaped (>= half of
-            // descendant lines); warn otherwise (likely un-migrated creation site).
-            val bugShaped = nullCount * 2 >= descendantCount && descendantCount >= 3
-            val msg = "saveNoteWithChildren($noteId): $nullCount of $descendantCount " +
-                "descendant lines have noteId=null. First: " +
-                firstNulls.joinToString { "[${it.first}] '${it.second}'" }
-            if (bugShaped) Log.e(TAG, msg, Throwable("noteId=null at saveNoteWithChildren entry"))
-            else Log.w(TAG, msg)
-        }
 
         val parentRef = noteRef(noteId)
         val rootContent = trackedLines[0].content.trimStart('\t')
 
-        val linesToSaveUnreconciled = trackedLines
-
-        // Recover noteIds that the editor lost along the way: if a null-id
-        // line sits at the same tree position and has identical content to
-        // an existing descendant, reuse that descendant's id. Without this
-        // the save would allocate a fresh doc and orphan the real one,
-        // tripping the content-drop guard even though the user's structure
-        // is unchanged.
-        val linesToSave = reconcileNullNoteIdsByContent(noteId, linesToSaveUnreconciled)
+        // Editor session-init paths now await the listener (then fall back to
+        // a Firestore read) before constructing tracked lines, so descendant
+        // [NoteLine.noteId] is never null at save entry — only real ids or
+        // sentinels marking new docs that need allocation.
+        val linesToSave = trackedLines
 
         // Pre-allocate refs for lines that need a fresh Firestore doc —
         // either null (bug path — id was wiped) or a sentinel (expected —
@@ -743,205 +742,6 @@ class NoteRepository(
             createdIds = newRefs.mapValues { it.value.id },
             survivingIds = survivingIds,
         )
-    }
-
-    /**
-     * For each non-empty line whose [NoteLine.noteId] is null, try to recover
-     * a real id from rawNotes by matching (parent id, trimmed content) against
-     * existing live descendants. Preserves the original order of candidates so
-     * duplicate-content siblings bind left-to-right.
-     *
-     * This is defensive: the editor is supposed to carry noteIds through edits,
-     * but pastes, lossy re-inits, or stale snapshots have been observed to wipe
-     * them. Without recovery, the save would allocate fresh docs for these
-     * lines and the existing descendants would end up in the soft-delete set —
-     * the content-drop guard would abort and the user would be stuck.
-     */
-    private fun reconcileNullNoteIdsByContent(
-        rootNoteId: String,
-        linesToSave: List<NoteLine>,
-    ): List<NoteLine> {
-        if (linesToSave.size <= 1) return linesToSave
-
-        // Parent line-index per line, via indentation (independent of noteIds).
-        val parentLineOf = IntArray(linesToSave.size)
-        val stack = ArrayDeque<Pair<Int, Int>>().apply { addLast(0 to 0) } // (depth, lineIndex)
-        for (i in 1 until linesToSave.size) {
-            val depth = linesToSave[i].content.takeWhile { it == '\t' }.length
-            val content = linesToSave[i].content.trimStart('\t')
-            while (stack.size > 1 && stack.last().first >= depth) stack.removeLast()
-            parentLineOf[i] = stack.last().second
-            if (content.isNotEmpty()) stack.addLast(depth to i)
-        }
-
-        val byParent = NoteStore.getLiveDescendantsByParent(rootNoteId)
-        if (byParent.isEmpty()) return linesToSave
-
-        val usedIds = HashSet<String>()
-        for (l in linesToSave) l.noteId?.let { usedIds.add(it) }
-
-        val result = linesToSave.toMutableList()
-        val lineIds = arrayOfNulls<String>(linesToSave.size)
-        lineIds[0] = rootNoteId
-
-        var reconciledFromNull = 0   // id was bare null — upstream bug signal
-        var unrecoveredNullCount = 0
-        // Detail list is lazily populated (only when we know we'll log), so the
-        // common all-ids-real save path allocates nothing.
-        var nullTrace: ArrayList<NullIdRecovery>? = null
-        for (i in 1 until result.size) {
-            val content = result[i].content.trimStart('\t')
-            val existing = result[i].noteId
-            // A real id means we already know which doc this line maps to.
-            // A sentinel means "this is a brand-new line, allocate a fresh
-            // doc downstream" — never match by content (would alias new
-            // typed/pasted content to an unrelated existing sibling). Only
-            // bare nulls go through content matching, since null is the
-            // signal of an upstream lossy path that wiped a real id.
-            if (existing != null) {
-                lineIds[i] = existing
-                continue
-            }
-            val parentId = lineIds[parentLineOf[i]]
-            val candidates = parentId?.let { byParent[it] }
-            var match: Note? = null
-            if (candidates != null) {
-                val iter = candidates.iterator()
-                while (iter.hasNext()) {
-                    val c = iter.next()
-                    if (c.content == content && c.id !in usedIds) {
-                        match = c
-                        iter.remove()
-                        break
-                    }
-                }
-            }
-            if (match != null) {
-                usedIds.add(match.id)
-                lineIds[i] = match.id
-                result[i] = result[i].copy(noteId = match.id)
-                reconciledFromNull++
-            } else {
-                unrecoveredNullCount++
-            }
-            val trace = nullTrace ?: ArrayList<NullIdRecovery>().also { nullTrace = it }
-            trace.add(
-                NullIdRecovery(
-                    lineIndex = i,
-                    parentLineIndex = parentLineOf[i],
-                    parentId = parentId,
-                    contentPreview = content.take(60),
-                    recoveredId = match?.id,
-                )
-            )
-        }
-
-        val trace = nullTrace
-        if ((reconciledFromNull > 0 || unrecoveredNullCount > 0) && trace != null) {
-            // Upstream lossy path produced bare null ids on non-empty lines.
-            // Log a diagnostic block (matching the content-drop guard style)
-            // so the failure site can be investigated without repro. Logged at
-            // ERROR level — null arrival at save means an editor or load path
-            // is dropping ids and should be fixed upstream. Raise a
-            // user-visible warning only when at least one was actually
-            // recovered; unmatched nulls fall through to fresh-doc allocation.
-            val diagnostics = buildNullIdRecoveryDiagnostics(
-                rootNoteId, linesToSave, byParent, trace,
-                reconciledFromNull,
-            )
-            Log.e(TAG, diagnostics, Throwable("null noteId reached saveNoteWithChildren"))
-        }
-        if (reconciledFromNull > 0) {
-            NoteStore.raiseWarning(
-                "Recovered $reconciledFromNull line ID(s) during save. Your content " +
-                    "is safe, but an editor path may have dropped line identities — " +
-                    "please double-check the note after saving."
-            )
-        }
-        return result
-    }
-
-    private data class NullIdRecovery(
-        val lineIndex: Int,
-        val parentLineIndex: Int,
-        val parentId: String?,
-        val contentPreview: String,
-        val recoveredId: String?,
-    )
-
-    /**
-     * Builds a detailed diagnostic string for null-id recovery events.
-     * Mirrors [buildContentDropDiagnostics] so the same debugging workflow
-     * (logcat tag '$TAG') works for both. Emitted at WARN level because
-     * content is typically safe after recovery.
-     */
-    private fun buildNullIdRecoveryDiagnostics(
-        rootNoteId: String,
-        linesToSave: List<NoteLine>,
-        byParent: Map<String, ArrayDeque<Note>>,
-        nullTrace: List<NullIdRecovery>,
-        reconciledFromNull: Int,
-    ): String = buildString {
-        val unrecovered = nullTrace.count { it.recoveredId == null }
-        appendLine("=== NULL NOTE-ID RECOVERY ===")
-        appendLine("rootNoteId: $rootNoteId")
-        appendLine("linesToSave: ${linesToSave.size}")
-        appendLine("null-id lines: ${nullTrace.size} (recovered=$reconciledFromNull, unrecovered=$unrecovered)")
-
-        appendLine("--- null-id line detail ---")
-        for (entry in nullTrace) {
-            val status = entry.recoveredId?.let { "RECOVERED → $it" } ?: "UNMATCHED (will allocate fresh doc)"
-            val parent = entry.parentId ?: "<no parent id resolved>"
-            appendLine(
-                "  [${entry.lineIndex}] parentLine=${entry.parentLineIndex} parentId=$parent " +
-                    "content='${entry.contentPreview}' → $status"
-            )
-        }
-
-        appendLine("--- linesToSave ---")
-        for ((i, line) in linesToSave.withIndex().take(40)) {
-            val preview = line.content.take(60).replace("\n", "\\n")
-            val idLabel = when {
-                line.noteId == null -> "null"
-                NoteIdSentinel.isSentinel(line.noteId) -> "sentinel=${line.noteId}"
-                else -> line.noteId!!
-            }
-            appendLine("  [$i] noteId=$idLabel content='$preview'")
-        }
-        if (linesToSave.size > 40) appendLine("  ... (${linesToSave.size - 40} more)")
-
-        appendLine("--- live descendants grouped by parent ---")
-        if (byParent.isEmpty()) {
-            appendLine("  (no live descendants in NoteStore for root $rootNoteId)")
-        } else {
-            for ((parentId, children) in byParent) {
-                appendLine("  parent=$parentId (${children.size} unmatched candidate(s))")
-                for (child in children) {
-                    val preview = child.content.take(60)
-                    appendLine("    child=${child.id} content='$preview'")
-                }
-            }
-        }
-
-        appendLine("--- NoteStore state ---")
-        val storeNote = NoteStore.getNoteById(rootNoteId)
-        if (storeNote != null) {
-            appendLine("  parentNoteId: ${storeNote.parentNoteId ?: "null"}")
-            appendLine("  rootNoteId: ${storeNote.rootNoteId ?: "null"}")
-            appendLine("  state: ${storeNote.state ?: "active"}")
-            val containedNotes = storeNote.containedNotes
-            appendLine("  containedNotes: ${containedNotes.size} $containedNotes")
-        } else {
-            appendLine("  NoteStore has NO entry for $rootNoteId")
-        }
-
-        appendLine("--- Thread ---")
-        appendLine("  ${Thread.currentThread().name}")
-        appendLine("--- Stack trace ---")
-        for (frame in Thread.currentThread().stackTrace.drop(2).take(15)) {
-            appendLine("  at $frame")
-        }
-        appendLine("=== END NULL NOTE-ID RECOVERY ===")
     }
 
     /**

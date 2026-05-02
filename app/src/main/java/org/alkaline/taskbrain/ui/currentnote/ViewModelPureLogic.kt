@@ -5,6 +5,7 @@ import org.alkaline.taskbrain.data.Alarm
 import org.alkaline.taskbrain.data.AlarmMarkers
 import org.alkaline.taskbrain.data.AlarmRepository
 import org.alkaline.taskbrain.data.AlarmStatus
+import org.alkaline.taskbrain.data.NoteIdSentinel
 import org.alkaline.taskbrain.data.NoteLine
 import org.alkaline.taskbrain.ui.currentnote.util.AlarmOverlayMapping
 import org.alkaline.taskbrain.ui.currentnote.util.SymbolBadge
@@ -206,7 +207,11 @@ internal fun resolveNoteIds(
         val resolvedId = if (primaryId != null && noteIdWinner[primaryId] == index) {
             primaryId
         } else {
-            null
+            // Lost a duplicate-id conflict, or no id at all — produce a fresh
+            // sentinel so the save planner allocates a new doc. Null is no
+            // longer legal at save entry under the structural-identity
+            // contract (see NoteRepository.planSaveNoteWithChildren).
+            NoteIdSentinel.new(NoteIdSentinel.Origin.SPLIT)
         }
         NoteLine(text, resolvedId)
     }

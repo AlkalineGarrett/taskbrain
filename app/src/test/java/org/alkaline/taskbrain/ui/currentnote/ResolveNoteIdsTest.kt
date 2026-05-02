@@ -1,6 +1,8 @@
 package org.alkaline.taskbrain.ui.currentnote
 
+import org.alkaline.taskbrain.data.NoteIdSentinel
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -30,7 +32,7 @@ class ResolveNoteIdsTest {
         )
 
         assertEquals("id1", result[0].noteId)
-        assertNull(result[1].noteId)
+        assertTrue("expected sentinel: result[1].noteId", NoteIdSentinel.isSentinel(result[1].noteId))
         assertEquals("id3", result[2].noteId)
     }
 
@@ -43,7 +45,7 @@ class ResolveNoteIdsTest {
             lineNoteIds = listOf(listOf("id1"), listOf("id1"))
         )
 
-        assertNull(result[0].noteId) // shorter content loses
+        assertTrue("expected sentinel: result[0].noteId", NoteIdSentinel.isSentinel(result[0].noteId)) // shorter content loses
         assertEquals("id1", result[1].noteId) // longer content wins
     }
 
@@ -57,7 +59,7 @@ class ResolveNoteIdsTest {
 
         // "\tShort" has content "Short" (5 chars)
         // "Much longer content here" has content "Much longer content here" (24 chars)
-        assertNull(result[0].noteId)
+        assertTrue("expected sentinel: result[0].noteId", NoteIdSentinel.isSentinel(result[0].noteId))
         assertEquals("id1", result[1].noteId)
     }
 
@@ -82,7 +84,7 @@ class ResolveNoteIdsTest {
         )
 
         assertEquals("idA", result[0].noteId) // longer content wins
-        assertNull(result[1].noteId) // lost the claim
+        assertTrue("expected sentinel: result[1].noteId", NoteIdSentinel.isSentinel(result[1].noteId)) // lost the claim
     }
 
     @Test
@@ -99,8 +101,8 @@ class ResolveNoteIdsTest {
         )
 
         assertEquals("id1", result[0].noteId)
-        assertNull(result[1].noteId)
-        assertNull(result[2].noteId)
+        assertTrue("expected sentinel: result[1].noteId", NoteIdSentinel.isSentinel(result[1].noteId))
+        assertTrue("expected sentinel: result[2].noteId", NoteIdSentinel.isSentinel(result[2].noteId))
     }
 
     @Test
@@ -121,9 +123,9 @@ class ResolveNoteIdsTest {
             lineNoteIds = listOf(emptyList(), emptyList(), emptyList())
         )
 
-        assertNull(result[0].noteId)
-        assertNull(result[1].noteId)
-        assertNull(result[2].noteId)
+        assertTrue("expected sentinel: result[0].noteId", NoteIdSentinel.isSentinel(result[0].noteId))
+        assertTrue("expected sentinel: result[1].noteId", NoteIdSentinel.isSentinel(result[1].noteId))
+        assertTrue("expected sentinel: result[2].noteId", NoteIdSentinel.isSentinel(result[2].noteId))
     }
 
     @Test

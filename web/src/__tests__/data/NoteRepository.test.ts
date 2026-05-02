@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NoteRepository, matchLinesToIds, ContentDropAbortError } from '../../data/NoteRepository'
 import { noteStore } from '../../data/NoteStore'
+import { newSentinelNoteId } from '../../data/NoteIdSentinel'
 import type { Firestore, DocumentReference } from 'firebase/firestore'
 import type { Auth } from 'firebase/auth'
 import type { Note, NoteLine } from '../../data/Note'
@@ -278,7 +279,7 @@ describe('NoteRepository', () => {
 
       await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
-        { content: '\tNew child', noteId: null },
+        { content: '\tNew child', noteId: newSentinelNoteId('typed') },
       ], null)
 
       expect(registerSpy).toHaveBeenCalledTimes(1)
@@ -304,7 +305,7 @@ describe('NoteRepository', () => {
 
       await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
-        { content: '\tNew', noteId: null },
+        { content: '\tNew', noteId: newSentinelNoteId('typed') },
       ], null)
 
       // Find the CREATE call (2-arg, no merge option) and confirm version=1.
@@ -361,7 +362,7 @@ describe('NoteRepository', () => {
 
       const result = await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
-        { content: '\tNew child', noteId: null },
+        { content: '\tNew child', noteId: newSentinelNoteId('typed') },
       ], null)
 
       expect(result.get(1)).toBe('new_child')
@@ -378,8 +379,8 @@ describe('NoteRepository', () => {
 
       const result = await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
-        { content: '\tChild content', noteId: null },
-        { content: '', noteId: null },
+        { content: '\tChild content', noteId: newSentinelNoteId('typed') },
+        { content: '', noteId: newSentinelNoteId('typed') },
       ], null)
 
       expect(result.size).toBe(2)
@@ -398,10 +399,10 @@ describe('NoteRepository', () => {
 
       const result = await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
-        { content: '\tChild', noteId: null },
-        { content: '', noteId: null },
-        { content: '', noteId: null },
-        { content: '', noteId: null },
+        { content: '\tChild', noteId: newSentinelNoteId('typed') },
+        { content: '', noteId: newSentinelNoteId('typed') },
+        { content: '', noteId: newSentinelNoteId('typed') },
+        { content: '', noteId: newSentinelNoteId('typed') },
       ], null)
 
       // Child + 3 trailing empties = 4 new docs.
@@ -494,7 +495,7 @@ describe('NoteRepository', () => {
 
       const result = await repository.saveNoteWithChildren('note_1', [
         { content: 'Parent', noteId: 'note_1' },
-        { content: '\t   ', noteId: null }, // Tab + whitespace — whitespace is content
+        { content: '\t   ', noteId: newSentinelNoteId('typed') }, // Tab + whitespace — whitespace is content
       ], null)
 
       expect(result.get(1)).toBe('new_child')
@@ -801,7 +802,7 @@ describe('NoteRepository', () => {
         [
           { content: 'parent', noteId: 'note_1' },
           { content: '\tfirst', noteId: 'c1' },
-          { content: '\tour-add', noteId: null },
+          { content: '\tour-add', noteId: newSentinelNoteId('typed') },
         ],
         new Map([['note_1', ['c1']]]), // editor saw [c1] under note_1 only
       )
@@ -920,7 +921,7 @@ describe('NoteRepository', () => {
           { content: 'parent', noteId: 'note_1' },
           { content: '\tmid', noteId: 'c1' },
           { content: '\t\tg1', noteId: 'g1' },
-          { content: '\t\tour-add', noteId: null },
+          { content: '\t\tour-add', noteId: newSentinelNoteId('typed') },
         ],
         new Map<string, string[]>([['note_1', ['c1']], ['c1', ['g1']]]),
       )
@@ -1004,7 +1005,7 @@ describe('NoteRepository', () => {
         [
           { content: 'parent', noteId: 'note_1' },
           { content: '\tmid', noteId: 'c1' },
-          { content: '\t\tnew-grandchild', noteId: null },
+          { content: '\t\tnew-grandchild', noteId: newSentinelNoteId('typed') },
         ],
         // c1 NOT in localBases (only the root) — no anchor for it.
         new Map([['note_1', ['c1']]]),
@@ -1434,8 +1435,8 @@ describe('NoteRepository', () => {
 
       const result = await repository.saveNoteWithChildren('root', [
         { content: 'Root', noteId: 'root' },
-        { content: '\tA', noteId: null },
-        { content: '\t\tB', noteId: null },
+        { content: '\tA', noteId: newSentinelNoteId('typed') },
+        { content: '\t\tB', noteId: newSentinelNoteId('typed') },
       ], null)
 
       expect(result.get(1)).toBe('child_a')
@@ -1663,13 +1664,16 @@ describe('NoteRepository', () => {
 // region matchLinesToIds Tests
 
 describe('matchLinesToIds', () => {
-  it('assigns parentNoteId to first line when no existing lines', () => {
+  it('assigns parentNoteId to first line when no existing lines, sentinel to others', () => {
     const result = matchLinesToIds('parent', [], ['Line 1', '\tLine 2'])
 
-    expect(result).toEqual([
-      { content: 'Line 1', noteId: 'parent' },
-      { content: '\tLine 2', noteId: null },
-    ])
+    expect(result).toHaveLength(2)
+    expect(result[0]).toEqual({ content: 'Line 1', noteId: 'parent' })
+    expect(result[1]!.content).toBe('\tLine 2')
+    // The descendant id is a fresh sentinel — content matches the regex but
+    // every call produces a different token, so we can only check the kind.
+    expect(typeof result[1]!.noteId).toBe('string')
+    expect(result[1]!.noteId).toMatch(/^@typed_/)
   })
 
   it('matches lines by exact content first', () => {
@@ -1716,7 +1720,7 @@ describe('matchLinesToIds', () => {
     const result = matchLinesToIds('root', existing, ['Root', '\tBrand new line'])
 
     expect(result[0]!.noteId).toBe('root')
-    expect(result[1]!.noteId).toBeNull()
+    expect(result[1]!.noteId).toMatch(/^@/)
   })
 
   it('uses editor noteIds for foreign notes (reparenting from another tree)', () => {

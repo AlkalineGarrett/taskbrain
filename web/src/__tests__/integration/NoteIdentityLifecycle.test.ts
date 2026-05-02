@@ -44,12 +44,14 @@ class FakeNoteRepository {
       linesToSave[0] = { ...linesToSave[0]!, noteId }
     }
 
-    // Allocate IDs for every descendant line that lacks one — empty lines
-    // included, since they are first-class docs post-migration.
+    // Allocate IDs for every descendant line that lacks a real one — null
+    // (legacy) or sentinel (`@origin_token`, e.g. typed/split). Real ids
+    // pass through.
     const createdIds = new Map<number, string>()
     const finalLines = linesToSave.map((line, index) => {
       if (index === 0) return line
-      if (line.noteId == null) {
+      const isSentinel = typeof line.noteId === 'string' && line.noteId.startsWith('@')
+      if (line.noteId == null || isSentinel) {
         const newId = `generated_${this.nextId++}`
         createdIds.set(index, newId)
         return { ...line, noteId: newId }

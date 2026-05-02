@@ -5,6 +5,8 @@ import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
 import { findDirectives, directiveHash } from '@/dsl/directives/DirectiveFinder'
 import { executeDirectiveWithMutations } from '@/dsl/directives/DirectiveExecutor'
 import { noteStore } from '@/data/NoteStore'
+import { NoteRepository } from '@/data/NoteRepository'
+import { db, auth } from '@/firebase/config'
 import { InlineEditSession } from '@/editor/InlineEditSession'
 import { useActiveEditor } from '@/editor/ActiveEditorContext'
 import { useEditorInteractions } from '@/editor/useEditorInteractions'
@@ -14,6 +16,8 @@ import { EditorLine } from './EditorLine'
 import { CompletedPlaceholderRow } from './CompletedPlaceholderRow'
 import { EMPTY_VIEW, SAVE_ERROR_BANNER, SAVE_ERROR_DISMISS } from '@/strings'
 import styles from './ViewDirectiveRenderer.module.css'
+
+const noteRepo = new NoteRepository(db, auth)
 
 interface ViewDirectiveRendererProps {
   viewVal: ViewVal
@@ -33,8 +37,19 @@ export function ViewDirectiveRenderer({
   const { notes } = viewVal
   const { sessionManager } = useActiveEditor()
 
-  // Eagerly create sessions for all notes in this view directive
-  useMemo(() => sessionManager.ensureSessions(notes), [notes, sessionManager])
+  // Eagerly create sessions for all notes in this view directive. The setter
+  // triggers a re-render once new sessions are populated; the value is unused.
+  const [, setReadyTick] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    void sessionManager
+      .ensureSessions(notes, (id) => noteRepo.loadNoteLinesAwait(id))
+      .then((created) => { if (!cancelled && created) setReadyTick((t) => t + 1) })
+      .catch((err) => {
+        if (!cancelled) console.error('ensureSessions failed:', err)
+      })
+    return () => { cancelled = true }
+  }, [notes, sessionManager])
 
   // Compute directive results for each viewed note's content
   const viewedNoteDirectiveResults = useMemo(() => {
@@ -84,16 +99,23 @@ export function ViewDirectiveRenderer({
     <div className={styles.viewWrapper}>
       {gearButton}
       <div className={styles.viewContainer}>
-      {notes.map((note, noteIndex) => (
-        <div key={note.id}>
-          {noteIndex > 0 && <hr className={styles.separator} />}
-          <ViewNoteSection
-            note={note}
-            session={sessionManager.getSession(note.id)!}
-            directiveResults={viewedNoteDirectiveResults.get(note.id)}
-          />
-        </div>
-      ))}
+      {notes.map((note, noteIndex) => {
+        const session = sessionManager.getSession(note.id)
+        return (
+          <div key={note.id}>
+            {noteIndex > 0 && <hr className={styles.separator} />}
+            {session ? (
+              <ViewNoteSection
+                note={note}
+                session={session}
+                directiveResults={viewedNoteDirectiveResults.get(note.id)}
+              />
+            ) : (
+              <div className={styles.placeholderContent}>{note.content}</div>
+            )}
+          </div>
+        )
+      })}
       </div>
     </div>
   )

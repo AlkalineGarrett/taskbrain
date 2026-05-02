@@ -12,25 +12,36 @@ function lines(...pairs: [string, string | null][]): NoteLine[] {
   return pairs.map(([content, noteId]) => ({ content, noteId }))
 }
 
+/** Replaces sentinel-shaped (`@origin_token`) noteIds in [actual] with `null`
+ *  so test fixtures can use `null` as a "fresh allocation expected" wildcard
+ *  in `toEqual` checks. New lines now arrive as fresh sentinels rather than
+ *  null at save entry, but the structural test assertion is unchanged. */
+function unsentinelize(actual: NoteLine[]): NoteLine[] {
+  return actual.map((l) => ({
+    content: l.content,
+    noteId: l.noteId && /^@/.test(l.noteId) ? null : l.noteId,
+  }))
+}
+
 describe('matchLinesToIds', () => {
   it('empty existing lines assigns parent ID to first line', () => {
     const result = matchLinesToIds(parentId, [], ['First line'])
-    expect(result).toEqual(lines(['First line', parentId]))
+    expect(unsentinelize(result)).toEqual(lines(['First line', parentId]))
   })
 
   it('empty content creates single empty line with parent ID', () => {
     const result = matchLinesToIds(parentId, [], [''])
-    expect(result).toEqual(lines(['', parentId]))
+    expect(unsentinelize(result)).toEqual(lines(['', parentId]))
   })
 
   it('single line gets parent ID', () => {
     const result = matchLinesToIds(parentId, [], ['First line'])
-    expect(result).toEqual(lines(['First line', parentId]))
+    expect(unsentinelize(result)).toEqual(lines(['First line', parentId]))
   })
 
   it('multiple lines - only first gets parent ID', () => {
     const result = matchLinesToIds(parentId, [], ['Line 1', 'Line 2', 'Line 3'])
-    expect(result).toEqual(lines(
+    expect(unsentinelize(result)).toEqual(lines(
       ['Line 1', parentId],
       ['Line 2', null],
       ['Line 3', null],
@@ -44,7 +55,7 @@ describe('matchLinesToIds', () => {
       ['Line 3', 'child_2'],
     )
     const result = tracked(existing, 'Line 1\nLine 2\nLine 3')
-    expect(result).toEqual(lines(
+    expect(unsentinelize(result)).toEqual(lines(
       ['Line 1', parentId],
       ['Line 2', 'child_1'],
       ['Line 3', 'child_2'],
@@ -57,7 +68,7 @@ describe('matchLinesToIds', () => {
       ['Line 3', 'child_1'],
     )
     const result = tracked(existing, 'Line 1\nLine 2\nLine 3')
-    expect(result).toEqual(lines(
+    expect(unsentinelize(result)).toEqual(lines(
       ['Line 1', parentId],
       ['Line 2', null],
       ['Line 3', 'child_1'],
@@ -72,7 +83,7 @@ describe('matchLinesToIds', () => {
       ['Line 4', 'child_3'],
     )
     const result = tracked(existing, 'Line 1\nLine 3\nLine 4')
-    expect(result).toEqual(lines(
+    expect(unsentinelize(result)).toEqual(lines(
       ['Line 1', parentId],
       ['Line 3', 'child_2'],
       ['Line 4', 'child_3'],
@@ -85,7 +96,7 @@ describe('matchLinesToIds', () => {
       ['Original', 'child_1'],
     )
     const result = tracked(existing, 'Line 1\nModified')
-    expect(result).toEqual(lines(
+    expect(unsentinelize(result)).toEqual(lines(
       ['Line 1', parentId],
       ['Modified', 'child_1'],
     ))
@@ -106,7 +117,7 @@ describe('matchLinesToIds', () => {
       ['Line 4', 'child_1'],
     )
     const result = tracked(existing, 'Line 1\nLine 2\nLine 3\nLine 4')
-    expect(result).toEqual(lines(
+    expect(unsentinelize(result)).toEqual(lines(
       ['Line 1', parentId],
       ['Line 2', null],
       ['Line 3', null],
@@ -122,7 +133,7 @@ describe('matchLinesToIds', () => {
       ['Line 4', 'child_3'],
     )
     const result = tracked(existing, 'Line 1\nModified Line 2\nLine 3\nLine 4')
-    expect(result).toEqual(lines(
+    expect(unsentinelize(result)).toEqual(lines(
       ['Line 1', parentId],
       ['Modified Line 2', 'child_1'],
       ['Line 3', 'child_2'],
@@ -137,7 +148,7 @@ describe('matchLinesToIds', () => {
       ['Line 3', 'child_2'],
     )
     const result = tracked(existing, 'Line 1\nLine 3\nLine 2')
-    expect(result).toEqual(lines(
+    expect(unsentinelize(result)).toEqual(lines(
       ['Line 1', parentId],
       ['Line 3', 'child_2'],
       ['Line 2', 'child_1'],
@@ -152,7 +163,7 @@ describe('matchLinesToIds', () => {
       ['CCC', 'child_c'],
     )
     const result = tracked(existing, 'Line 1\nCCC\nAAA\nBBB')
-    expect(result).toEqual(lines(
+    expect(unsentinelize(result)).toEqual(lines(
       ['Line 1', parentId],
       ['CCC', 'child_c'],
       ['AAA', 'child_a'],
@@ -178,7 +189,7 @@ describe('matchLinesToIds', () => {
       ['Hello world.', 'child_1'],
     )
     const result = tracked(existing, 'Line 1\nHello world\n.')
-    expect(result).toEqual(lines(
+    expect(unsentinelize(result)).toEqual(lines(
       ['Line 1', parentId],
       ['Hello world', 'child_1'],
       ['.', null],
@@ -191,7 +202,7 @@ describe('matchLinesToIds', () => {
       ['Hello world.', 'child_1'],
     )
     const result = tracked(existing, 'Line 1\nH\nello world.')
-    expect(result).toEqual(lines(
+    expect(unsentinelize(result)).toEqual(lines(
       ['Line 1', parentId],
       ['H', null],
       ['ello world.', 'child_1'],
@@ -204,7 +215,7 @@ describe('matchLinesToIds', () => {
       ['Hello world.', 'child_1'],
     )
     const result = tracked(existing, 'Line 1\nHello world\n. plus a whole lot of new content')
-    expect(result).toEqual(lines(
+    expect(unsentinelize(result)).toEqual(lines(
       ['Line 1', parentId],
       ['Hello world', 'child_1'],
       ['. plus a whole lot of new content', null],
@@ -217,7 +228,7 @@ describe('matchLinesToIds', () => {
       ['Hello world.', 'child_1'],
     )
     const result = tracked(existing, 'Line 1\nH plus a very long addition\nello world.')
-    expect(result).toEqual(lines(
+    expect(unsentinelize(result)).toEqual(lines(
       ['Line 1', parentId],
       ['H plus a very long addition', null],
       ['ello world.', 'child_1'],
@@ -229,6 +240,6 @@ describe('matchLinesToIds', () => {
     const result = tracked(existing, 'Line 1\n   \nLine 3')
     expect(result).toHaveLength(3)
     expect(result[1]!.content).toBe('   ')
-    expect(result[1]!.noteId).toBeNull()
+    expect(unsentinelize(result)[1]!.noteId).toBeNull()
   })
 })

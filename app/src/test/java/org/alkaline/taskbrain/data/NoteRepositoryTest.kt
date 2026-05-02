@@ -335,7 +335,7 @@ class NoteRepositoryTest {
             listOf(
                 NoteLine("New root content", "note_1"),
                 NoteLine("\tedited", "c1"),
-                NoteLine("\tbrand new", null),
+                NoteLine("\tbrand new", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED)),
             ),
             extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
@@ -364,37 +364,11 @@ class NoteRepositoryTest {
 
         val result = repository.saveNoteWithChildren(
             "note_1",
-            listOf(NoteLine("Parent", "note_1"), NoteLine("\tNew child", null)),
+            listOf(NoteLine("Parent", "note_1"), NoteLine("\tNew child", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED))),
             extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
         assertEquals("new_child", result[1])
-    }
-
-    @Test
-    fun `saveNoteWithChildren raises user warning when null noteIds were recovered`() = runTest {
-        // A bare null noteId reaching save means an upstream editor path wiped
-        // a real id. The reconciliation recovers the data from rawNotes, but
-        // the user should still see a warning so the underlying bug isn't
-        // masked by the silent recovery.
-        mockDocument("note_1", Note(id = "note_1", containedNotes = listOf("c1")))
-        mockDocument("c1", null)
-        val existingChild = Note(id = "c1", content = "• Item A", parentNoteId = "note_1", rootNoteId = "note_1")
-        every { NoteStore.getDescendantIds("note_1") } returns setOf("c1")
-        every { NoteStore.getRawNoteById("c1") } returns existingChild
-        every { NoteStore.getLiveDescendantsByParent("note_1") } returns
-            mapOf("note_1" to ArrayDeque(listOf(existingChild)))
-        mockBatch()
-
-        repository.saveNoteWithChildren(
-            "note_1",
-            listOf(NoteLine("Parent", "note_1"), NoteLine("• Item A", null)),
-            extraOpsBuilder = null, localBases = null,
-        ).getOrThrow()
-
-        // Warning must reach the user via NoteStore.raiseWarning (which the VM
-        // observes and routes to the save-warning dialog).
-        verify(atLeast = 1) { NoteStore.raiseWarning(match { it.contains("line ID") }) }
     }
 
     @Test
@@ -499,8 +473,8 @@ class NoteRepositoryTest {
             "note_1",
             listOf(
                 NoteLine("Parent", "note_1"),
-                NoteLine("\tChild content", null),
-                NoteLine("", null),
+                NoteLine("\tChild content", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED)),
+                NoteLine("", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED)),
             ),
             extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
@@ -508,45 +482,6 @@ class NoteRepositoryTest {
         assertEquals(2, result.size)
         assertEquals("child_1", result[1])
         assertEquals("trailing", result[2])
-    }
-
-    @Test
-    fun `saveNoteWithChildren recovers null noteIds by parent+content against rawNotes`() = runTest {
-        // Reproduces the observed bug where the editor's tracked lines have lost
-        // noteIds for items that still exist in Firestore with matching content.
-        // Without reconciliation the save would allocate fresh docs and the
-        // content-drop guard would abort.
-        mockDocument("note_1", Note(id = "note_1", containedNotes = listOf("decided", "undecided")))
-        mockDocument("decided", null)
-        mockDocument("undecided", null)
-        mockDocument("dining", null)
-        val decided = Note(id = "decided", content = "• Decided", parentNoteId = "note_1", rootNoteId = "note_1")
-        val undecided = Note(id = "undecided", content = "• Undecided", parentNoteId = "note_1", rootNoteId = "note_1")
-        val dining = Note(id = "dining", content = "• Dining table", parentNoteId = "decided", rootNoteId = "note_1")
-        every { NoteStore.getDescendantIds("note_1") } returns setOf("decided", "undecided", "dining")
-        every { NoteStore.getRawNoteById("decided") } returns decided
-        every { NoteStore.getRawNoteById("undecided") } returns undecided
-        every { NoteStore.getRawNoteById("dining") } returns dining
-        every { NoteStore.getLiveDescendantsByParent("note_1") } returns mapOf(
-            "note_1" to ArrayDeque(listOf(decided, undecided)),
-            "decided" to ArrayDeque(listOf(dining)),
-        )
-        mockBatch()
-
-        val result = repository.saveNoteWithChildren(
-            "note_1",
-            listOf(
-                NoteLine("Parent", "note_1"),
-                NoteLine("• Decided", null),       // was cUa99-style; lost its id
-                NoteLine("\t• Dining table", null), // was aE5e-style; lost its id
-                NoteLine("• Undecided", null),     // was wvKV-style; lost its id
-            ),
-            extraOpsBuilder = null, localBases = null,
-        )
-
-        // Reconciliation should have matched the three lines against existing
-        // descendants — no orphan deletes, save succeeds.
-        assertTrue("save should succeed after reconciliation, got $result", result.isSuccess)
     }
 
     @Test
@@ -562,10 +497,10 @@ class NoteRepositoryTest {
             "note_1",
             listOf(
                 NoteLine("Parent", "note_1"),
-                NoteLine("\tChild", null),
-                NoteLine("", null),
-                NoteLine("", null),
-                NoteLine("", null)
+                NoteLine("\tChild", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED)),
+                NoteLine("", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED)),
+                NoteLine("", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED)),
+                NoteLine("", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED))
             ),
             extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
@@ -591,9 +526,9 @@ class NoteRepositoryTest {
             "note_1",
             listOf(
                 NoteLine("Parent", "note_1"),
-                NoteLine("\t", null),
-                NoteLine("\tChild", null),
-                NoteLine("", null),
+                NoteLine("\t", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED)),
+                NoteLine("\tChild", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED)),
+                NoteLine("", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED)),
             ),
             extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
@@ -615,7 +550,7 @@ class NoteRepositoryTest {
             "note_1",
             listOf(
                 NoteLine("Parent", "note_1"),
-                NoteLine("\t   ", null)  // Tab + whitespace — whitespace is content
+                NoteLine("\t   ", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED))  // Tab + whitespace — whitespace is content
             ),
             extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
@@ -863,7 +798,7 @@ class NoteRepositoryTest {
             listOf(
                 NoteLine("parent", "note_1"),
                 NoteLine("\tfirst", "c1"),
-                NoteLine("\tour-add", null),
+                NoteLine("\tour-add", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED)),
             ),
             extraOpsBuilder = null,
             localBases = mapOf("note_1" to listOf("c1")),
@@ -989,7 +924,7 @@ class NoteRepositoryTest {
                 NoteLine("parent", "note_1"),
                 NoteLine("\tmid", "c1"),
                 NoteLine("\t\tg1", "g1"),
-                NoteLine("\t\tour-add", null),
+                NoteLine("\t\tour-add", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED)),
             ),
             extraOpsBuilder = null,
             localBases = mapOf("note_1" to listOf("c1"), "c1" to listOf("g1")),
@@ -1086,7 +1021,7 @@ class NoteRepositoryTest {
             listOf(
                 NoteLine("parent", "note_1"),
                 NoteLine("\tmid", "c1"),
-                NoteLine("\t\tnew-grandchild", null),
+                NoteLine("\t\tnew-grandchild", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED)),
             ),
             extraOpsBuilder = null,
             // c1 NOT in localBases (only the root) — no anchor for it.
@@ -1548,8 +1483,8 @@ class NoteRepositoryTest {
             "root",
             listOf(
                 NoteLine("Root", "root"),
-                NoteLine("\tA", null),
-                NoteLine("\t\tB", null),
+                NoteLine("\tA", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED)),
+                NoteLine("\t\tB", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED)),
             ),
             extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
@@ -1578,7 +1513,7 @@ class NoteRepositoryTest {
 
         val lines = mutableListOf(NoteLine("Root", "root"))
         for (i in 1..501) {
-            lines.add(NoteLine("\tChild $i", null))
+            lines.add(NoteLine("\tChild $i", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED)))
         }
 
         val result = repository.saveNoteWithChildren("root", lines, extraOpsBuilder = null, localBases = null).getOrThrow()

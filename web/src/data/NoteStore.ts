@@ -18,6 +18,10 @@ import {
   type RebuildResult,
 } from './NoteReconstruction'
 
+/** Cap for waiting on the listener to surface a specific note. Mirrors the
+ *  Android NoteStore constant; also reused by NoteRepository.loadNoteWithChildren. */
+const NOTE_STORE_AWAIT_MS = 1500
+
 /**
  * Thrown when a code path that depends on a fully-loaded NoteStore runs before
  * the live listener has received its first snapshot. Save/delete operations
@@ -536,6 +540,31 @@ export class NoteStore {
   async awaitPendingSave(noteId: string): Promise<void> {
     const pending = this.pendingSaves.get(noteId)
     if (pending) await pending
+  }
+
+  /**
+   * Resolve once [noteId] is loaded into rawNotes, or `false` after
+   * [timeoutMs]. Editors call this at session start so the listener has
+   * a chance to deliver the doc before we fall through to a Firestore
+   * one-shot read.
+   */
+  async awaitNoteLoaded(noteId: string, timeoutMs: number = NOTE_STORE_AWAIT_MS): Promise<boolean> {
+    if (this.getRawNoteById(noteId) != null) return true
+    await this.awaitPendingSave(noteId)
+    if (this.getRawNoteById(noteId) != null) return true
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        unsubscribe()
+        resolve(false)
+      }, timeoutMs)
+      const unsubscribe = this.subscribeChangedNoteIds((changed) => {
+        if (changed.has(noteId) && this.getRawNoteById(noteId) != null) {
+          clearTimeout(timer)
+          unsubscribe()
+          resolve(true)
+        }
+      })
+    })
   }
 
   /**

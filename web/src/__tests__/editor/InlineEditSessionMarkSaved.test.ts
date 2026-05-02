@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { InlineEditSession } from '../../editor/InlineEditSession'
+import { linesFromContent } from './inlineEditSessionTestHelpers'
 
 describe('InlineEditSession.markSaved', () => {
   it('clears dirty state after markSaved', () => {
-    const session = new InlineEditSession('note1', 'Hello')
+    const session = new InlineEditSession('note1', linesFromContent('note1', 'Hello'))
     session.editorState.lines[0]!.updateFull('Modified', 8)
     expect(session.isDirty).toBe(true)
 
@@ -12,7 +13,7 @@ describe('InlineEditSession.markSaved', () => {
   })
 
   it('uses current text as new baseline', () => {
-    const session = new InlineEditSession('note1', 'Original')
+    const session = new InlineEditSession('note1', linesFromContent('note1', 'Original'))
     session.editorState.lines[0]!.updateFull('Saved content', 13)
     session.markSaved()
 
@@ -25,7 +26,7 @@ describe('InlineEditSession.markSaved', () => {
   })
 
   it('reverting to saved content (not original) clears dirty', () => {
-    const session = new InlineEditSession('note1', 'Original')
+    const session = new InlineEditSession('note1', linesFromContent('note1', 'Original'))
     session.editorState.lines[0]!.updateFull('Saved', 5)
     session.markSaved()
 
@@ -38,7 +39,7 @@ describe('InlineEditSession.markSaved', () => {
   })
 
   it('reverting to original content after markSaved is dirty', () => {
-    const session = new InlineEditSession('note1', 'Original')
+    const session = new InlineEditSession('note1', linesFromContent('note1', 'Original'))
     session.editorState.lines[0]!.updateFull('Saved', 5)
     session.markSaved()
 
@@ -48,7 +49,7 @@ describe('InlineEditSession.markSaved', () => {
   })
 
   it('works with multi-line content', () => {
-    const session = new InlineEditSession('note1', 'Line 1\nLine 2')
+    const session = new InlineEditSession('note1', linesFromContent('note1', 'Line 1\nLine 2'))
     session.editorState.lines[0]!.updateFull('Changed 1', 9)
     session.editorState.lines[1]!.updateFull('Changed 2', 9)
     expect(session.isDirty).toBe(true)

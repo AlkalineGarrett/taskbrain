@@ -4,6 +4,7 @@ import { renderHook } from '@testing-library/react'
 import { EditorState } from '@/editor/EditorState'
 import { EditorController } from '@/editor/EditorController'
 import { InlineEditSession } from '@/editor/InlineEditSession'
+import { linesFromContent } from '../editor/inlineEditSessionTestHelpers'
 import { useGlobalKeyboardShortcuts } from '@/hooks/useGlobalKeyboardShortcuts'
 
 function makeEditor() {
@@ -142,7 +143,7 @@ describe('useGlobalKeyboardShortcuts', () => {
   })
 
   it('routes commands to the active inline session when one is active', () => {
-    const session = new InlineEditSession('view1', 'inline')
+    const session = new InlineEditSession('view1', linesFromContent('view1', 'inline'))
     const cutSpy = vi.spyOn(session.controller, 'cutSelection').mockImplementation(() => null)
     setup(undefined, { activeSession: session })
     session.editorState.setSelection(0, 3)

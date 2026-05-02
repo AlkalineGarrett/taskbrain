@@ -82,8 +82,12 @@ fun rememberDirectiveResultsAndSessions(
 
     // Eagerly create edit sessions for all embedded notes so clicking is instant.
     // Also execute directives for each new session so they render immediately.
-    remember(viewNotes) {
-        val newNoteIds = inlineEditState.ensureSessionsForNotes(viewNotes)
+    // Suspends on session creation so each session is initialized from the
+    // listener's structurally-valid lines (not synthesized null-id lines).
+    LaunchedEffect(viewNotes) {
+        val newNoteIds = inlineEditState.ensureSessionsForNotes(viewNotes) { noteId ->
+            directiveManager.loadNoteLinesForSession(noteId)
+        }
         val activeNoteIds = viewNotes.map { it.id }.toSet()
         inlineEditState.removeStaleSessionsExcept(activeNoteIds)
         for (noteId in newNoteIds) {

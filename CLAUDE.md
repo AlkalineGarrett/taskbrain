@@ -81,10 +81,10 @@ in `firestore.rules` and are deployed manually via the Firebase console.
 - No auto-appended trailing-empty UI line; no trailing-empty stripping on save
 - New empty lines get a TYPED/SPLIT sentinel noteId at edit time so save can allocate fresh docs for them
 
-**Line identity invariant:**
-- Child lines must carry their real `noteId` end-to-end through load → edit → save → reload. A null `noteId` arriving at save means an upstream path is lossy and should be fixed at the source.
-- New lines (typed, pasted, split, agent-generated) get a sentinel `noteId` at edit time. Sentinels are NEVER content-matched against existing siblings during save — they always allocate fresh docs. Aliasing a typed line to an existing line because their content matches would silently merge two distinct lines into one Firestore doc.
-- `reconcileNullNoteIdsByContent` is a defensive recovery layer for null arrivals only. It logs at error level (with stack) every time it fires; clean logs in production are the prerequisite for deleting it.
+**Line identity invariant (strict structural):**
+- Every descendant line at save entry carries either a real Firestore doc id or a sentinel ("new line, allocate fresh"). There is no third class — null arrival is a fatal `IllegalStateException` / `Error` (see `planSaveNoteWithChildren` / `planSave`). Identity is structural, never recovered by content match.
+- Editor sessions are initialized only from structurally-valid tracked lines. Inline-edit / view-directive sessions resolve real ids via `NoteRepository.loadNoteLinesAwait` (awaits the listener, falls back to a Firestore one-shot read on timeout). Synthesizing lines from a content string with null/empty descendant ids is forbidden.
+- Sentinels are never content-matched against existing siblings during save — they always allocate fresh docs. Aliasing a typed line to an existing line because their content matches would silently merge two distinct lines into one Firestore doc.
 
 **Note structure in Firestore:**
 - First line = parent note content
