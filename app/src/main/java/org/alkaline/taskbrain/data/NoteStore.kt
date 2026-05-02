@@ -657,6 +657,9 @@ object NoteStore {
                 rootNoteId = data["rootNoteId"] as? String,
                 showCompleted = data["showCompleted"] as? Boolean ?: true,
                 onceCache = (data["onceCache"] as? Map<String, Map<String, Any>>) ?: emptyMap(),
+                version = (data["version"] as? Long) ?: 0L,
+                lastWriterOpId = data["lastWriterOpId"] as? String,
+                containedNotesBase = data["containedNotesBase"] as? List<String>,
             )
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing note $id", e)

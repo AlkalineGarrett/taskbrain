@@ -787,10 +787,13 @@ class NoteRepository(
      */
     suspend fun createNote(): Result<String> = ioLogged("createNote") {
         val userId = requireUserId()
-        val ref = notesCollection.add(newNoteData(userId, "")).await()
-        FirestoreUsage.recordWrite("createNote", FirestoreUsage.WriteType.SET)
-        Log.d(TAG, "Note created with ID: ${ref.id}")
-        ref.id
+        withPendingOp { opId ->
+            val data = newNoteData(userId, "").apply { putAll(stampWrite(opId, existing = null)) }
+            val ref = notesCollection.add(data).await()
+            FirestoreUsage.recordWrite("createNote", FirestoreUsage.WriteType.SET)
+            Log.d(TAG, "Note created with ID: ${ref.id}")
+            ref.id
+        }
     }
 
     /**
@@ -798,14 +801,27 @@ class NoteRepository(
      */
     suspend fun createMultiLineNote(content: String): Result<String> = ioLogged("createMultiLineNote") body@{
         val userId = requireUserId()
+        // Register the opId so the listener suppresses the create echo
+        // — same contract as saveNoteWithChildren.
+        return@body withPendingOp { opId ->
+            createMultiLineNoteInner(userId, opId, content)
+        }
+    }
+
+    private suspend fun createMultiLineNoteInner(
+        userId: String,
+        opId: String,
+        content: String,
+    ): String {
         val lines = content.lines()
         val firstLine = lines.firstOrNull()?.trimStart('\t') ?: ""
         val childLines = lines.drop(1)
 
         if (childLines.isEmpty() || childLines.all { it.trimStart('\t').isEmpty() }) {
-            val ref = notesCollection.add(newNoteData(userId, firstLine)).await()
+            val data = newNoteData(userId, firstLine).apply { putAll(stampWrite(opId, existing = null)) }
+            val ref = notesCollection.add(data).await()
             FirestoreUsage.recordWrite("createMultiLineNote", FirestoreUsage.WriteType.SET)
-            return@body ref.id
+            return ref.id
         }
 
         val parentRef = newNoteRef()
@@ -848,10 +864,11 @@ class NoteRepository(
 
         batch.set(parentRef, newNoteData(userId, firstLine).apply {
             put("containedNotes", rootChildren)
+            putAll(stampWrite(opId, existing = null))
         })
 
         for (node in nodes) {
-            batch.set(node.ref, hashMapOf(
+            batch.set(node.ref, hashMapOf<String, Any?>(
                 "userId" to userId,
                 "content" to node.content,
                 "parentNoteId" to node.parentId,
@@ -859,14 +876,14 @@ class NoteRepository(
                 "containedNotes" to node.children.toList(),
                 "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp(),
-            ))
+            ).apply { putAll(stampWrite(opId, existing = null)) })
         }
 
         batch.commit().await()
         // Root note + N descendants written in a single batch.
         FirestoreUsage.recordWrite("createMultiLineNote", FirestoreUsage.WriteType.BATCH_COMMIT, nodes.size + 1)
         Log.d(TAG, "Multi-line note created with ID: ${parentRef.id}")
-        parentRef.id
+        return parentRef.id
     }
 
     // ── Delete/restore operations ───────────────────────────────────────
