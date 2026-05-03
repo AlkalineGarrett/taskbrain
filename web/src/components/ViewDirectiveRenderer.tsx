@@ -38,13 +38,18 @@ export function ViewDirectiveRenderer({
   const { sessionManager } = useActiveEditor()
 
   // Eagerly create sessions for all notes in this view directive. The setter
-  // triggers a re-render once new sessions are populated; the value is unused.
+  // triggers a re-render once sessions are populated; the value is unused.
+  // We fire it unconditionally rather than gating on "created" because in
+  // StrictMode the first mount's effect creates the sessions but its cleanup
+  // sets cancelled=true, and the second mount's effect sees `created=false`
+  // (sessions already exist) — the original gate left setReadyTick never
+  // firing, so the first render's placeholders stuck.
   const [, setReadyTick] = useState(0)
   useEffect(() => {
     let cancelled = false
     void sessionManager
       .ensureSessions(notes, (id) => noteRepo.loadNoteLinesAwait(id))
-      .then((created) => { if (!cancelled && created) setReadyTick((t) => t + 1) })
+      .then(() => { if (!cancelled) setReadyTick((t) => t + 1) })
       .catch((err) => {
         if (!cancelled) console.error('ensureSessions failed:', err)
       })

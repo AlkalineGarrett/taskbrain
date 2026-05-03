@@ -926,8 +926,10 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 val inlinePairs = coroutineScope {
                     dirtySessions.map { session ->
                         async {
+                            // See matchLinesToIds Phase 0 for why we pass editorNoteIds.
                             session to repository.prepareInlineEditTrackedLines(
                                 session.noteId, session.editorState.text, "saveAll",
+                                session.getEditorNoteIds(),
                             )
                         }
                     }.awaitAll()

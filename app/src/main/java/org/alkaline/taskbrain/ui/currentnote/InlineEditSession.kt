@@ -104,6 +104,15 @@ class InlineEditSession(
     }
 
     /**
+     * Per-line head noteIds, parallel to `editorState.text`'s lines. The
+     * head id is what `matchLinesToIds` Phase 0 uses to detect foreign-tree
+     * paste lines (carrying the source session's real id) and preserve
+     * them through save instead of re-allocating a fresh doc.
+     */
+    fun getEditorNoteIds(): List<String?> =
+        editorState.lines.map { it.noteIds.firstOrNull() }
+
+    /**
      * The current content of the editor.
      */
     val currentContent: String

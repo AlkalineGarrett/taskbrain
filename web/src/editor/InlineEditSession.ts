@@ -97,6 +97,16 @@ export class InlineEditSession {
   }
 
   /**
+   * Per-line head noteIds, parallel to `getText()`'s lines. The head id
+   * is what `matchLinesToIds` Phase 0 uses to detect foreign-tree paste
+   * lines (carrying the source session's real id) and preserve them
+   * through save instead of re-allocating a fresh doc.
+   */
+  getEditorNoteIds(): (string | null)[] {
+    return this.editorState.lines.map((l) => l.noteIds[0] ?? null)
+  }
+
+  /**
    * Builds tracked lines (content + noteId) from editor state, ready for
    * saveNoteWithChildren. Mirrors the main editor's save path in useEditor.
    */
@@ -114,14 +124,18 @@ export class InlineEditSession {
   }
 
   /**
-   * Merges newly created noteIds (from Firestore save) into the editor state
-   * so subsequent saves preserve child note associations without page refresh.
+   * Replaces sentinel placeholders with the real Firestore ids the save
+   * just allocated, so subsequent saves see real-id lines and don't try
+   * to allocate a second doc. `createdIds.get(i)` is set iff line `i`
+   * arrived as a sentinel; for those lines we drop the sentinel and
+   * keep the new id alone (matches the main editor's applyResult shape).
+   * Lines without a createdId entry are left untouched.
    */
   applyCreatedIds(createdIds: Map<number, string>): void {
     if (createdIds.size === 0) return
     const updatedNoteIds = this.editorState.lines.map((line, i) => {
       const newId = createdIds.get(i)
-      return newId ? [newId, ...line.noteIds] : line.noteIds
+      return newId ? [newId] : line.noteIds
     })
     this.editorState.updateNoteIds(updatedNoteIds)
   }

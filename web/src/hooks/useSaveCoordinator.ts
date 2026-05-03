@@ -142,8 +142,9 @@ export function useSaveCoordinator({
       const inlineSlots = await Promise.all(
         dirtySessions.map(async (session): Promise<SaveSlot> => {
           const content = session.getText()
+          // See matchLinesToIds Phase 0 for why we pass editorNoteIds.
           const tracked = await noteRepo.prepareInlineEditTrackedLines(
-            session.noteId, content, 'saveAll',
+            session.noteId, content, 'saveAll', session.getEditorNoteIds(),
           )
           return {
             noteId: session.noteId,

@@ -1353,12 +1353,14 @@ export function matchLinesToIds(
   const oldConsumed = new Array(existingLines.length).fill(false) as boolean[]
 
   // Phase 0: Use editor-provided noteIds for foreign notes (reparented from another tree).
-  // Only trust editor noteIds that aren't already in this tree's existing lines —
-  // existing notes are matched more reliably by content in phases 1-3.
+  // Only trust real ids that aren't already in this tree's existing lines —
+  // existing notes are matched more reliably by content in phases 1-3, and
+  // sentinels are per-allocation unique so they'd spuriously pass the set
+  // check; the save planner resolves them.
   if (editorNoteIds) {
     for (let i = 0; i < newLinesContent.length; i++) {
       const editorId = editorNoteIds[i]
-      if (editorId && !existingNoteIdSet.has(editorId)) {
+      if (editorId && isRealNoteId(editorId) && !existingNoteIdSet.has(editorId)) {
         newIds[i] = editorId
       }
     }

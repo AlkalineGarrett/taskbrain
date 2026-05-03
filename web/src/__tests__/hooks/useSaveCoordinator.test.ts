@@ -215,6 +215,36 @@ describe('useSaveCoordinator', () => {
     expect(invalidate).toHaveBeenCalled()
   })
 
+  // Regression: cross-session paste — a line cut from another inline
+  // session and pasted in carries a real noteId from the source session.
+  // matchLinesToIds Phase 0 needs that id to recognize it as foreign and
+  // avoid allocating a fresh doc; saveAll used to drop it on the floor.
+  it('passes the editor per-line noteIds through to prepareInlineEditTrackedLines', async () => {
+    const sessionManager = new InlineSessionManager()
+    await sessionManager.ensureSessions(
+      [note({ id: 'sessB', content: 'b root\nb child' })],
+      async (id) => [
+        { content: 'b root', noteId: id },
+        { content: 'b child', noteId: `${id}-l1` },
+      ],
+    )
+    const session = sessionManager.getSession('sessB')!
+    // Simulate a cross-session paste: a line carrying a foreign real id.
+    session.editorState.lines[1]!.noteIds = ['cut_from_sessA']
+    session.editorState.lines[1]!.updateFull('pasted line', 11)
+    getNoteByIdSpy.mockImplementation((id: string) => note({ id, content: 'old' }))
+
+    const { result } = setup({ sessionManager })
+    await act(async () => { await result.current.saveAll() })
+
+    expect(prepareInlineSpy).toHaveBeenCalledWith(
+      'sessB',
+      expect.any(String),
+      'saveAll',
+      expect.arrayContaining(['cut_from_sessA']),
+    )
+  })
+
   it('on unmount, dirty inline sessions are auto-saved', async () => {
     const sessionManager = new InlineSessionManager()
     await sessionManager.ensureSessions(

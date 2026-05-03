@@ -136,4 +136,31 @@ describe('InlineEditSession', () => {
     const linesAfter = session.editorState.lines.map(l => l.text)
     expect(linesAfter).toEqual(linesBefore)
   })
+
+  // --- applyCreatedIds ---
+
+  // Regression: a line carrying a sentinel (or any prior id) used to end
+  // up with both the sentinel and the new id stacked in `noteIds` after
+  // a save — the bare sentinel survived alongside the real id and the
+  // editor's gutter rendered both.
+  it('applyCreatedIds replaces the existing noteIds with the newly-allocated id', () => {
+    const session = new InlineEditSession(
+      'note1',
+      linesFromContent('note1', 'root\nchild'),
+    )
+    // Simulate a freshly-typed child line carrying a sentinel pre-save.
+    session.editorState.lines[1]!.noteIds = ['@typed_abc']
+    session.applyCreatedIds(new Map([[1, 'real_id_xyz']]))
+    expect(session.editorState.lines[1]!.noteIds).toEqual(['real_id_xyz'])
+  })
+
+  it('applyCreatedIds leaves untouched lines whose index has no mapping', () => {
+    const session = new InlineEditSession(
+      'note1',
+      linesFromContent('note1', 'root\nchild'),
+    )
+    session.editorState.lines[1]!.noteIds = ['existing_real_id']
+    session.applyCreatedIds(new Map([[2, 'unused']]))
+    expect(session.editorState.lines[1]!.noteIds).toEqual(['existing_real_id'])
+  })
 })

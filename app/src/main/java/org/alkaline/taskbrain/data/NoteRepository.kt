@@ -775,7 +775,11 @@ class NoteRepository(
      * Used for inline editing of notes within view directives.
      */
     suspend fun saveNoteWithFullContent(noteId: String, newContent: String): Result<Unit> = ioLogged("saveNoteWithFullContent") {
-        val trackedLines = prepareInlineEditTrackedLines(noteId, newContent, "saveNoteWithFullContent")
+        // No editorNoteIds on this legacy unmount path — content is the only
+        // signal we have. Save will fall back to content/positional matching.
+        val trackedLines = prepareInlineEditTrackedLines(
+            noteId, newContent, "saveNoteWithFullContent", editorNoteIds = null,
+        )
         // No edit-session anchor on this legacy path — pass null so planSave
         // skips the 3-way merge and writes through.
         saveNoteWithChildren(
@@ -799,6 +803,7 @@ class NoteRepository(
         noteId: String,
         newContent: String,
         operation: String,
+        editorNoteIds: List<String?>?,
     ): List<NoteLine> {
         requireUserId()
         assertNoteStoreLoaded(operation, noteId)
@@ -807,7 +812,7 @@ class NoteRepository(
         val existingLines = NoteStore.getNoteLinesById(noteId)
             ?: loadNoteWithChildren(noteId).getOrThrow().lines
 
-        return matchLinesToIds(noteId, existingLines, newContent.lines())
+        return matchLinesToIds(noteId, existingLines, newContent.lines(), editorNoteIds)
     }
 
     /**
@@ -987,14 +992,36 @@ class NoteRepository(
     private fun matchLinesToIds(
         parentNoteId: String,
         existingLines: List<NoteLine>,
-        newLinesContent: List<String>
+        newLinesContent: List<String>,
+        editorNoteIds: List<String?>?,
     ): List<NoteLine> {
+        // Phase 0 — foreign-id detection. When the editor hands us a real
+        // noteId for a line that ISN'T part of this note's tree, trust it.
+        // Lines pasted from another inline session carry the source note's
+        // real id; without this phase, content matching falls through to a
+        // fresh sentinel, the planner allocates a new doc, and the original
+        // gets parked as cut-delete instead of reparented. Mirrors the web
+        // matchLinesToIds Phase 0. Sentinel ids are excluded — they're
+        // per-allocation unique and would spuriously clear the
+        // existingNoteIdSet check; the save planner is responsible for
+        // resolving those.
+        val foreignIds: Array<String?>? = editorNoteIds?.let { ids ->
+            val existingNoteIdSet = existingLines.mapNotNull { it.noteId }.toSet()
+            Array(newLinesContent.size) { i ->
+                val editorId = ids.getOrNull(i) ?: return@Array null
+                if (!NoteIdSentinel.isRealNoteId(editorId)) return@Array null
+                if (editorId in existingNoteIdSet) return@Array null
+                editorId
+            }
+        }
+
         if (existingLines.isEmpty()) {
             return newLinesContent.mapIndexed { index, content ->
                 NoteLine(
                     content,
-                    if (index == 0) parentNoteId
-                    else NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED),
+                    foreignIds?.get(index)
+                        ?: if (index == 0) parentNoteId
+                        else NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED),
                 )
             }
         }
@@ -1024,7 +1051,8 @@ class NoteRepository(
         return newLinesContent.mapIndexed { index, content ->
             NoteLine(
                 content,
-                withParent[index].firstOrNull()
+                foreignIds?.get(index)
+                    ?: withParent[index].firstOrNull()
                     ?: NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED),
             )
         }
