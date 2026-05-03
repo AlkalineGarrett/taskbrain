@@ -41,6 +41,25 @@ interface SavePlan {
    *  preservation. Used by [NoteRepository.buildCutDeleteOps] to decide
    *  whether a pendingCut is being revived in this batch. */
   survivingIds: Set<string>
+  /** Post-write `containedNotes` for every saved id (root + each
+   *  descendant in the plan), keyed by the post-allocate effective id.
+   *  The editor refreshes its `localBases` from this so the next save's
+   *  3-way merge has an accurate base — independent of the Firestore
+   *  listener echo, which races with applyResult and can leave
+   *  `rawNotes[noteId].containedNotes` stale for a brief window after a
+   *  newly-created note's first save. */
+  postSaveContainedNotes: Map<string, string[]>
+}
+
+/**
+ * Outcome of a successful save: the line-index → newly-allocated-id
+ * map [createdIds], plus [postSaveContainedNotes] (see [SavePlan])
+ * which the editor uses to refresh its localBases without going
+ * through the listener cache.
+ */
+export interface SaveResult {
+  createdIds: Map<number, string>
+  postSaveContainedNotes: Map<string, string[]>
 }
 
 /**
@@ -470,9 +489,11 @@ export class NoteRepository {
     noteId: string,
     trackedLines: NoteLine[],
     localBases: Map<string, string[]> | null,
-  ): Promise<Map<number, string>> {
+  ): Promise<SaveResult> {
     return this.logged('saveNoteWithChildren', async () => {
-      if (trackedLines.length === 0) return new Map()
+      if (trackedLines.length === 0) {
+        return { createdIds: new Map(), postSaveContainedNotes: new Map() }
+      }
       const userId = this.requireUserId()
       return this.withPendingOp(async (opId) => {
         const ctx: SaveContext = { userId, opId, pendingCuts: noteStore.getPendingCuts() }
@@ -480,7 +501,10 @@ export class NoteRepository {
         const cutDeleteOps = this.buildCutDeleteOps([plan.survivingIds], ctx)
         await this.commitInBatches('saveNoteWithChildren', [...plan.ops, ...cutDeleteOps.ops])
         for (const id of cutDeleteOps.committedCutIds) noteStore.clearPendingCut(id)
-        return plan.createdIds
+        return {
+          createdIds: plan.createdIds,
+          postSaveContainedNotes: plan.postSaveContainedNotes,
+        }
       })
     })
   }
@@ -494,7 +518,7 @@ export class NoteRepository {
    */
   async saveMultipleNotes(
     items: SaveItem[],
-  ): Promise<Map<string, Map<number, string>>> {
+  ): Promise<Map<string, SaveResult>> {
     return this.logged('saveMultipleNotes', async () => {
       if (items.length === 0) return new Map()
       const userId = this.requireUserId()
@@ -507,9 +531,12 @@ export class NoteRepository {
         const allOps = plans.flatMap((p) => p.ops).concat(cutDeleteOps.ops)
         await this.commitInBatches('saveMultipleNotes', allOps)
         for (const id of cutDeleteOps.committedCutIds) noteStore.clearPendingCut(id)
-        const result = new Map<string, Map<number, string>>()
+        const result = new Map<string, SaveResult>()
         for (const plan of plans) {
-          result.set(plan.noteId, plan.createdIds)
+          result.set(plan.noteId, {
+            createdIds: plan.createdIds,
+            postSaveContainedNotes: plan.postSaveContainedNotes,
+          })
         }
         return result
       })
@@ -786,7 +813,12 @@ export class NoteRepository {
     for (const [lineIndex, ref] of newRefs) {
       createdIds.set(lineIndex, ref.id)
     }
-    return { noteId, ops, createdIds, survivingIds }
+    const postSaveContainedNotes = new Map<string, string[]>()
+    postSaveContainedNotes.set(noteId, mergedContained[0]!)
+    for (let i = 1; i < linesToSave.length; i++) {
+      postSaveContainedNotes.set(effectiveId(i), mergedContained[i]!)
+    }
+    return { noteId, ops, createdIds, survivingIds, postSaveContainedNotes }
   }
 
   /**
@@ -980,7 +1012,8 @@ export class NoteRepository {
         noteId, newContent, 'saveNoteWithFullContent', editorNoteIds,
       )
       // No edit-session anchor on this legacy path — skip the 3-way merge.
-      return this.saveNoteWithChildren(noteId, trackedLines, null)
+      const result = await this.saveNoteWithChildren(noteId, trackedLines, null)
+      return result.createdIds
     })
   }
 

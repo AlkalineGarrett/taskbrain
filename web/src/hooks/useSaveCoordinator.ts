@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { doc, updateDoc } from 'firebase/firestore'
 import type { NoteLine } from '@/data/Note'
-import { NoteRepository, withStampedWrite } from '@/data/NoteRepository'
+import { NoteRepository, withStampedWrite, type SaveResult } from '@/data/NoteRepository'
 import { noteStore } from '@/data/NoteStore'
 import type { InlineEditSession } from '@/editor/InlineEditSession'
 import type { InlineSessionManager } from '@/editor/InlineSessionManager'
@@ -16,10 +16,15 @@ interface UseSaveCoordinatorOptions {
     trackedLines: NoteLine[]
     localBases: Map<string, string[]> | null
     text: string
-    applyResult: (createdIds: Map<number, string>) => void
+    applyResult: (result: SaveResult) => void
   }
   setSaveError: (msg: string | null) => void
   dirty: boolean
+  /** True when the current note is flagged as needing a structural fix
+   *  (e.g., orphan refs in `containedNotes`). Triggers a main-note save
+   *  even when not dirty so the editor's filtered view (which already
+   *  drops the orphan) is written through to Firestore. */
+  needsFix: boolean
   sessionManager: InlineSessionManager
   invalidateAndRecompute: () => void
   pendingOnceCacheEntries: Record<string, Record<string, unknown>> | null
@@ -29,7 +34,12 @@ interface SaveSlot {
   noteId: string
   trackedLines: NoteLine[]
   localBases: Map<string, string[]> | null
-  applyResult: (createdIds: Map<number, string>) => void
+  applyResult: (result: SaveResult) => void
+}
+
+const EMPTY_SAVE_RESULT: SaveResult = {
+  createdIds: new Map(),
+  postSaveContainedNotes: new Map(),
 }
 
 /**
@@ -44,6 +54,7 @@ export function useSaveCoordinator({
   prepareMainSaveItem,
   setSaveError,
   dirty,
+  needsFix,
   sessionManager,
   invalidateAndRecompute,
   pendingOnceCacheEntries,
@@ -56,6 +67,11 @@ export function useSaveCoordinator({
     session.controller.sortCompletedToBottom()
     const content = session.getText()
     noteStore.updateContentIfChanged(session.noteId, content)
+    // saveNoteWithFullContent is a legacy unmount/beforeunload path that
+    // doesn't track the edit-session's localBases (`null` is passed into
+    // saveNoteWithChildren), so there's no localBase to refresh here. The
+    // next full session load will populate it from rawNotes (which by then
+    // will have caught up via the listener).
     const savePromise = noteStore.enqueueSave(() =>
       noteRepo.saveNoteWithFullContent(session.noteId, content),
     )
@@ -93,7 +109,11 @@ export function useSaveCoordinator({
   const saveAll = useCallback(async () => {
     setSaveStatus('saving')
     const dirtySessions = sessionManager.getAllDirtySessions()
-    if (!dirty && dirtySessions.length === 0) {
+    // needsFix forces a main-note save even when not dirty: the editor's
+    // reconstructed view already drops the orphan ref, so writing the
+    // current containedNotes through to Firestore heals the doc.
+    const willSaveMain = !!noteId && (dirty || needsFix)
+    if (!willSaveMain && dirtySessions.length === 0) {
       setSaveStatus('saved')
       return
     }
@@ -105,7 +125,7 @@ export function useSaveCoordinator({
     try {
       const slots: SaveSlot[] = []
 
-      if (dirty && noteId) {
+      if (willSaveMain && noteId) {
         const main = prepareMainSaveItem(noteId)
         slots.push({
           noteId,
@@ -129,10 +149,10 @@ export function useSaveCoordinator({
             noteId: session.noteId,
             trackedLines: tracked,
             localBases: session.getLocalBases(),
-            applyResult: (createdIds) => {
-              session.applyCreatedIds(createdIds)
+            applyResult: (result) => {
+              session.applyCreatedIds(result.createdIds)
               session.markSaved(content)
-              session.refreshLocalBase()
+              session.refreshLocalBase(result.postSaveContainedNotes)
             },
           }
         }),
@@ -152,11 +172,15 @@ export function useSaveCoordinator({
       // Single-promise fan-out: every dirty noteId sees the batch in
       // awaitPendingSave, matching the all-or-nothing batch contract.
       for (const slot of slots) noteStore.trackSave(slot.noteId, savePromise)
-      const idsByNote = await savePromise
+      const resultsByNote = await savePromise
 
       for (const slot of slots) {
-        slot.applyResult(idsByNote.get(slot.noteId) ?? new Map<number, string>())
+        slot.applyResult(resultsByNote.get(slot.noteId) ?? EMPTY_SAVE_RESULT)
       }
+      // Optimistic UI flip: the save wrote the editor's filtered view as
+      // the new containedNotes, so the parent no longer references the
+      // orphan. Clear before the listener echo arrives.
+      if (needsFix && noteId) noteStore.markNoteFixed(noteId)
 
       await flushOnceCacheEntries()
       invalidateAndRecompute()
@@ -166,7 +190,7 @@ export function useSaveCoordinator({
       setSaveError(e instanceof Error ? e.message : 'Save failed')
       setSaveStatus('partial-error')
     }
-  }, [noteId, dirty, sessionManager, prepareMainSaveItem, setSaveError, flushOnceCacheEntries, invalidateAndRecompute])
+  }, [noteId, dirty, needsFix, sessionManager, prepareMainSaveItem, setSaveError, flushOnceCacheEntries, invalidateAndRecompute])
 
   useEffect(() => {
     if (anyDirty && (saveStatus === 'saved' || saveStatus === 'partial-error')) {

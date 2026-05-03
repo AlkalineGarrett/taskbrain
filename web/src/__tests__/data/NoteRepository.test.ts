@@ -261,7 +261,7 @@ describe('NoteRepository', () => {
         { content: 'Content', noteId: 'note_1' },
       ], null)
 
-      expect(result).toBeInstanceOf(Map)
+      expect(result.createdIds).toBeInstanceOf(Map)
       expect(batch.commit).toHaveBeenCalled()
     })
 
@@ -365,7 +365,7 @@ describe('NoteRepository', () => {
         { content: '\tNew child', noteId: newSentinelNoteId('typed') },
       ], null)
 
-      expect(result.get(1)).toBe('new_child')
+      expect(result.createdIds.get(1)).toBe('new_child')
     })
 
     it('persists trailing empty lines as docs', async () => {
@@ -383,9 +383,9 @@ describe('NoteRepository', () => {
         { content: '', noteId: newSentinelNoteId('typed') },
       ], null)
 
-      expect(result.size).toBe(2)
-      expect(result.get(1)).toBe('new_1')
-      expect(result.get(2)).toBe('new_2')
+      expect(result.createdIds.size).toBe(2)
+      expect(result.createdIds.get(1)).toBe('new_1')
+      expect(result.createdIds.get(2)).toBe('new_2')
     })
 
     it('persists multiple trailing empty lines as docs', async () => {
@@ -406,11 +406,11 @@ describe('NoteRepository', () => {
       ], null)
 
       // Child + 3 trailing empties = 4 new docs.
-      expect(result.size).toBe(4)
-      expect(result.get(1)).toBe('new_1')
-      expect(result.get(2)).toBe('new_2')
-      expect(result.get(3)).toBe('new_3')
-      expect(result.get(4)).toBe('new_4')
+      expect(result.createdIds.size).toBe(4)
+      expect(result.createdIds.get(1)).toBe('new_1')
+      expect(result.createdIds.get(2)).toBe('new_2')
+      expect(result.createdIds.get(3)).toBe('new_3')
+      expect(result.createdIds.get(4)).toBe('new_4')
     })
 
     it('sentinel noteIds are written to a fresh ref via CREATE with userId', async () => {
@@ -430,7 +430,7 @@ describe('NoteRepository', () => {
         { content: '\tPasted line', noteId: sentinel },
       ], null)
 
-      expect(result.get(1)).toBe('fresh_id')
+      expect(result.createdIds.get(1)).toBe('fresh_id')
 
       const writeToFreshRef = setSpy.mock.calls.find((c) => c[0] === freshRef)
       expect(writeToFreshRef).toBeDefined()
@@ -480,7 +480,7 @@ describe('NoteRepository', () => {
         { content: '• Item A', noteId: sentinel },
       ], null)
 
-      expect(result.get(1)).toBe('fresh_id')
+      expect(result.createdIds.get(1)).toBe('fresh_id')
       // Sentinels carry no null-id signal, so no user-facing warning is raised.
       expect(raiseWarningSpy).not.toHaveBeenCalled()
     })
@@ -498,7 +498,7 @@ describe('NoteRepository', () => {
         { content: '\t   ', noteId: newSentinelNoteId('typed') }, // Tab + whitespace — whitespace is content
       ], null)
 
-      expect(result.get(1)).toBe('new_child')
+      expect(result.createdIds.get(1)).toBe('new_child')
     })
   })
 
@@ -1439,14 +1439,42 @@ describe('NoteRepository', () => {
         { content: '\t\tB', noteId: newSentinelNoteId('typed') },
       ], null)
 
-      expect(result.get(1)).toBe('child_a')
-      expect(result.get(2)).toBe('child_b')
+      expect(result.createdIds.get(1)).toBe('child_a')
+      expect(result.createdIds.get(2)).toBe('child_b')
     })
 
     it('returns empty map for empty lines', async () => {
       const result = await repository.saveNoteWithChildren('note_1', [], null)
 
-      expect(result.size).toBe(0)
+      expect(result.createdIds.size).toBe(0)
+      expect(result.postSaveContainedNotes.size).toBe(0)
+    })
+
+    // Mirrors the Android `StaleLocalBaseRaceTest` post-write contract.
+    // The editor uses `postSaveContainedNotes` to refresh its localBases
+    // without going through the listener cache, side-stepping the race
+    // where rawNotes can lag behind a just-committed write.
+    it('returns postSaveContainedNotes for the root and every saved descendant', async () => {
+      let counter = 0
+      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
+        if (args.length === 1) return { id: `child_${++counter}` } as any
+        return { id: args[args.length - 1] } as any
+      })
+      setupSaveBatch()
+
+      const result = await repository.saveNoteWithChildren('note_1', [
+        { content: 'Parent', noteId: 'note_1' },
+        { content: '\tA', noteId: newSentinelNoteId('typed') },
+        { content: '\tB', noteId: newSentinelNoteId('typed') },
+      ], null)
+
+      const aId = result.createdIds.get(1)!
+      const bId = result.createdIds.get(2)!
+      expect(aId).toBe('child_1')
+      expect(bId).toBe('child_2')
+      expect(result.postSaveContainedNotes.get('note_1')).toEqual([aId, bId])
+      expect(result.postSaveContainedNotes.get(aId)).toEqual([])
+      expect(result.postSaveContainedNotes.get(bId)).toEqual([])
     })
   })
 
@@ -1561,13 +1589,12 @@ describe('NoteRepository', () => {
       vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c1', 'c2', 'c3', 'c4']))
       setupBatch()
 
-      await expect(
-        repository.saveNoteWithChildren('root', [
-          { content: 'Root', noteId: 'root' },
-          { content: '\tc1', noteId: 'c1' },
-          { content: '\tc2', noteId: 'c2' },
-        ], null),
-      ).resolves.toBeInstanceOf(Map)
+      const result = await repository.saveNoteWithChildren('root', [
+        { content: 'Root', noteId: 'root' },
+        { content: '\tc1', noteId: 'c1' },
+        { content: '\tc2', noteId: 'c2' },
+      ], null)
+      expect(result.createdIds).toBeInstanceOf(Map)
     })
 
     it('does not trip when fewer than 3 declared children exist', async () => {
@@ -1579,9 +1606,10 @@ describe('NoteRepository', () => {
       vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c1', 'c2']))
       setupBatch()
 
-      await expect(
-        repository.saveNoteWithChildren('root', [{ content: 'Root', noteId: 'root' }], null),
-      ).resolves.toBeInstanceOf(Map)
+      const result = await repository.saveNoteWithChildren(
+        'root', [{ content: 'Root', noteId: 'root' }], null,
+      )
+      expect(result.createdIds).toBeInstanceOf(Map)
     })
 
     it('ignores orphan containedNotes refs (declared but not in NoteStore)', async () => {
@@ -1595,12 +1623,11 @@ describe('NoteRepository', () => {
       vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c1']))
       setupBatch()
 
-      await expect(
-        repository.saveNoteWithChildren('root', [
-          { content: 'Root', noteId: 'root' },
-          { content: '\tc1', noteId: 'c1' },
-        ], null),
-      ).resolves.toBeInstanceOf(Map)
+      const result = await repository.saveNoteWithChildren('root', [
+        { content: 'Root', noteId: 'root' },
+        { content: '\tc1', noteId: 'c1' },
+      ], null)
+      expect(result.createdIds).toBeInstanceOf(Map)
     })
   })
 

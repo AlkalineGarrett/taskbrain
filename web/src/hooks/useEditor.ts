@@ -3,7 +3,7 @@ import { EditorState } from '@/editor/EditorState'
 import { EditorController } from '@/editor/EditorController'
 import { UndoManager, type UndoManagerState } from '@/editor/UndoManager'
 import { toEditorLines, type EditorLineInput, type NoteLine } from '@/data/Note'
-import { NoteRepository } from '@/data/NoteRepository'
+import { NoteRepository, type SaveResult } from '@/data/NoteRepository'
 import { NoteStatsRepository } from '@/data/NoteStatsRepository'
 import { noteStore } from '@/data/NoteStore'
 import { resolveNoteIds } from '@/editor/resolveNoteIds'
@@ -304,7 +304,7 @@ export function useEditor(noteId: string | undefined) {
     /** Joined text of the editor's current lines — used by the save
      *  coordinator for optimistic NoteStore updates. */
     text: string
-    applyResult: (createdIds: Map<number, string>) => void
+    applyResult: (result: SaveResult) => void
   } => {
     controller.sortCompletedToBottom()
     controller.commitUndoState(true)
@@ -319,17 +319,19 @@ export function useEditor(noteId: string | undefined) {
     const localBases = localBasesRef.current
     const text = editorState.text
 
-    const applyResult = (createdIds: Map<number, string>) => {
+    const applyResult = (result: SaveResult) => {
       if (currentNoteIdRef.current !== targetNoteId) return
       editorState.updateNoteIds(
-        newTracked.map((line, index) => [createdIds.get(index) ?? line.noteId]),
+        newTracked.map((line, index) => [result.createdIds.get(index) ?? line.noteId]),
       )
-      captureLocalBase(targetNoteId)
+      // See InlineEditSession.refreshLocalBase for why we use the save's
+      // own post-write state instead of NoteStore.snapshotLocalBases.
+      localBasesRef.current = result.postSaveContainedNotes
       setDirty(false)
     }
 
     return { trackedLines: newTracked, localBases, text, applyResult }
-  }, [editorState, controller, captureLocalBase])
+  }, [editorState, controller])
 
   // Core save logic — accepts noteId to avoid stale closure bugs. Used by
   // unmount/beforeunload paths.
@@ -339,10 +341,10 @@ export function useEditor(noteId: string | undefined) {
       savingRef.current = true
 
       const { trackedLines, localBases, applyResult } = prepareMainSaveItem(targetNoteId)
-      const createdIds = await noteStore.enqueueSave(() =>
+      const result = await noteStore.enqueueSave(() =>
         repo.saveNoteWithChildren(targetNoteId, trackedLines, localBases),
       )
-      applyResult(createdIds)
+      applyResult(result)
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : ERROR_SAVE)
       throw e // Re-throw so unmount/beforeunload callers can persist the error
@@ -420,14 +422,6 @@ export function useEditor(noteId: string | undefined) {
   )
   const needsFix = !!(noteId && notesNeedingFix.has(noteId))
 
-  // Override `save` so it also fires when only needsFix is true (not just dirty).
-  const saveForFixOrEdit = useCallback(async () => {
-    if (!noteId) return
-    if (!dirty && !needsFix) return
-    await saveNoteById(noteId)
-    if (needsFix) noteStore.markNoteFixed(noteId)
-  }, [noteId, dirty, needsFix, saveNoteById])
-
   return {
     controller,
     editorState,
@@ -440,7 +434,6 @@ export function useEditor(noteId: string | undefined) {
     saveError,
     clearSaveError,
     dirty,
-    save: saveForFixOrEdit,
     prepareMainSaveItem,
     showCompleted,
     toggleShowCompleted,

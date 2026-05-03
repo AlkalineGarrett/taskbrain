@@ -56,9 +56,15 @@ class InlineEditSession(
 
     fun getLocalBases(): Map<String, List<String>> = localBases
 
-    /** Refresh from rawNote — call after a successful save. */
-    fun refreshLocalBase() {
-        localBases = NoteStore.snapshotLocalBases(noteId)
+    /**
+     * Refresh from the just-committed save's own post-write state.
+     * Reading from `NoteStore.snapshotLocalBases` here would race the
+     * Firestore listener echo: rawNotes may not yet reflect the save,
+     * leaving a stale base that causes the next save's 3-way merge to
+     * re-add removed items.
+     */
+    fun refreshLocalBase(postSaveContainedNotes: Map<String, List<String>>) {
+        localBases = postSaveContainedNotes
     }
 
     val isDirty: Boolean

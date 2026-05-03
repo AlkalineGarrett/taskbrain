@@ -344,6 +344,25 @@ class NoteRepository(
          *  preservation. Used by [buildCutDeleteOps] to decide whether a
          *  pendingCut is being revived in this batch. */
         val survivingIds: Set<String>,
+        /** Post-write `containedNotes` for every saved id (root + each
+         *  descendant in the plan), keyed by the post-allocate effective
+         *  id. The editor refreshes its `localBases` from this so the next
+         *  save's 3-way merge has an accurate base — independent of the
+         *  Firestore listener echo, which races with applyResult and can
+         *  leave `rawNotes[noteId].containedNotes` empty for a brief
+         *  window after a newly-created note's first save. */
+        val postSaveContainedNotes: Map<String, List<String>>,
+    )
+
+    /**
+     * Outcome of a successful save: the line-index → newly-allocated-id
+     * map [createdIds], plus [postSaveContainedNotes] (see [SavePlan])
+     * which the editor uses to refresh its localBases without going
+     * through the listener cache.
+     */
+    data class SaveResult(
+        val createdIds: Map<Int, String>,
+        val postSaveContainedNotes: Map<String, List<String>>,
     )
 
     /**
@@ -391,8 +410,8 @@ class NoteRepository(
         trackedLines: List<NoteLine>,
         extraOpsBuilder: ExtraOpsBuilder?,
         localBases: Map<String, List<String>>?,
-    ): Result<Map<Int, String>> = ioLogged("saveNoteWithChildren") body@{
-        if (trackedLines.isEmpty()) return@body emptyMap()
+    ): Result<SaveResult> = ioLogged("saveNoteWithChildren") body@{
+        if (trackedLines.isEmpty()) return@body SaveResult(emptyMap(), emptyMap())
         val userId = requireUserId()
         withPendingOp { opId ->
             val ctx = SaveContext(userId, opId, NoteStore.getPendingCuts())
@@ -402,7 +421,7 @@ class NoteRepository(
             val cutDelete = buildCutDeleteOps(listOf(plan.survivingIds), ctx)
             commitInBatches("saveNoteWithChildren", plan.ops + cutDelete.ops)
             for (id in cutDelete.committedCutIds) NoteStore.clearPendingCut(id)
-            plan.createdIds
+            SaveResult(plan.createdIds, plan.postSaveContainedNotes)
         }
     }
 
@@ -415,7 +434,7 @@ class NoteRepository(
      */
     suspend fun saveMultipleNotes(
         items: List<SaveItem>,
-    ): Result<Map<String, Map<Int, String>>> = ioLogged("saveMultipleNotes") body@{
+    ): Result<Map<String, SaveResult>> = ioLogged("saveMultipleNotes") body@{
         if (items.isEmpty()) return@body emptyMap()
         val userId = requireUserId()
         withPendingOp { opId ->
@@ -432,7 +451,9 @@ class NoteRepository(
             val allOps = plans.flatMap { it.ops } + cutDelete.ops
             commitInBatches("saveMultipleNotes", allOps)
             for (id in cutDelete.committedCutIds) NoteStore.clearPendingCut(id)
-            plans.associate { it.noteId to it.createdIds }
+            plans.associate {
+                it.noteId to SaveResult(it.createdIds, it.postSaveContainedNotes)
+            }
         }
     }
 
@@ -721,11 +742,18 @@ class NoteRepository(
             ops.add(BatchOp(extra.ref, extra.data, extra.merge))
         }
 
+        val postSaveContainedNotes = HashMap<String, List<String>>(linesToSave.size).apply {
+            put(noteId, mergedContained[0])
+            for (i in 1 until linesToSave.size) {
+                put(effectiveId(i), mergedContained[i])
+            }
+        }
         return SavePlan(
             noteId = noteId,
             ops = ops,
             createdIds = newRefs.mapValues { it.value.id },
             survivingIds = survivingIds,
+            postSaveContainedNotes = postSaveContainedNotes,
         )
     }
 

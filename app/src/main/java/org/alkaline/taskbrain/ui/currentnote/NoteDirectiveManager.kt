@@ -735,7 +735,7 @@ class NoteDirectiveManager(
     suspend fun saveInlineEditSessionWithExtras(
         session: InlineEditSession,
         extraOpsBuilder: NoteRepository.ExtraOpsBuilder,
-    ): Result<Map<Int, String>> {
+    ): Result<NoteRepository.SaveResult> {
         session.controller.sortCompletedToBottom()
         val trackedLines = session.getTrackedLines()
         val newContent = trackedLines.joinToString("\n") { it.content }
@@ -755,7 +755,9 @@ class NoteDirectiveManager(
                 session.noteId, trackedLines, extraOpsBuilder, session.getLocalBases(),
             )
         }
-        result.onSuccess {
+        result.onSuccess { saveResult ->
+            // Refresh from the save's own post-write state — see InlineEditSession.refreshLocalBase.
+            session.refreshLocalBase(saveResult.postSaveContainedNotes)
             MetadataHasher.invalidateCache()
             directiveCacheManager.clearAll()
             endInlineEditSession()

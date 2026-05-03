@@ -228,17 +228,18 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         noteId: String,
         trackedLines: List<NoteLine>,
         extraOpsBuilder: NoteRepository.ExtraOpsBuilder?,
-    ): Result<Map<Int, String>> {
+    ): Result<NoteRepository.SaveResult> {
         val result = NoteStore.enqueueSave {
             repository.saveNoteWithChildren(noteId, trackedLines, extraOpsBuilder, currentLocalBases)
         }
         result.fold(
-            onSuccess = { newIdsMap ->
+            onSuccess = { saveResult ->
                 // After a note switch during the save, `currentNoteLines` now
                 // holds the new note's lines — writing this save's ids onto it
                 // would cross-pollinate. Saved ids are in Firestore; next load
                 // picks them up.
                 val stillCurrent = currentNoteId == noteId
+                val newIdsMap = saveResult.createdIds
                 if (stillCurrent && newIdsMap.isNotEmpty()) {
                     val updated = currentNoteLines.toMutableList()
                     for ((index, newId) in newIdsMap) {
@@ -251,6 +252,8 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 }
                 alarmManager.syncAlarmLineContent(trackedLines)
                 if (stillCurrent) {
+                    // See InlineEditSession.refreshLocalBase.
+                    currentLocalBases = saveResult.postSaveContainedNotes
                     _saveStatus.value = UnifiedSaveStatus.Saved(noteId)
                     _saveCompleted.tryEmit(Unit)
                     markAsSaved()
@@ -943,8 +946,9 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 // mid-save tab switch; saved ids are persisted in Firestore.
                 val stillCurrent = currentNoteId == savedNoteId
                 result.fold(
-                    onSuccess = { idsByNote ->
-                        val mainNewIds = idsByNote[savedNoteId] ?: emptyMap()
+                    onSuccess = { resultsByNote ->
+                        val mainResult = resultsByNote[savedNoteId]
+                        val mainNewIds = mainResult?.createdIds ?: emptyMap()
                         if (stillCurrent && mainNewIds.isNotEmpty()) {
                             val updated = currentNoteLines.toMutableList()
                             for ((index, newId) in mainNewIds) {
@@ -960,12 +964,15 @@ class CurrentNoteViewModel @JvmOverloads constructor(
 
                         for ((session, _) in inlinePairs) {
                             session.markSaved()
-                            session.refreshLocalBase()
+                            resultsByNote[session.noteId]?.let {
+                                session.refreshLocalBase(it.postSaveContainedNotes)
+                            }
                         }
                         directiveManager.endInlineEditSession()
 
                         if (stillCurrent) {
-                            captureLocalBase(savedNoteId)
+                            // See InlineEditSession.refreshLocalBase.
+                            mainResult?.let { currentLocalBases = it.postSaveContainedNotes }
                             directiveManager.onSaveCompleted(content)
                             _saveStatus.value = UnifiedSaveStatus.Saved(savedNoteId)
                             _saveCompleted.tryEmit(Unit)

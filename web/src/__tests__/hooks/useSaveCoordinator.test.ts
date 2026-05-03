@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act, renderHook, waitFor } from '@testing-library/react'
 
-const { repoSaveSpy, multiSaveSpy, prepareInlineSpy, updateNoteSpy, updateContentIfChangedSpy, getNoteByIdSpy, trackSaveSpy, getNoteLinesByIdSpy, enqueueSaveSpy } = vi.hoisted(() => ({
+const { repoSaveSpy, multiSaveSpy, prepareInlineSpy, updateNoteSpy, updateContentIfChangedSpy, getNoteByIdSpy, trackSaveSpy, getNoteLinesByIdSpy, enqueueSaveSpy, markNoteFixedSpy } = vi.hoisted(() => ({
   repoSaveSpy: vi.fn(),
   multiSaveSpy: vi.fn(),
   prepareInlineSpy: vi.fn(),
@@ -11,6 +11,7 @@ const { repoSaveSpy, multiSaveSpy, prepareInlineSpy, updateNoteSpy, updateConten
   trackSaveSpy: vi.fn(),
   getNoteLinesByIdSpy: vi.fn(),
   enqueueSaveSpy: vi.fn(<T,>(op: () => Promise<T>) => op()),
+  markNoteFixedSpy: vi.fn(),
 }))
 
 vi.mock('@/firebase/config', () => ({
@@ -37,17 +38,20 @@ vi.mock('@/data/NoteStore', () => ({
     trackSave: trackSaveSpy,
     getNoteLinesById: getNoteLinesByIdSpy,
     enqueueSave: enqueueSaveSpy,
+    markNoteFixed: markNoteFixedSpy,
   },
 }))
 
 import { InlineSessionManager } from '@/editor/InlineSessionManager'
 import { useSaveCoordinator } from '@/hooks/useSaveCoordinator'
+import type { SaveResult } from '@/data/NoteRepository'
 import { note } from '../factories'
 
 function setup(opts: {
-  prepareMainSaveItem?: (id: string) => { trackedLines: { content: string; noteId: string | null }[]; applyResult: (ids: Map<number, string>) => void }
+  prepareMainSaveItem?: (id: string) => { trackedLines: { content: string; noteId: string | null }[]; applyResult: (result: SaveResult) => void }
   setSaveError?: (msg: string | null) => void
   dirty?: boolean
+  needsFix?: boolean
   noteId?: string | null
   pendingOnceCacheEntries?: Record<string, Record<string, unknown>> | null
   sessionManager?: InlineSessionManager
@@ -68,6 +72,7 @@ function setup(opts: {
       prepareMainSaveItem: prepareMainSaveItem as never,
       setSaveError,
       dirty,
+      needsFix: opts.needsFix ?? false,
       sessionManager,
       invalidateAndRecompute: invalidate,
       pendingOnceCacheEntries: opts.pendingOnceCacheEntries ?? null,
@@ -94,6 +99,27 @@ describe('useSaveCoordinator', () => {
     expect(result.current.saveStatus).toBe('idle')
     await act(async () => { await result.current.saveAll() })
     expect(result.current.saveStatus).toBe('saved')
+  })
+
+  // Regression: clicking Fix on a not-dirty note used to be a no-op
+  // (saveAll early-returned). With needsFix=true it must save the main
+  // note so the editor's filtered view (which already drops the orphan
+  // ref) is written through to Firestore, and clear the needs-fix flag.
+  it('saveAll runs the main-note save and clears needs-fix when needsFix=true even if not dirty', async () => {
+    const { result } = setup({ dirty: false, needsFix: true })
+    await act(async () => { await result.current.saveAll() })
+    expect(multiSaveSpy).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ noteId: 'note-1' })]),
+    )
+    expect(markNoteFixedSpy).toHaveBeenCalledWith('note-1')
+    expect(result.current.saveStatus).toBe('saved')
+  })
+
+  it('saveAll is a no-op when not dirty and not needs-fix', async () => {
+    const { result } = setup({ dirty: false, needsFix: false })
+    await act(async () => { await result.current.saveAll() })
+    expect(multiSaveSpy).not.toHaveBeenCalled()
+    expect(markNoteFixedSpy).not.toHaveBeenCalled()
   })
 
   it('saveAll reports partial-error when the batched save rejects', async () => {

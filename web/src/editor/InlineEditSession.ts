@@ -52,9 +52,14 @@ export class InlineEditSession {
     return this.localBases
   }
 
-  /** Refresh from rawNote — call after a successful save. */
-  refreshLocalBase(): void {
-    this.localBases = noteStore.snapshotLocalBases(this.noteId)
+  /**
+   * Refresh from the just-committed save's own post-write state. Reading
+   * from `noteStore.snapshotLocalBases` here would race the Firestore
+   * listener echo: rawNotes may not yet reflect the save, leaving a stale
+   * base that causes the next save's 3-way merge to re-add removed items.
+   */
+  refreshLocalBase(postSaveContainedNotes: Map<string, string[]>): void {
+    this.localBases = postSaveContainedNotes
   }
 
   /** Recompute hidden indices. When this session is rendered inside a parent

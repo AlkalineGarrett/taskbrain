@@ -100,6 +100,7 @@ export function NoteEditorScreen() {
     prepareMainSaveItem,
     setSaveError,
     dirty,
+    needsFix,
     sessionManager,
     invalidateAndRecompute,
     pendingOnceCacheEntries,

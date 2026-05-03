@@ -368,7 +368,7 @@ class NoteRepositoryTest {
             extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
-        assertEquals("new_child", result[1])
+        assertEquals("new_child", result.createdIds[1])
     }
 
     @Test
@@ -397,7 +397,7 @@ class NoteRepositoryTest {
             extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
-        assertEquals("sentinel allocates a fresh doc, never aliases to c1", "fresh_id", assigned[1])
+        assertEquals("sentinel allocates a fresh doc, never aliases to c1", "fresh_id", assigned.createdIds[1])
         // No null id was ever present, so no user-facing warning is raised.
         verify(exactly = 0) { NoteStore.raiseWarning(any()) }
     }
@@ -419,7 +419,7 @@ class NoteRepositoryTest {
             extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
-        assertEquals("fresh Firestore id replaces the sentinel", "fresh_id", result[1])
+        assertEquals("fresh Firestore id replaces the sentinel", "fresh_id", result.createdIds[1])
 
         // Sentinel lines must be written via the CREATE path (non-merge) with
         // userId; otherwise Firestore rejects as PERMISSION_DENIED.
@@ -479,9 +479,9 @@ class NoteRepositoryTest {
             extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
-        assertEquals(2, result.size)
-        assertEquals("child_1", result[1])
-        assertEquals("trailing", result[2])
+        assertEquals(2, result.createdIds.size)
+        assertEquals("child_1", result.createdIds[1])
+        assertEquals("trailing", result.createdIds[2])
     }
 
     @Test
@@ -505,11 +505,11 @@ class NoteRepositoryTest {
             extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
-        assertEquals(4, result.size)
-        assertEquals("child_1", result[1])
-        assertEquals("t1", result[2])
-        assertEquals("t2", result[3])
-        assertEquals("t3", result[4])
+        assertEquals(4, result.createdIds.size)
+        assertEquals("child_1", result.createdIds[1])
+        assertEquals("t1", result.createdIds[2])
+        assertEquals("t2", result.createdIds[3])
+        assertEquals("t3", result.createdIds[4])
     }
 
     @Test
@@ -533,10 +533,10 @@ class NoteRepositoryTest {
             extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
-        assertEquals(3, result.size)
-        assertEquals("middle", result[1])
-        assertEquals("child_1", result[2])
-        assertEquals("trailing", result[3])
+        assertEquals(3, result.createdIds.size)
+        assertEquals("middle", result.createdIds[1])
+        assertEquals("child_1", result.createdIds[2])
+        assertEquals("trailing", result.createdIds[3])
     }
 
     @Test
@@ -555,7 +555,7 @@ class NoteRepositoryTest {
             extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
-        assertEquals("new_child", result[1])
+        assertEquals("new_child", result.createdIds[1])
     }
 
     // region Save diff/skip Tests
@@ -1489,15 +1489,16 @@ class NoteRepositoryTest {
             extraOpsBuilder = null, localBases = null,
         ).getOrThrow()
 
-        assertEquals("child_a", result[1])
-        assertEquals("child_b", result[2])
+        assertEquals("child_a", result.createdIds[1])
+        assertEquals("child_b", result.createdIds[2])
     }
 
     @Test
     fun `saveNoteWithChildren returns empty map for empty lines`() = runTest {
         val result = repository.saveNoteWithChildren("note_1", emptyList(), extraOpsBuilder = null, localBases = null).getOrThrow()
 
-        assertEquals(emptyMap<Int, String>(), result)
+        assertEquals(emptyMap<Int, String>(), result.createdIds)
+        assertEquals(emptyMap<String, List<String>>(), result.postSaveContainedNotes)
     }
 
     @Test
@@ -1518,7 +1519,7 @@ class NoteRepositoryTest {
 
         val result = repository.saveNoteWithChildren("root", lines, extraOpsBuilder = null, localBases = null).getOrThrow()
 
-        assertEquals(501, result.size)
+        assertEquals(501, result.createdIds.size)
         // Should commit multiple batches (502 ops: 1 root + 501 children)
         verify(atLeast = 2) { batch.commit() }
     }
