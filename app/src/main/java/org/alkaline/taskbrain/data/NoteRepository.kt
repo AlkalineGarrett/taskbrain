@@ -391,6 +391,17 @@ class NoteRepository(
         val userId: String,
         val opId: String,
         val pendingCuts: Map<String, String>,
+        /** Real noteIds claimed by ANY session in the same `saveMultipleNotes`
+         *  batch. A line moved cross-note via paste-with-tryReclaim consumes
+         *  its pendingCut entry at paste time, so by save time the cut buffer
+         *  is empty — the source's planSave would otherwise add the line to
+         *  its toDelete (because it's no longer in source's trackedLines and
+         *  the buffer can't tell us it's being kept by another session).
+         *  Excluding this set from toDelete prevents the soft-delete from
+         *  racing against the destination's reparent write in the same batch.
+         *  Empty for single-note saves where cross-session coordination
+         *  doesn't apply. */
+        val globalSurvivingIds: Set<String>,
     )
 
     /**
@@ -414,7 +425,8 @@ class NoteRepository(
         if (trackedLines.isEmpty()) return@body SaveResult(emptyMap(), emptyMap())
         val userId = requireUserId()
         withPendingOp { opId ->
-            val ctx = SaveContext(userId, opId, NoteStore.getPendingCuts())
+            // Single-note save: no cross-session reparent coordination needed.
+            val ctx = SaveContext(userId, opId, NoteStore.getPendingCuts(), emptySet())
             val plan = planSaveNoteWithChildren(
                 noteId, trackedLines, extraOpsBuilder, localBases, ctx,
             )
@@ -438,7 +450,20 @@ class NoteRepository(
         if (items.isEmpty()) return@body emptyMap()
         val userId = requireUserId()
         withPendingOp { opId ->
-            val ctx = SaveContext(userId, opId, NoteStore.getPendingCuts())
+            // Pre-compute the union of real noteIds claimed across every
+            // session's trackedLines so each session's planSave can exclude
+            // them from toDelete — see SaveContext.globalSurvivingIds for
+            // the race this prevents.
+            val globalSurvivingIds = items.asSequence()
+                .flatMap { it.trackedLines.asSequence() }
+                .map { it.noteId }
+                .filter { NoteIdSentinel.isRealNoteId(it) }
+                .toSet()
+            val ctx = SaveContext(
+                userId, opId,
+                NoteStore.getPendingCuts(),
+                globalSurvivingIds,
+            )
             val plans = items
                 .filter { it.trackedLines.isNotEmpty() }
                 .map { item ->
@@ -590,7 +615,11 @@ class NoteRepository(
         // but their destination's planSave (or the cut-delete pass) handles
         // them — exclude from toDelete so this save doesn't soft-delete a
         // line that's being moved cross-note.
-        val toDelete = existingDescendantIds - survivingIds - pendingCuts.keys
+        // Cross-session reparent: see SaveContext.globalSurvivingIds. A
+        // line claimed by another session in the same batch is being kept
+        // (not deleted from existence), even if pendingCuts is already
+        // empty (e.g., paste consumed it via tryReclaim).
+        val toDelete = existingDescendantIds - survivingIds - pendingCuts.keys - ctx.globalSurvivingIds
 
         // Content-drop guard: compare against the note's containedNotes
         // intersected with real descendants. Orphan refs (containedNotes

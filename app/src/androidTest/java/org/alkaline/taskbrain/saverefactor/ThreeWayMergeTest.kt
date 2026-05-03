@@ -14,6 +14,7 @@ import org.alkaline.taskbrain.saverefactor.SaveRefactorTestSupport.repo
 import org.alkaline.taskbrain.saverefactor.SaveRefactorTestSupport.waitFor
 import org.alkaline.taskbrain.saverefactor.SaveRefactorTestSupport.waitForListener
 import org.alkaline.taskbrain.saverefactor.SaveRefactorTestSupport.writeAsOtherClient
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.BeforeClass
@@ -147,6 +148,61 @@ class ThreeWayMergeTest {
             midContained.size >= 3)
         assertTrue("g2 must not be soft-deleted",
             readRawNote(g2)!!["state"] == null)
+    }
+
+    /**
+     * IT-4b — IT-4a's scenario routed through the editor's actual save
+     * pipeline (`prepareInlineEditTrackedLines` + `matchLinesToIds`)
+     * instead of hand-built `NoteLine` objects. IT-4a passes the new
+     * line c3 as a pre-built sentinel; this variant builds the same
+     * trackedLines from text + per-line editorNoteIds so a regression
+     * in `matchLinesToIds` (e.g., dropping a foreign id, mis-assigning
+     * positional fallbacks) would surface here even if IT-4a passed.
+     */
+    @Test
+    fun rootLevelConcurrentAdditions_throughEditorPipeline_mergeStillSurvives() = runBlocking {
+        val uid = FirebaseAuth.getInstance().currentUser!!.uid
+        val rootId = repo().createMultiLineNote("R\n\tc1").getOrThrow()
+        waitForListener(rootId)
+        val c1 = NoteStore.getRawNoteById(rootId)!!.containedNotes.single()
+
+        val c2 = "external_${UUID.randomUUID()}"
+        writeAsOtherClient(
+            noteId = c2, userId = uid, content = "c2 from other",
+            parentNoteId = rootId, rootNoteId = rootId,
+        )
+        otherClientAppendChild(parentId = rootId, childId = c2)
+        waitFor(timeoutMs = 5_000) {
+            NoteStore.getRawNoteById(rootId)?.containedNotes?.contains(c2) == true
+        }
+
+        // Editor view AFTER the listener-driven external-change reload —
+        // text already includes c2 picked up from `loadNoteLinesAwait` —
+        // then the user types a new line at the bottom. editorNoteIds
+        // mirror the real shape: rootId, c1 (real), c2 (real), null for
+        // the brand-new line.
+        val tracked = repo().prepareInlineEditTrackedLines(
+            rootId, "R\n\tc1\n\tc2 from other\n\tlocal-new", "test",
+            editorNoteIds = listOf(rootId, c1, c2, null),
+        )
+        repo().saveNoteWithChildren(
+            rootId,
+            tracked,
+            extraOpsBuilder = null,
+            // Editor's localBases reflect the post-reload state (c1 + c2).
+            localBases = mapOf(rootId to listOf(c1, c2)),
+        ).getOrThrow()
+
+        @Suppress("UNCHECKED_CAST")
+        val finalContained = readRawNote(rootId)!!["containedNotes"] as List<String>
+        assertTrue("c1 survived", finalContained.contains(c1))
+        assertTrue("c2 (external) survived", finalContained.contains(c2))
+        assertEquals(
+            "expected c1 + c2 + freshly-allocated local (3 items); got $finalContained",
+            3, finalContained.size,
+        )
+        assertTrue("c2 must not be soft-deleted",
+            readRawNote(c2)!!["state"] == null)
     }
 
     @Suppress("unused")

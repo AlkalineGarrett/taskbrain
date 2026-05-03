@@ -72,6 +72,16 @@ interface SaveContext {
   userId: string
   opId: string
   pendingCuts: Map<string, string>
+  /** Real noteIds claimed by ANY session in the same `saveMultipleNotes`
+   *  batch. A line moved cross-note via paste-with-tryReclaim consumes its
+   *  pendingCut entry at paste time, so by save time the cut buffer is
+   *  empty — the source's planSave would otherwise add the line to its
+   *  toDelete (because it's no longer in source's trackedLines and the
+   *  buffer can't tell us it's being kept by another session). Excluding
+   *  this set from toDelete prevents the soft-delete from racing against
+   *  the destination's reparent write in the same batch. Empty for
+   *  single-note saves where cross-session coordination doesn't apply. */
+  globalSurvivingIds: Set<string>
 }
 
 /**
@@ -496,7 +506,12 @@ export class NoteRepository {
       }
       const userId = this.requireUserId()
       return this.withPendingOp(async (opId) => {
-        const ctx: SaveContext = { userId, opId, pendingCuts: noteStore.getPendingCuts() }
+        // Single-note save: no cross-session reparent coordination needed.
+        const ctx: SaveContext = {
+          userId, opId,
+          pendingCuts: noteStore.getPendingCuts(),
+          globalSurvivingIds: new Set(),
+        }
         const plan = this.planSave({ noteId, trackedLines, localBases }, ctx)
         const cutDeleteOps = this.buildCutDeleteOps([plan.survivingIds], ctx)
         await this.commitInBatches('saveNoteWithChildren', [...plan.ops, ...cutDeleteOps.ops])
@@ -523,7 +538,21 @@ export class NoteRepository {
       if (items.length === 0) return new Map()
       const userId = this.requireUserId()
       return this.withPendingOp(async (opId) => {
-        const ctx: SaveContext = { userId, opId, pendingCuts: noteStore.getPendingCuts() }
+        // Pre-compute the union of real noteIds claimed across every
+        // session's trackedLines so each session's planSave can exclude
+        // them from toDelete — see SaveContext.globalSurvivingIds for the
+        // race this prevents.
+        const globalSurvivingIds = new Set<string>()
+        for (const item of items) {
+          for (const line of item.trackedLines) {
+            if (isRealNoteId(line.noteId)) globalSurvivingIds.add(line.noteId!)
+          }
+        }
+        const ctx: SaveContext = {
+          userId, opId,
+          pendingCuts: noteStore.getPendingCuts(),
+          globalSurvivingIds,
+        }
         const plans = items
           .filter((item) => item.trackedLines.length > 0)
           .map((item) => this.planSave(item, ctx))
@@ -657,10 +686,15 @@ export class NoteRepository {
     // Cut lines awaiting paste in this session aren't local survivors here,
     // but their destination's planSave (or saveMultipleNotes' cut-delete pass)
     // handles them — exclude from toDelete so this save doesn't soft-delete
-    // a line that's being moved cross-note.
+    // a line that's being moved cross-note. globalSurvivingIds covers the
+    // case where the cut buffer was already drained by tryReclaim at paste
+    // time but the destination still claims the line in this batch.
     const toDelete = new Set<string>()
     for (const id of existingDescendantIds) {
-      if (!survivingIds.has(id) && !pendingCuts.has(id)) toDelete.add(id)
+      if (survivingIds.has(id)) continue
+      if (pendingCuts.has(id)) continue
+      if (ctx.globalSurvivingIds.has(id)) continue
+      toDelete.add(id)
     }
 
     this.assertNotContentDrop(noteId, trackedLines, linesToSave, existingDescendantIds, survivingIds, toDelete)

@@ -169,6 +169,63 @@ class ConcurrentEditsTest {
     }
 
     /**
+     * IT-C5 — IT-C1's scenario routed through the editor's actual save
+     * pipeline (`loadNoteLinesAwait` + `prepareInlineEditTrackedLines`)
+     * rather than hand-built `NoteLine` objects. After Client B's
+     * external edit lands via the listener, Client A's editor reloads
+     * via `loadNoteLinesAwait` — that's the call shape `useEditor`
+     * uses on external-change reload — then drives the save through
+     * `prepareInlineEditTrackedLines`. A regression in the loader
+     * (e.g., reconstruction dropping the externally-edited line) or
+     * in `matchLinesToIds` would surface here even if IT-C1 passes.
+     */
+    @Test
+    fun differentLineEdits_throughEditorReloadAndSave_bothSurvive() = runBlocking {
+        val rootId = repo().createMultiLineNote("R\n\ta1\n\ta2").getOrThrow()
+        waitForListener(rootId)
+        val children = NoteStore.getRawNoteById(rootId)!!.containedNotes
+        val (a1, a2) = children[0] to children[1]
+
+        firestore().collection("notes").document(a2).update(
+            mapOf(
+                "content" to "a2-from-other-client",
+                "version" to FieldValue.increment(1),
+                "lastWriterOpId" to "external_${UUID.randomUUID()}",
+                "updatedAt" to FieldValue.serverTimestamp(),
+            ),
+        ).await()
+        waitFor(timeoutMs = 5_000) {
+            NoteStore.getRawNoteById(a2)?.content == "a2-from-other-client"
+        }
+
+        // Editor's external-change handler reloads via loadNoteLinesAwait,
+        // then the editor renders the reloaded lines. Verify both lines
+        // are present (a regression where the loader dropped a remote-
+        // edited line would be caught here).
+        val reloaded = repo().loadNoteLinesAwait(rootId).getOrThrow()
+        assertEquals(
+            "loader returns root + 2 children with the remote edit applied",
+            listOf("R", "a1", "a2-from-other-client"),
+            reloaded.map { it.content },
+        )
+
+        // Editor types its own edit on a1, then saves through the
+        // pipeline. trackedLines come from prepareInlineEditTrackedLines
+        // — same call shape useSaveCoordinator.saveAll uses.
+        val tracked = repo().prepareInlineEditTrackedLines(
+            rootId, "R\n\ta1-edited-by-A\n\ta2-from-other-client", "test",
+            editorNoteIds = listOf(rootId, a1, a2),
+        )
+        repo().saveNoteWithChildren(
+            rootId, tracked, extraOpsBuilder = null,
+            localBases = mapOf(rootId to listOf(a1, a2)),
+        ).getOrThrow()
+
+        assertEquals("a1-edited-by-A", readRawNote(a1)!!["content"])
+        assertEquals("a2-from-other-client", readRawNote(a2)!!["content"])
+    }
+
+    /**
      * IT-C4 — Client A reparents x under c1; Client B reparents x under
      * c2. Last writer wins on x's `parentNoteId`. The wire-level
      * inconsistency where c2.containedNotes still lists x (B's write)
