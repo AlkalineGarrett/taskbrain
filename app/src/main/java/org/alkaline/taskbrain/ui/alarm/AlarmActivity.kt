@@ -137,7 +137,7 @@ fun AlarmScreen(
     // Load alarm data
     LaunchedEffect(alarmId) {
         withContext(Dispatchers.IO) {
-            val result = AlarmRepository().getAlarm(alarmId)
+            val result = AlarmRepository().getAlarmFromServer(alarmId)
             result.fold(
                 onSuccess = { alarm = it },
                 onFailure = { loadError = "Failed to load alarm: ${it.message}" }

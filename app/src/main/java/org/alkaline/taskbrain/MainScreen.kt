@@ -25,6 +25,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -54,6 +57,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
+import org.alkaline.taskbrain.data.NoteStore
 import org.alkaline.taskbrain.service.NotificationSyncer
 import org.alkaline.taskbrain.dsl.directives.ScheduleExecutionRepository
 import org.alkaline.taskbrain.ui.Dimens
@@ -152,7 +156,20 @@ fun MainScreen(
         Screen.Admin,
     )
 
+    // Global surface for `NoteStore.raiseWarning(...)` — listener failures
+    // and other data-layer warnings from anywhere in the app land here.
+    // Sole consumer: directive-save failures use a separate editor-only
+    // dialog channel via NoteDirectiveManager.setSaveWarning.
+    val snackbarHostState = remember { SnackbarHostState() }
+    val storeError by NoteStore.error.collectAsState()
+    LaunchedEffect(storeError) {
+        val msg = storeError ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(msg)
+        NoteStore.clearError()
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) { Snackbar(it) } },
         topBar = {
             // Only show top bar if not in login screen
             val navBackStackEntry by navController.currentBackStackEntryAsState()

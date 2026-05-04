@@ -28,7 +28,7 @@ class BootReceiver : BroadcastReceiver() {
                 val repository = AlarmRepository()
                 val scheduler = AlarmScheduler(context)
 
-                val result = repository.getPendingAlarms()
+                val result = repository.getPendingAlarmsFromServer()
 
                 result.fold(
                     onSuccess = { alarms ->

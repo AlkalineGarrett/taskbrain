@@ -1,18 +1,25 @@
 package org.alkaline.taskbrain.data
 
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
 /**
- * Repository for managing recurring alarm templates in Firestore.
- * Stored under /users/{userId}/recurringAlarms/{recurringAlarmId}
+ * Repository for managing recurring alarm templates under
+ * /users/{userId}/recurringAlarms/{id}. Same listener-backed cache shape
+ * as [AlarmRepository]; see `docs/firestore-efficiency.md` Principle 1.
  */
 class RecurringAlarmRepository(
     private val db: FirebaseFirestore = FirebaseFirestore.getInstance(),
@@ -29,6 +36,56 @@ class RecurringAlarmRepository(
 
     private fun newDocRef(userId: String): DocumentReference =
         collection(userId).document()
+
+    private fun ensureListenerAttached(): CompletableDeferred<Unit> {
+        synchronized(cacheLock) {
+            if (listener != null) return loadDeferred!!
+            val userId = auth.currentUser?.uid
+                ?: throw IllegalStateException("User not signed in")
+            val deferred = loadDeferred ?: CompletableDeferred<Unit>().also { loadDeferred = it }
+
+            listener = collection(userId)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        Log.e(
+                            TAG,
+                            "[recurringAlarms listener failed] userId=$userId\n${error.stackTraceToString()}",
+                            error,
+                        )
+                        NoteStore.raiseWarning(
+                            "Recurring-alarm sync failed. Recurrence templates may be stale " +
+                                "until you restart the app. Check logcat tag '$TAG'."
+                        )
+                        if (!deferred.isCompleted) deferred.complete(Unit)
+                        return@addSnapshotListener
+                    }
+                    if (snapshot == null) return@addSnapshotListener
+                    val firstAlreadyDelivered = deferred.isCompleted
+                    val isLocalEcho = firstAlreadyDelivered && snapshot.metadata.hasPendingWrites()
+                    val fromCache = snapshot.metadata.isFromCache
+                    val type = when {
+                        !firstAlreadyDelivered && fromCache -> FirestoreUsage.ReadType.LISTENER_INITIAL_CACHED
+                        !firstAlreadyDelivered -> FirestoreUsage.ReadType.LISTENER_INITIAL_FRESH
+                        isLocalEcho -> FirestoreUsage.ReadType.LISTENER_LOCAL_ECHO
+                        fromCache -> FirestoreUsage.ReadType.LISTENER_UPDATE_CACHED
+                        else -> FirestoreUsage.ReadType.LISTENER_UPDATE_FRESH
+                    }
+                    val docCount = if (firstAlreadyDelivered) snapshot.documentChanges.size else snapshot.size()
+                    FirestoreUsage.recordRead("RecurringAlarmRepo.listener", type, docCount)
+                    val recurring = snapshot.documents.mapNotNull { doc ->
+                        try {
+                            fromMap(doc.id, doc.data ?: emptyMap())
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error parsing recurring alarm", e)
+                            null
+                        }
+                    }
+                    _cachedRecurringAlarms.value = recurring
+                    if (!deferred.isCompleted) deferred.complete(Unit)
+                }
+            return deferred
+        }
+    }
 
     /** Mints a fresh recurringAlarm doc ID client-side, no Firestore write. */
     fun newRecurringAlarmId(): String = newDocRef(requireUserId()).id
@@ -91,64 +148,48 @@ class RecurringAlarmRepository(
     suspend fun deleteAll(): Result<Unit> = runCatching {
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
-            val result = collection(userId).get().await()
-            FirestoreUsage.recordRead("deleteAllRecurringAlarms", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
+            ensureListenerAttached().await()
+            val items = _cachedRecurringAlarms.value
+            if (items.isEmpty()) return@withContext
             val batch = db.batch()
-            for (doc in result.documents) {
-                batch.delete(doc.reference)
+            for (item in items) {
+                batch.delete(docRef(userId, item.id))
             }
             batch.commit().await()
-            FirestoreUsage.recordWrite("deleteAllRecurringAlarms", FirestoreUsage.WriteType.BATCH_COMMIT, result.documents.size)
-            Log.d(TAG, "Deleted all recurring alarms (${result.documents.size} documents)")
+            FirestoreUsage.recordWrite("deleteAllRecurringAlarms", FirestoreUsage.WriteType.BATCH_COMMIT, items.size)
+            Log.d(TAG, "Deleted all recurring alarms (${items.size} documents)")
             Unit
         }
     }.onFailure { Log.e(TAG, "Error deleting all recurring alarms", it) }
 
     suspend fun get(id: String): Result<RecurringAlarm?> = runCatching {
+        ensureListenerAttached().await()
+        _cachedRecurringAlarms.value.firstOrNull { it.id == id }
+    }.onFailure { Log.e(TAG, "Error getting recurring alarm", it) }
+
+    /**
+     * One-shot DOC_GET variant of [get] for cold-process callers
+     * (BroadcastReceivers, Activities launched from notifications) where
+     * a long-lived listener would be GC'd before delivering deltas. Same
+     * rationale as `AlarmRepository.getAlarmFromServer`.
+     */
+    suspend fun getFromServer(id: String): Result<RecurringAlarm?> = runCatching {
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             val doc = docRef(userId, id).get().await()
-            FirestoreUsage.recordRead("getRecurringAlarm", FirestoreUsage.ReadType.DOC_GET)
+            FirestoreUsage.recordRead("recurring.getFromServer", FirestoreUsage.ReadType.DOC_GET)
             if (doc.exists()) fromMap(doc.id, doc.data ?: emptyMap()) else null
         }
-    }.onFailure { Log.e(TAG, "Error getting recurring alarm", it) }
+    }.onFailure { Log.e(TAG, "Error getting recurring alarm from server", it) }
 
     suspend fun getActiveRecurringAlarms(): Result<List<RecurringAlarm>> = runCatching {
-        withContext(Dispatchers.IO) {
-            val userId = requireUserId()
-            val result = collection(userId)
-                .whereEqualTo("status", RecurringAlarmStatus.ACTIVE.name)
-                .get()
-                .await()
-            FirestoreUsage.recordRead("getActiveRecurringAlarms", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
-            result.documents.mapNotNull { doc ->
-                try {
-                    fromMap(doc.id, doc.data ?: emptyMap())
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error parsing recurring alarm", e)
-                    null
-                }
-            }
-        }
+        ensureListenerAttached().await()
+        _cachedRecurringAlarms.value.filter { it.status == RecurringAlarmStatus.ACTIVE }
     }.onFailure { Log.e(TAG, "Error getting active recurring alarms", it) }
 
     suspend fun getForNote(noteId: String): Result<List<RecurringAlarm>> = runCatching {
-        withContext(Dispatchers.IO) {
-            val userId = requireUserId()
-            val result = collection(userId)
-                .whereEqualTo("noteId", noteId)
-                .get()
-                .await()
-            FirestoreUsage.recordRead("getRecurringAlarmsForNote", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
-            result.documents.mapNotNull { doc ->
-                try {
-                    fromMap(doc.id, doc.data ?: emptyMap())
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error parsing recurring alarm", e)
-                    null
-                }
-            }
-        }
+        ensureListenerAttached().await()
+        _cachedRecurringAlarms.value.filter { it.noteId == noteId }
     }.onFailure { Log.e(TAG, "Error getting recurring alarms for note", it) }
 
     suspend fun recordCompletion(id: String, completionDate: Timestamp): Result<Unit> = runCatching {
@@ -247,17 +288,15 @@ class RecurringAlarmRepository(
     suspend fun updateLineContentForNote(noteId: String, newContent: String): Result<Unit> = runCatching {
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
-            val result = collection(userId)
-                .whereEqualTo("noteId", noteId)
-                .get()
-                .await()
-            FirestoreUsage.recordRead("recurring.updateLineContentForNote", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
+            ensureListenerAttached().await()
+            val matching = _cachedRecurringAlarms.value.filter { it.noteId == noteId }
+            if (matching.isEmpty()) return@withContext
             val batch = db.batch()
-            for (doc in result.documents) {
-                batch.update(doc.reference, mapOf("lineContent" to newContent))
+            for (item in matching) {
+                batch.update(docRef(userId, item.id), mapOf("lineContent" to newContent))
             }
             batch.commit().await()
-            FirestoreUsage.recordWrite("recurring.updateLineContentForNote", FirestoreUsage.WriteType.BATCH_COMMIT, result.documents.size)
+            FirestoreUsage.recordWrite("recurring.updateLineContentForNote", FirestoreUsage.WriteType.BATCH_COMMIT, matching.size)
         }
     }
 
@@ -315,5 +354,32 @@ class RecurringAlarmRepository(
 
     companion object {
         private const val TAG = "RecurringAlarmRepo"
+
+        // Singleton-shared listener + cache. See AlarmRepository for rationale.
+        private val cacheLock = Any()
+        private val _cachedRecurringAlarms = MutableStateFlow<List<RecurringAlarm>>(emptyList())
+        internal val cachedRecurringAlarms: StateFlow<List<RecurringAlarm>> =
+            _cachedRecurringAlarms.asStateFlow()
+        private var listener: ListenerRegistration? = null
+        private var loadDeferred: CompletableDeferred<Unit>? = null
+
+        fun clear() {
+            synchronized(cacheLock) {
+                listener?.remove()
+                listener = null
+                loadDeferred = null
+                _cachedRecurringAlarms.value = emptyList()
+            }
+        }
+
+        @VisibleForTesting
+        internal fun injectCacheForTest(items: List<RecurringAlarm>) {
+            synchronized(cacheLock) {
+                if (listener == null) listener = ListenerRegistration { /* test seam */ }
+                val deferred = loadDeferred ?: CompletableDeferred<Unit>().also { loadDeferred = it }
+                _cachedRecurringAlarms.value = items
+                if (!deferred.isCompleted) deferred.complete(Unit)
+            }
+        }
     }
 }

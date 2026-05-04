@@ -66,39 +66,14 @@ service cloud.firestore {
       }
     }
 
-    // ==================== Alarms Collection ====================
+    // ==================== User-scoped subcollections ====================
 
-    match /users/{userId}/alarms/{alarmId} {
-      allow read, write: if isAuthenticated() && userOwnsPath(userId);
-    }
-
-    // ==================== Recurring Alarms Collection ====================
-
-    match /users/{userId}/recurringAlarms/{recurringAlarmId} {
-      allow read, write: if isAuthenticated() && userOwnsPath(userId);
-    }
-
-    // ==================== Schedules Collection ====================
-
-    match /users/{userId}/schedules/{scheduleId} {
-      allow read, write: if isAuthenticated() && userOwnsPath(userId);
-    }
-
-    // ==================== Schedule Executions Collection ====================
-
-    match /users/{userId}/scheduleExecutions/{executionId} {
-      allow read, write: if isAuthenticated() && userOwnsPath(userId);
-    }
-
-    // ==================== Open Tabs Collection ====================
-
-    match /users/{userId}/openTabs/{tabId} {
-      allow read, write: if isAuthenticated() && userOwnsPath(userId);
-    }
-
-    // ==================== Search History Collection ====================
-
-    match /users/{userId}/searchHistory/{entryId} {
+    // Single recursive rule for everything under /users/{userId}/. Covers
+    // alarms, recurringAlarms, schedules, scheduleExecutions, openTabs,
+    // searchHistory, and any future user-scoped subcollection at any depth.
+    // The predicate is path-based (auth uid vs. wildcard userId), so it's
+    // evaluable up-front for both single-doc gets and collection queries.
+    match /users/{userId}/{document=**} {
       allow read, write: if isAuthenticated() && userOwnsPath(userId);
     }
   }

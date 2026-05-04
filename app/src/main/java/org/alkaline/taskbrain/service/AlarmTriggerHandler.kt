@@ -34,7 +34,7 @@ class AlarmTriggerHandler(
      */
     suspend fun handle(alarmId: String, alarmType: AlarmType): TriggerResult {
         val alarm = try {
-            alarmRepository.getAlarm(alarmId).getOrThrow()
+            alarmRepository.getAlarmFromServer(alarmId).getOrThrow()
         } catch (e: Exception) {
             Log.e(TAG, "Error fetching alarm: $alarmId", e)
             return TriggerResult.Error("Failed to fetch alarm data: ${e.message}", e)
@@ -65,7 +65,7 @@ class AlarmTriggerHandler(
         // Re-check: recurrence processing may have changed this alarm's status
         val freshAlarm = if (alarm.recurringAlarmId != null) {
             try {
-                alarmRepository.getAlarm(alarmId).getOrNull() ?: alarm
+                alarmRepository.getAlarmFromServer(alarmId).getOrNull() ?: alarm
             } catch (e: Exception) {
                 alarm // Fall back to stale copy if re-fetch fails
             }

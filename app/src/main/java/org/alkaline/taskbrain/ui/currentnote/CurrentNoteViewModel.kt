@@ -171,15 +171,10 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 persistJobs.remove(noteId)
             }
         }
-        // Surface NoteStore errors to the UI via directiveManager's saveWarning
-        viewModelScope.launch {
-            NoteStore.error.collect { errorMsg ->
-                if (errorMsg != null) {
-                    directiveManager.setSaveWarning(errorMsg)
-                    NoteStore.clearError()
-                }
-            }
-        }
+        // NoteStore.error is now surfaced globally by MainScreen's Snackbar
+        // (see MainScreen.kt). The editor's directiveManager.saveWarning dialog
+        // is reserved for directive-save failures originating in this VM
+        // (NoteDirectiveManager calls _saveWarning.postValue directly).
         // Update noteNeedsFix when the current note moves in/out of the needs-fix set.
         viewModelScope.launch {
             NoteStore.notesNeedingFix.collect { set ->

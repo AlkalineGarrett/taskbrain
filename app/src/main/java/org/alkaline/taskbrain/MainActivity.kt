@@ -32,6 +32,9 @@ import com.google.firebase.auth.GoogleAuthProvider
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.alkaline.taskbrain.data.AlarmRepository
+import org.alkaline.taskbrain.data.NoteStore
+import org.alkaline.taskbrain.data.RecurringAlarmRepository
 import org.alkaline.taskbrain.util.PermissionHelper
 import java.util.concurrent.Executors
 
@@ -95,6 +98,12 @@ class MainActivity : AppCompatActivity() {
                 onSignInClick = { signIn() },
                 isUserSignedIn = user != null,
                 onSignOutClick = {
+                    // Detach listeners and drop caches so the next signed-in
+                    // user doesn't see the previous user's data, and no
+                    // listener keeps firing under stale credentials.
+                    NoteStore.clear()
+                    AlarmRepository.clear()
+                    RecurringAlarmRepository.clear()
                     auth.signOut()
                 },
                 isFingerDown = isFingerDown,

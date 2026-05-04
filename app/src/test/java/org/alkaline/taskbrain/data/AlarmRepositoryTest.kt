@@ -33,6 +33,9 @@ class AlarmRepositoryTest {
         every { mockUsersCollection.document(USER_ID) } returns mockUserDoc
         every { mockUserDoc.collection("alarms") } returns mockAlarmsCollection
 
+        // The cache + listener live on the companion (one-listener-per-process
+        // contract). Reset between tests so each starts clean.
+        AlarmRepository.clear()
         repository = AlarmRepository(mockFirestore, mockAuth)
     }
 
@@ -123,8 +126,8 @@ class AlarmRepositoryTest {
     // region Get Tests
 
     @Test
-    fun `getAlarm returns null when document does not exist`() = runTest {
-        mockAlarmDocument("alarm_1", null)
+    fun `getAlarm returns null when alarm not in cache`() = runTest {
+        AlarmRepository.injectCacheForTest(emptyList())
 
         val result = repository.getAlarm("alarm_1")
 
@@ -133,8 +136,11 @@ class AlarmRepositoryTest {
     }
 
     @Test
-    fun `getAlarm returns alarm when document exists`() = runTest {
-        mockAlarmDocument("alarm_1", alarmData(noteId = "note_1", lineContent = "Test content"))
+    fun `getAlarm returns alarm by id`() = runTest {
+        AlarmRepository.injectCacheForTest(listOf(
+            Alarm(id = "alarm_1", userId = USER_ID, noteId = "note_1",
+                lineContent = "Test content", status = AlarmStatus.PENDING),
+        ))
 
         val result = repository.getAlarm("alarm_1")
 
@@ -145,18 +151,6 @@ class AlarmRepositoryTest {
         assertEquals("note_1", alarm?.noteId)
         assertEquals("Test content", alarm?.lineContent)
         assertEquals(AlarmStatus.PENDING, alarm?.status)
-    }
-
-    @Test
-    fun `getAlarm handles invalid status gracefully`() = runTest {
-        val data = alarmData().toMutableMap()
-        data["status"] = "INVALID_STATUS"
-        mockAlarmDocument("alarm_1", data)
-
-        val result = repository.getAlarm("alarm_1")
-
-        assertTrue(result.isSuccess)
-        assertEquals(AlarmStatus.PENDING, result.getOrNull()?.status)
     }
 
     // endregion
@@ -263,21 +257,14 @@ class AlarmRepositoryTest {
 
     @Test
     fun `getAlarmsForNote returns alarms matching noteId`() = runTest {
-        val query = mockk<Query>()
-        val docs = listOf(
-            mockk<QueryDocumentSnapshot> {
-                every { id } returns "alarm_1"
-                every { data } returns alarmData(noteId = "note_1")
-            },
-            mockk<QueryDocumentSnapshot> {
-                every { id } returns "alarm_2"
-                every { data } returns alarmData(noteId = "note_1")
-            }
-        )
-        every { mockAlarmsCollection.whereEqualTo("noteId", "note_1") } returns query
-        every { query.get() } returns Tasks.forResult(mockk {
-            every { documents } returns docs
-        })
+        AlarmRepository.injectCacheForTest(listOf(
+            Alarm(id = "alarm_1", userId = USER_ID, noteId = "note_1",
+                status = AlarmStatus.PENDING),
+            Alarm(id = "alarm_2", userId = USER_ID, noteId = "note_1",
+                status = AlarmStatus.PENDING),
+            Alarm(id = "alarm_3", userId = USER_ID, noteId = "note_other",
+                status = AlarmStatus.PENDING),
+        ))
 
         val result = repository.getAlarmsForNote("note_1")
 
@@ -288,23 +275,14 @@ class AlarmRepositoryTest {
     @Test
     fun `getUpcomingAlarms filters to PENDING with dueTime set`() = runTest {
         val now = Timestamp(Date())
-        val query = mockk<Query>()
-        val orderedQuery = mockk<Query>()
-        val docs = listOf(
-            mockk<QueryDocumentSnapshot> {
-                every { id } returns "alarm_1"
-                every { data } returns alarmData(dueTime = now)
-            },
-            mockk<QueryDocumentSnapshot> {
-                every { id } returns "alarm_2"
-                every { data } returns alarmData(dueTime = null) // Should be filtered out
-            }
-        )
-        every { mockAlarmsCollection.whereEqualTo("status", AlarmStatus.PENDING.name) } returns query
-        every { query.orderBy("dueTime", Query.Direction.ASCENDING) } returns orderedQuery
-        every { orderedQuery.get() } returns Tasks.forResult(mockk {
-            every { documents } returns docs
-        })
+        AlarmRepository.injectCacheForTest(listOf(
+            Alarm(id = "alarm_1", userId = USER_ID, noteId = "note_1",
+                status = AlarmStatus.PENDING, dueTime = now),
+            Alarm(id = "alarm_2", userId = USER_ID, noteId = "note_1",
+                status = AlarmStatus.PENDING, dueTime = null), // filtered out
+            Alarm(id = "alarm_3", userId = USER_ID, noteId = "note_1",
+                status = AlarmStatus.DONE, dueTime = now), // wrong status
+        ))
 
         val result = repository.getUpcomingAlarms()
 
@@ -316,23 +294,14 @@ class AlarmRepositoryTest {
     @Test
     fun `getLaterAlarms filters to PENDING without dueTime`() = runTest {
         val now = Timestamp(Date())
-        val query = mockk<Query>()
-        val orderedQuery = mockk<Query>()
-        val docs = listOf(
-            mockk<QueryDocumentSnapshot> {
-                every { id } returns "alarm_1"
-                every { data } returns alarmData(dueTime = now) // Should be filtered out
-            },
-            mockk<QueryDocumentSnapshot> {
-                every { id } returns "alarm_2"
-                every { data } returns alarmData(dueTime = null)
-            }
-        )
-        every { mockAlarmsCollection.whereEqualTo("status", AlarmStatus.PENDING.name) } returns query
-        every { query.orderBy("createdAt", Query.Direction.DESCENDING) } returns orderedQuery
-        every { orderedQuery.get() } returns Tasks.forResult(mockk {
-            every { documents } returns docs
-        })
+        AlarmRepository.injectCacheForTest(listOf(
+            Alarm(id = "alarm_1", userId = USER_ID, noteId = "note_1",
+                status = AlarmStatus.PENDING, dueTime = now), // filtered out
+            Alarm(id = "alarm_2", userId = USER_ID, noteId = "note_1",
+                status = AlarmStatus.PENDING, dueTime = null),
+            Alarm(id = "alarm_3", userId = USER_ID, noteId = "note_1",
+                status = AlarmStatus.DONE, dueTime = null), // wrong status
+        ))
 
         val result = repository.getLaterAlarms()
 
@@ -362,17 +331,15 @@ class AlarmRepositoryTest {
     }
 
     @Test
-    fun `getAlarm returns failure on Firebase exception`() = runTest {
-        val ref = mockk<DocumentReference>()
-        every { mockAlarmsCollection.document("alarm_1") } returns ref
-        every { ref.get() } returns Tasks.forException(
-            RuntimeException("Network error")
-        )
+    fun `getAlarm returns failure when user is not signed in`() = runTest {
+        // Reads serve from the listener cache; the only failure mode is
+        // the lazy-attach guard rejecting an unauthenticated user.
+        signOut()
 
         val result = repository.getAlarm("alarm_1")
 
         assertTrue(result.isFailure)
-        assertTrue(result.exceptionOrNull()?.message?.contains("Network error") == true)
+        assertEquals("User not signed in", result.exceptionOrNull()?.message)
     }
 
     @Test
@@ -412,35 +379,23 @@ class AlarmRepositoryTest {
     }
 
     @Test
-    fun `getUpcomingAlarms returns failure on Firebase exception`() = runTest {
-        val query = mockk<Query>()
-        val orderedQuery = mockk<Query>()
-        every { mockAlarmsCollection.whereEqualTo("status", AlarmStatus.PENDING.name) } returns query
-        every { query.orderBy("dueTime", Query.Direction.ASCENDING) } returns orderedQuery
-        every { orderedQuery.get() } returns Tasks.forException(
-            RuntimeException("PERMISSION_DENIED: Missing or insufficient permissions")
-        )
+    fun `getUpcomingAlarms returns failure when user is not signed in`() = runTest {
+        signOut()
 
         val result = repository.getUpcomingAlarms()
 
         assertTrue(result.isFailure)
-        assertTrue(result.exceptionOrNull()?.message?.contains("PERMISSION_DENIED") == true)
+        assertEquals("User not signed in", result.exceptionOrNull()?.message)
     }
 
     @Test
-    fun `getLaterAlarms returns failure on Firebase exception`() = runTest {
-        val query = mockk<Query>()
-        val orderedQuery = mockk<Query>()
-        every { mockAlarmsCollection.whereEqualTo("status", AlarmStatus.PENDING.name) } returns query
-        every { query.orderBy("createdAt", Query.Direction.DESCENDING) } returns orderedQuery
-        every { orderedQuery.get() } returns Tasks.forException(
-            RuntimeException("PERMISSION_DENIED: Missing or insufficient permissions")
-        )
+    fun `getLaterAlarms returns failure when user is not signed in`() = runTest {
+        signOut()
 
         val result = repository.getLaterAlarms()
 
         assertTrue(result.isFailure)
-        assertTrue(result.exceptionOrNull()?.message?.contains("PERMISSION_DENIED") == true)
+        assertEquals("User not signed in", result.exceptionOrNull()?.message)
     }
 
     @Test
@@ -473,67 +428,57 @@ class AlarmRepositoryTest {
 
     @Test
     fun `updateLineContentForNote updates only lineContent not updatedAt`() = runTest {
-        val query = mockk<Query>()
         val mockBatch = mockk<WriteBatch>(relaxed = true)
-        val doc1Ref = mockk<DocumentReference>()
-        val doc2Ref = mockk<DocumentReference>()
-        val docs = listOf(
-            mockk<QueryDocumentSnapshot> {
-                every { id } returns "alarm_1"
-                every { reference } returns doc1Ref
-                every { data } returns alarmData(noteId = "note_1", lineContent = "Old content")
-            },
-            mockk<QueryDocumentSnapshot> {
-                every { id } returns "alarm_2"
-                every { reference } returns doc2Ref
-                every { data } returns alarmData(noteId = "note_1", lineContent = "Old content")
-            }
-        )
-        every { mockAlarmsCollection.whereEqualTo("noteId", "note_1") } returns query
-        every { query.get() } returns Tasks.forResult(mockk {
-            every { documents } returns docs
-        })
+        val alarm1Ref = mockk<DocumentReference>(relaxed = true)
+        val alarm2Ref = mockk<DocumentReference>(relaxed = true)
+        every { mockAlarmsCollection.document("alarm_1") } returns alarm1Ref
+        every { mockAlarmsCollection.document("alarm_2") } returns alarm2Ref
         every { mockFirestore.batch() } returns mockBatch
         every { mockBatch.commit() } returns Tasks.forResult(null)
+        AlarmRepository.injectCacheForTest(listOf(
+            Alarm(id = "alarm_1", userId = USER_ID, noteId = "note_1",
+                lineContent = "Old content", status = AlarmStatus.PENDING),
+            Alarm(id = "alarm_2", userId = USER_ID, noteId = "note_1",
+                lineContent = "Old content", status = AlarmStatus.PENDING),
+            Alarm(id = "alarm_3", userId = USER_ID, noteId = "note_other",
+                lineContent = "Old content", status = AlarmStatus.PENDING),
+        ))
 
         val result = repository.updateLineContentForNote("note_1", "New content")
 
         assertTrue(result.isSuccess)
-
         // Verify batch.update was called with only lineContent, not updatedAt
         verify {
-            mockBatch.update(doc1Ref, match<Map<String, Any>> { map ->
+            mockBatch.update(alarm1Ref, match<Map<String, Any>> { map ->
                 map.containsKey("lineContent") &&
                 map["lineContent"] == "New content" &&
                 !map.containsKey("updatedAt")
             })
         }
         verify {
-            mockBatch.update(doc2Ref, match<Map<String, Any>> { map ->
+            mockBatch.update(alarm2Ref, match<Map<String, Any>> { map ->
                 map.containsKey("lineContent") &&
                 map["lineContent"] == "New content" &&
                 !map.containsKey("updatedAt")
             })
         }
+        // Exactly two updates — alarm_3 (note_other) must not be touched.
+        verify(exactly = 2) { mockBatch.update(any<DocumentReference>(), any<Map<String, Any>>()) }
         verify { mockBatch.commit() }
     }
 
     @Test
     fun `updateLineContentForNote does nothing when no alarms match`() = runTest {
-        val query = mockk<Query>()
         val mockBatch = mockk<WriteBatch>(relaxed = true)
-        every { mockAlarmsCollection.whereEqualTo("noteId", "note_1") } returns query
-        every { query.get() } returns Tasks.forResult(mockk {
-            every { documents } returns emptyList()
-        })
         every { mockFirestore.batch() } returns mockBatch
-        every { mockBatch.commit() } returns Tasks.forResult(null)
+        AlarmRepository.injectCacheForTest(emptyList())
 
         val result = repository.updateLineContentForNote("note_1", "New content")
 
         assertTrue(result.isSuccess)
+        // Cache had no matching alarms, so we never built or committed a batch.
         verify(exactly = 0) { mockBatch.update(any<DocumentReference>(), any<Map<String, Any>>()) }
-        verify { mockBatch.commit() }
+        verify(exactly = 0) { mockBatch.commit() }
     }
 
     @Test

@@ -214,7 +214,11 @@ object NoteStore {
         pendingPersistContent.clear()
         pendingPersistRunnables.clear()
         mainHandler.removeCallbacksAndMessages(null)
-        persistCallback = null
+        // persistCallback is NOT cleared: it's set once in CurrentNoteViewModel.init
+        // (which doesn't re-run on sign-out → sign-in within the same Activity), and
+        // the callback dispatches via FirebaseAuth.currentUser at fire time, so it
+        // works correctly under the new user. Nulling it here silently breaks saves
+        // after re-login.
         _notes.value = emptyList()
         _error.value = null
         _notesNeedingFix.value = emptySet()

@@ -19,7 +19,11 @@ class NotificationSyncer(private val context: Context) {
     suspend fun sync() {
         if (FirebaseAuth.getInstance().currentUser == null) return
 
-        val alarms: List<Alarm> = repository.getPendingAlarms()
+        // One-shot read at startup — avoids forcing the listener to
+        // attach (and pull the full collection) before the user has even
+        // opened the Alarms screen. AlarmsViewModel will attach later if
+        // the user navigates there.
+        val alarms: List<Alarm> = repository.getPendingAlarmsFromServer()
             .onFailure { Log.e(TAG, "Failed to load alarms for notification sync", it) }
             .getOrNull() ?: return
 
