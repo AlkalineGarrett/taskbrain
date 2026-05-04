@@ -44,7 +44,9 @@ interface Bucket {
 const HOUR_MS = 60 * 60 * 1000
 const DAY_MS = 24 * HOUR_MS
 const MAX_HOURLY = 24
-const MAX_DAILY = 7
+// Match the Firebase Console's monthly billing window so the report is
+// directly comparable to the per-project usage shown in the console.
+const MAX_DAILY = 30
 const PERSIST_DEBOUNCE_MS = 30_000
 
 const STORAGE_KEY_HOURLY = 'firestoreUsage:hourly'
@@ -89,11 +91,14 @@ class FirestoreUsage {
   getReport(): string {
     const now = Date.now()
     const current = this.hourly[this.hourly.length - 1] ?? null
-    const last24 = this.summarize(this.hourly.filter((b) => b.start >= now - 24 * HOUR_MS))
-    const last7 = this.summarize(this.daily.filter((b) => b.start >= now - 7 * DAY_MS))
+    const windows: [string, Bucket][] = [
+      ['Last 24 hours', this.summarize(this.hourly.filter((b) => b.start >= now - 24 * HOUR_MS))],
+      ['Last 7 days', this.summarize(this.daily.filter((b) => b.start >= now - 7 * DAY_MS))],
+      ['Last 30 days (compare to Firebase console)', this.summarize(this.daily.filter((b) => b.start >= now - 30 * DAY_MS))],
+    ]
     const lines: string[] = ['=== Firestore Usage Report ===']
-    appendTimeSeries(lines, '== Billed ==', current, last24, last7, formatBilledBucket)
-    appendTimeSeries(lines, '== Local-only ==', current, last24, last7, formatLocalBucket)
+    appendTimeSeries(lines, '== Billed ==', current, windows, formatBilledBucket)
+    appendTimeSeries(lines, '== Local-only ==', current, windows, formatLocalBucket)
     lines.push('', '', '=== End ===')
     return lines.join('\n')
   }
@@ -213,16 +218,16 @@ function appendTimeSeries(
   lines: string[],
   sectionLabel: string,
   current: Bucket | null,
-  last24: Bucket,
-  last7: Bucket,
+  windows: [string, Bucket][],
   formatter: (b: Bucket) => string,
 ): void {
   lines.push('', '', sectionLabel)
   if (current) {
     lines.push('', `Current hour (${formatHour(current.start)}):`, formatter(current))
   }
-  lines.push('', '', 'Last 24 hours:', formatter(last24))
-  lines.push('', '', 'Last 7 days:', formatter(last7))
+  for (const [label, bucket] of windows) {
+    lines.push('', '', `${label}:`, formatter(bucket))
+  }
 }
 
 function formatBilledBucket(b: Bucket): string {

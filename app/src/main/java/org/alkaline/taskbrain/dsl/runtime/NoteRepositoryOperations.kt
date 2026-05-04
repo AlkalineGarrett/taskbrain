@@ -4,6 +4,7 @@ import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.tasks.await
+import org.alkaline.taskbrain.data.FirestoreUsage
 import org.alkaline.taskbrain.data.Note
 import org.alkaline.taskbrain.data.NoteStore
 import org.alkaline.taskbrain.data.withStampedWrite
@@ -46,6 +47,7 @@ class NoteRepositoryOperations(
             existing = NoteStore.getRawNoteById(noteId),
         ) { _, stamp ->
             notesCollection.document(noteId).update(updates + stamp).await()
+            FirestoreUsage.recordWrite("dsl.updateNote", FirestoreUsage.WriteType.UPDATE)
         }
 
         val base = NoteStore.getRawNoteById(noteId)
@@ -73,6 +75,7 @@ class NoteRepositoryOperations(
                 "updatedAt" to FieldValue.serverTimestamp(),
             ).apply { putAll(stamp) }
             noteRef.set(noteData).await()
+            FirestoreUsage.recordWrite("dsl.createNote", FirestoreUsage.WriteType.SET)
         }
 
         // Return the created note
@@ -89,6 +92,7 @@ class NoteRepositoryOperations(
     override suspend fun getNoteById(noteId: String): Note? {
         NoteStore.getRawNoteById(noteId)?.let { return it }
         val doc = notesCollection.document(noteId).get().await()
+        FirestoreUsage.recordRead("dsl.getNoteById", FirestoreUsage.ReadType.DOC_GET)
         return if (doc.exists()) doc.toNote() else null
     }
 
@@ -100,6 +104,7 @@ class NoteRepositoryOperations(
             .limit(1)
             .get()
             .await()
+        FirestoreUsage.recordRead("dsl.findByPath", FirestoreUsage.ReadType.GET_DOCS, query.documents.size)
 
         return query.documents.firstOrNull()?.toNote()
     }

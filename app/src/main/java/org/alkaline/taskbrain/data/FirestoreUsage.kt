@@ -33,7 +33,9 @@ object FirestoreUsage {
     private val HOUR_MS = TimeUnit.HOURS.toMillis(1)
     private val DAY_MS = TimeUnit.DAYS.toMillis(1)
     private const val MAX_HOURLY = 24
-    private const val MAX_DAILY = 7
+    // Match the Firebase Console's monthly billing window so the report is
+    // directly comparable to the per-project usage shown in the console.
+    private const val MAX_DAILY = 30
     private const val PERSIST_DEBOUNCE_MS = 30_000L
 
     enum class ReadType(val isBilled: Boolean) {
@@ -107,12 +109,15 @@ object FirestoreUsage {
     fun getReport(): String = synchronized(lock) {
         val now = System.currentTimeMillis()
         val current = hourly.lastOrNull()
-        val last24 = summarize(hourly.filter { it.start >= now - 24 * HOUR_MS })
-        val last7 = summarize(daily.filter { it.start >= now - 7 * DAY_MS })
+        val windows = listOf(
+            "Last 24 hours" to summarize(hourly.filter { it.start >= now - 24 * HOUR_MS }),
+            "Last 7 days" to summarize(daily.filter { it.start >= now - 7 * DAY_MS }),
+            "Last 30 days (compare to Firebase console)" to summarize(daily.filter { it.start >= now - 30 * DAY_MS }),
+        )
         buildString {
             appendLine("=== Firestore Usage Report ===")
-            appendTimeSeries("== Billed ==", current, last24, last7, ::formatBilledBucket)
-            appendTimeSeries("== Local-only ==", current, last24, last7, ::formatLocalBucket)
+            appendTimeSeries("== Billed ==", current, windows, ::formatBilledBucket)
+            appendTimeSeries("== Local-only ==", current, windows, ::formatLocalBucket)
             appendLine()
             appendLine()
             append("=== End ===")
@@ -122,8 +127,7 @@ object FirestoreUsage {
     private fun StringBuilder.appendTimeSeries(
         sectionLabel: String,
         current: Bucket?,
-        last24: Bucket,
-        last7: Bucket,
+        windows: List<Pair<String, Bucket>>,
         formatter: (Bucket) -> String,
     ) {
         appendLine()
@@ -134,14 +138,12 @@ object FirestoreUsage {
             appendLine("Current hour (${formatHour(current.start)}):")
             append(formatter(current))
         }
-        appendLine()
-        appendLine()
-        appendLine("Last 24 hours:")
-        append(formatter(last24))
-        appendLine()
-        appendLine()
-        appendLine("Last 7 days:")
-        append(formatter(last7))
+        for ((label, bucket) in windows) {
+            appendLine()
+            appendLine()
+            appendLine("$label:")
+            append(formatter(bucket))
+        }
     }
 
     fun reset() {

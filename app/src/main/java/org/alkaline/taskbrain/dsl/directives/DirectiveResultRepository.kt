@@ -1,6 +1,7 @@
 package org.alkaline.taskbrain.dsl.directives
 
 import android.util.Log
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
@@ -29,13 +30,17 @@ import org.alkaline.taskbrain.data.NoteStore
  * Call [clear] on logout to detach all listeners and drop cached data.
  */
 class DirectiveResultRepository(
-    private val db: FirebaseFirestore = FirebaseFirestore.getInstance()
+    private val db: FirebaseFirestore = FirebaseFirestore.getInstance(),
+    private val auth: FirebaseAuth = FirebaseAuth.getInstance(),
 ) {
     private val cache = mutableMapOf<String, Map<String, DirectiveResult>>()
     private val listeners = mutableMapOf<String, ListenerRegistration>()
     private val cacheReady = mutableMapOf<String, CompletableDeferred<Unit>>()
     private val cacheLock = Any()
     private val firstSnapshotDelivered = mutableSetOf<String>()
+
+    private fun requireUserId(): String =
+        auth.currentUser?.uid ?: throw IllegalStateException("User not signed in")
 
     private fun resultsCollection(noteId: String) =
         db.collection("notes").document(noteId).collection("directiveResults")
@@ -111,7 +116,12 @@ class DirectiveResultRepository(
         result: DirectiveResult
     ): Result<Unit> = runCatching {
         withContext(Dispatchers.IO) {
+            val userId = requireUserId()
+            // Stamp userId so security rules can check ownership on the doc
+            // itself instead of `get()`-ing the parent note (one billed read
+            // per access).
             val data = hashMapOf(
+                "userId" to userId,
                 "result" to result.result,
                 "executedAt" to FieldValue.serverTimestamp(),
                 "error" to result.error,

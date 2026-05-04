@@ -63,6 +63,7 @@ class AlarmRepository(
             val userId = requireUserId()
             val ref = newAlarmRef(userId)
             ref.set(createAlarmData(alarm.copy(id = ref.id, userId = userId))).await()
+            FirestoreUsage.recordWrite("createAlarm", FirestoreUsage.WriteType.SET)
             Log.d(TAG, "Alarm created with ID: ${ref.id}")
             ref.id
         }
@@ -77,6 +78,7 @@ class AlarmRepository(
             val data = alarmToMap(alarm).toMutableMap()
             data["updatedAt"] = FieldValue.serverTimestamp()
             alarmRef(userId, alarm.id).set(data).await()
+            FirestoreUsage.recordWrite("updateAlarm", FirestoreUsage.WriteType.SET)
             Log.d(TAG, "Alarm updated: ${alarm.id}")
             Unit
         }
@@ -90,6 +92,7 @@ class AlarmRepository(
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             alarmRef(userId, alarmId).update("notifiedStageType", stageType.name).await()
+            FirestoreUsage.recordWrite("markNotifiedStage", FirestoreUsage.WriteType.UPDATE)
             Log.d(TAG, "Marked notifiedStageType=$stageType for alarm $alarmId")
             Unit
         }
@@ -107,6 +110,7 @@ class AlarmRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
+            FirestoreUsage.recordWrite("linkToRecurringAlarm", FirestoreUsage.WriteType.UPDATE)
             Log.d(TAG, "Linked alarm $alarmId to recurring alarm $recurringAlarmId")
             Unit
         }
@@ -119,6 +123,7 @@ class AlarmRepository(
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             alarmRef(userId, alarmId).delete().await()
+            FirestoreUsage.recordWrite("deleteAlarm", FirestoreUsage.WriteType.DELETE)
             Log.d(TAG, "Alarm deleted: $alarmId")
             Unit
         }
@@ -131,6 +136,7 @@ class AlarmRepository(
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             val result = alarmsCollection(userId).get().await()
+            FirestoreUsage.recordRead("deleteAllAlarms", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
             val alarmIds = result.documents.map { it.id }
             // Firestore batches are limited to 500 operations
             for (chunk in result.documents.chunked(500)) {
@@ -139,6 +145,7 @@ class AlarmRepository(
                     batch.delete(doc.reference)
                 }
                 batch.commit().await()
+                FirestoreUsage.recordWrite("deleteAllAlarms", FirestoreUsage.WriteType.BATCH_COMMIT, chunk.size)
             }
             Log.d(TAG, "Deleted all alarms (${result.documents.size} documents)")
             alarmIds
@@ -156,6 +163,7 @@ class AlarmRepository(
                 .whereNotEqualTo("recurringAlarmId", null)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("deleteRecurringAlarmInstances", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
             val alarmIds = result.documents.map { it.id }
             for (chunk in result.documents.chunked(500)) {
                 val batch = db.batch()
@@ -163,6 +171,7 @@ class AlarmRepository(
                     batch.delete(doc.reference)
                 }
                 batch.commit().await()
+                FirestoreUsage.recordWrite("deleteRecurringAlarmInstances", FirestoreUsage.WriteType.BATCH_COMMIT, chunk.size)
             }
             Log.d(TAG, "Deleted ${alarmIds.size} recurring alarm instances")
             alarmIds
@@ -176,6 +185,7 @@ class AlarmRepository(
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             val doc = alarmRef(userId, alarmId).get().await()
+            FirestoreUsage.recordRead("getAlarm", FirestoreUsage.ReadType.DOC_GET)
             if (doc.exists()) {
                 mapToAlarm(doc.id, doc.data ?: emptyMap())
             } else {
@@ -194,6 +204,7 @@ class AlarmRepository(
                 .whereEqualTo("noteId", noteId)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("getAlarmsForNote", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
             result.documents.mapNotNull { doc ->
                 try {
                     mapToAlarm(doc.id, doc.data ?: emptyMap())
@@ -218,6 +229,7 @@ class AlarmRepository(
             alarmIds.mapNotNull { alarmId ->
                 try {
                     val doc = alarmRef(userId, alarmId).get().await()
+                    FirestoreUsage.recordRead("getAlarmsByIds", FirestoreUsage.ReadType.DOC_GET)
                     if (doc.exists()) {
                         alarmId to mapToAlarm(doc.id, doc.data ?: emptyMap())
                     } else null
@@ -240,6 +252,7 @@ class AlarmRepository(
                 .orderBy("dueTime", Query.Direction.ASCENDING)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("getUpcomingAlarms", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
             result.documents.mapNotNull { doc ->
                 try {
                     val alarm = mapToAlarm(doc.id, doc.data ?: emptyMap())
@@ -263,6 +276,7 @@ class AlarmRepository(
                 .orderBy("createdAt", Query.Direction.DESCENDING)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("getLaterAlarms", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
             result.documents.mapNotNull { doc ->
                 try {
                     val alarm = mapToAlarm(doc.id, doc.data ?: emptyMap())
@@ -286,6 +300,7 @@ class AlarmRepository(
                 .orderBy("updatedAt", Query.Direction.DESCENDING)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("getCompletedAlarms", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
             result.documents.mapNotNull { doc ->
                 try {
                     mapToAlarm(doc.id, doc.data ?: emptyMap())
@@ -308,6 +323,7 @@ class AlarmRepository(
                 .orderBy("updatedAt", Query.Direction.DESCENDING)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("getCancelledAlarms", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
             result.documents.mapNotNull { doc ->
                 try {
                     mapToAlarm(doc.id, doc.data ?: emptyMap())
@@ -329,6 +345,7 @@ class AlarmRepository(
                 .whereEqualTo("status", AlarmStatus.PENDING.name)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("getPendingAlarms", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
             result.documents.mapNotNull { doc ->
                 try {
                     mapToAlarm(doc.id, doc.data ?: emptyMap())
@@ -352,6 +369,7 @@ class AlarmRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
+            FirestoreUsage.recordWrite("markDone", FirestoreUsage.WriteType.UPDATE)
             Log.d(TAG, "Alarm marked done: $alarmId")
             Unit
         }
@@ -369,6 +387,7 @@ class AlarmRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
+            FirestoreUsage.recordWrite("markCancelled", FirestoreUsage.WriteType.UPDATE)
             Log.d(TAG, "Alarm marked cancelled: $alarmId")
             Unit
         }
@@ -387,6 +406,7 @@ class AlarmRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
+            FirestoreUsage.recordWrite("snoozeAlarm", FirestoreUsage.WriteType.UPDATE)
             Log.d(TAG, "Alarm snoozed until $snoozeUntil: $alarmId")
             Unit
         }
@@ -404,6 +424,7 @@ class AlarmRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
+            FirestoreUsage.recordWrite("clearSnooze", FirestoreUsage.WriteType.UPDATE)
             Log.d(TAG, "Alarm snooze cleared: $alarmId")
             Unit
         }
@@ -421,6 +442,7 @@ class AlarmRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
+            FirestoreUsage.recordWrite("reactivateAlarm", FirestoreUsage.WriteType.UPDATE)
             Log.d(TAG, "Alarm reactivated: $alarmId")
             Unit
         }
@@ -434,6 +456,7 @@ class AlarmRepository(
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             alarmRef(userId, alarmId).update("noteId", newNoteId).await()
+            FirestoreUsage.recordWrite("updateAlarmNoteId", FirestoreUsage.WriteType.UPDATE)
             Unit
         }
     }
@@ -445,6 +468,7 @@ class AlarmRepository(
                 .whereEqualTo("noteId", noteId)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("alarms.updateLineContentForNote", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
 
             val batch = db.batch()
             for (doc in result.documents) {
@@ -453,6 +477,7 @@ class AlarmRepository(
                 ))
             }
             batch.commit().await()
+            FirestoreUsage.recordWrite("alarms.updateLineContentForNote", FirestoreUsage.WriteType.BATCH_COMMIT, result.documents.size)
             Unit
         }
     }
@@ -471,6 +496,7 @@ class AlarmRepository(
                 .whereEqualTo("status", AlarmStatus.PENDING.name)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("getHighestPriorityAlarm", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
 
             var highestPriority: AlarmPriority? = null
 
@@ -557,6 +583,7 @@ class AlarmRepository(
                 .orderBy("dueTime", Query.Direction.ASCENDING)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("getInstancesForRecurring", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
             result.documents.mapNotNull { doc ->
                 try {
                     mapToAlarm(doc.id, doc.data ?: emptyMap())
@@ -579,6 +606,7 @@ class AlarmRepository(
                 .whereEqualTo("status", AlarmStatus.PENDING.name)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("getPendingInstancesForRecurring", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
             result.documents.mapNotNull { doc ->
                 try {
                     mapToAlarm(doc.id, doc.data ?: emptyMap())

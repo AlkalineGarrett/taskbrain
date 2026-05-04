@@ -41,10 +41,28 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (resource == null || existingDataBelongsToUser());
       allow update, delete: if isAuthenticated() && existingDataBelongsToUser();
 
-      // Directive results subcollection - user can access if they own the parent note
+      // Directive results subcollection. Each doc carries its own `userId`
+      // field (stamped by DirectiveResultRepository on write), so we can
+      // enforce ownership against the doc itself instead of doing a billed
+      // `get()` of the parent note on every access. The previous form —
+      // `get(/databases/.../notes/$(noteId)).data.userId == currentUserId()`
+      // — added one rules-engine read per directive results read or write,
+      // amplifying the project's billed read count.
+      //
+      // `list` (snapshot listener over the whole subcollection) trusts the
+      // user-allowlist gate from `isAuthenticated()`, since per-doc
+      // `resource.data.userId` predicates would force every listener query
+      // to add a `.where('userId', '==', uid)` filter. Per-doc operations
+      // (`get`, `update`, `delete`) still check the doc's own userId.
       match /directiveResults/{directiveHash} {
-        allow read, write: if isAuthenticated() &&
-          get(/databases/$(database)/documents/notes/$(noteId)).data.userId == currentUserId();
+        allow create: if isAuthenticated() && incomingDataBelongsToUser();
+        allow list: if isAuthenticated();
+        // resource.data.userId may be missing on legacy docs created before
+        // the userId stamp; allow access in that case so cached results
+        // remain visible until they're re-written. New writes always include
+        // userId, so legacy docs disappear naturally as directives re-run.
+        allow get, update, delete: if isAuthenticated() &&
+          (!('userId' in resource.data) || existingDataBelongsToUser());
       }
     }
 

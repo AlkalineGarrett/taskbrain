@@ -4,11 +4,19 @@ import { SearchHistoryRepository, type SearchHistoryEntry } from '../../data/Sea
 // Mock Firebase modules
 vi.mock('firebase/firestore', () => ({
   collection: vi.fn(),
-  addDoc: vi.fn(),
-  getDocs: vi.fn(() => Promise.resolve({ docs: [] })),
+  addDoc: vi.fn(() => Promise.resolve({ id: 'new_doc' })),
+  getDocs: vi.fn(() => Promise.resolve({ docs: [], size: 0 })),
   query: vi.fn(),
   orderBy: vi.fn(),
   limit: vi.fn(),
+}))
+
+vi.mock('@/data/NoteStore', () => ({
+  noteStore: { raiseWarning: vi.fn() },
+}))
+
+vi.mock('../../data/FirestoreUsage', () => ({
+  firestoreUsage: { recordRead: vi.fn(), recordWrite: vi.fn() },
 }))
 
 function mockLocalStorage() {

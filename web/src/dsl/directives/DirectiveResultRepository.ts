@@ -1,5 +1,5 @@
 import { collection, doc, getDocs, setDoc, updateDoc, serverTimestamp, writeBatch } from 'firebase/firestore'
-import { db } from '@/firebase/config'
+import { db, auth } from '@/firebase/config'
 import { firestoreUsage } from '@/data/FirestoreUsage'
 import type { DirectiveResult } from './DirectiveResult'
 import type { DirectiveWarningType } from './DirectiveResult'
@@ -10,14 +10,20 @@ function resultsCollection(noteId: string) {
 
 /**
  * Save a directive execution result to Firestore.
+ *
+ * Stamps `userId` on the doc so security rules can check ownership directly
+ * instead of doing a billed `get()` of the parent note on every access.
  */
 export async function saveDirectiveResult(
   noteId: string,
   directiveHash: string,
   result: DirectiveResult,
 ): Promise<void> {
+  const userId = auth.currentUser?.uid
+  if (!userId) throw new Error('User not signed in')
   const docRef = doc(resultsCollection(noteId), directiveHash)
   await setDoc(docRef, {
+    userId,
     result: result.result,
     executedAt: serverTimestamp(),
     error: result.error,

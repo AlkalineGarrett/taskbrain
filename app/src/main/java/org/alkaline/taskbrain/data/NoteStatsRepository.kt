@@ -37,6 +37,7 @@ class NoteStatsRepository(
                 "viewedDays" to mapOf(today to true),
             )
             statsRef(userId, noteId).set(updates, SetOptions.merge()).await()
+            FirestoreUsage.recordWrite("recordView", FirestoreUsage.WriteType.SET)
             Unit
         }
     }.onFailure { Log.e(TAG, "Error recording view", it) }
@@ -47,6 +48,7 @@ class NoteStatsRepository(
             val userId = requireUserId()
             val snapshot = db.collection("users").document(userId)
                 .collection("noteStats").get().await()
+            FirestoreUsage.recordRead("loadAllNoteStats", FirestoreUsage.ReadType.GET_DOCS, snapshot.documents.size)
             snapshot.associate { doc ->
                 doc.id to NoteStats(
                     lastAccessedAt = doc.getTimestamp("lastAccessedAt"),

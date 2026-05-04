@@ -9,6 +9,7 @@ import {
 } from 'firebase/firestore'
 import type { Auth } from 'firebase/auth'
 import { noteStatsFromFirestore, type NoteStats } from './NoteStats'
+import { firestoreUsage } from './FirestoreUsage'
 
 /**
  * Per-user view tracking. Lives apart from the note doc so writes don't echo through
@@ -43,11 +44,13 @@ export class NoteStatsRepository {
       },
       { merge: true },
     )
+    firestoreUsage.recordWrite('recordView', 'SET')
   }
 
   async loadAllNoteStats(): Promise<Map<string, NoteStats>> {
     const userId = this.requireUserId()
     const snap = await getDocs(collection(this.db, 'users', userId, 'noteStats'))
+    firestoreUsage.recordRead('loadAllNoteStats', 'GET_DOCS', snap.size)
     const out = new Map<string, NoteStats>()
     snap.forEach((d) => {
       out.set(d.id, noteStatsFromFirestore(d.data()))

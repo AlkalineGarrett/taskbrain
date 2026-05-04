@@ -11,8 +11,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import org.alkaline.taskbrain.data.FirestoreUsage
 import java.util.Date
 
 /**
@@ -66,6 +68,7 @@ class ScheduleExecutionRepository(
                 "createdAt" to FieldValue.serverTimestamp()
             )
             ref.set(data).await()
+            FirestoreUsage.recordWrite("recordExecution", FirestoreUsage.WriteType.SET)
             Log.d(TAG, "Execution recorded: ${ref.id} (success=$success, manual=$manualRun)")
             ref.id
         }
@@ -93,6 +96,7 @@ class ScheduleExecutionRepository(
                 "createdAt" to FieldValue.serverTimestamp()
             )
             ref.set(data).await()
+            FirestoreUsage.recordWrite("recordMissedExecution", FirestoreUsage.WriteType.SET)
             Log.d(TAG, "Missed execution recorded: ${ref.id}")
             ref.id
         }
@@ -112,6 +116,7 @@ class ScheduleExecutionRepository(
                 .orderBy("executedAt", Query.Direction.DESCENDING)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("getExecutionsLast24Hours", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
 
             result.documents.mapNotNull { doc ->
                 try {
@@ -136,6 +141,7 @@ class ScheduleExecutionRepository(
                 .orderBy("scheduledFor", Query.Direction.ASCENDING)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("getPendingMissedExecutions", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
 
             result.documents.mapNotNull { doc ->
                 try {
@@ -159,6 +165,7 @@ class ScheduleExecutionRepository(
                 .whereEqualTo("executedAt", null)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("getMissedCount", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
 
             result.size()
         }
@@ -176,6 +183,7 @@ class ScheduleExecutionRepository(
             return@callbackFlow
         }
 
+        var firstDelivered = false
         val listener = executionsCollection(userId)
             .whereEqualTo("executedAt", null)
             .addSnapshotListener { snapshot, error ->
@@ -184,11 +192,24 @@ class ScheduleExecutionRepository(
                     trySend(0)
                     return@addSnapshotListener
                 }
-                trySend(snapshot?.size() ?: 0)
+                if (snapshot == null) return@addSnapshotListener
+                val isLocalEcho = firstDelivered && snapshot.metadata.hasPendingWrites()
+                val fromCache = snapshot.metadata.isFromCache
+                val type = when {
+                    !firstDelivered && fromCache -> FirestoreUsage.ReadType.LISTENER_INITIAL_CACHED
+                    !firstDelivered -> FirestoreUsage.ReadType.LISTENER_INITIAL_FRESH
+                    isLocalEcho -> FirestoreUsage.ReadType.LISTENER_LOCAL_ECHO
+                    fromCache -> FirestoreUsage.ReadType.LISTENER_UPDATE_CACHED
+                    else -> FirestoreUsage.ReadType.LISTENER_UPDATE_FRESH
+                }
+                val docCount = if (firstDelivered) snapshot.documentChanges.size else snapshot.size()
+                FirestoreUsage.recordRead("ScheduleExecutionRepo.listener", type, docCount)
+                firstDelivered = true
+                trySend(snapshot.size())
             }
 
         awaitClose { listener.remove() }
-    }
+    }.distinctUntilChanged()
 
     /**
      * Marks a missed execution as executed after manual run.
@@ -208,6 +229,7 @@ class ScheduleExecutionRepository(
                     "manualRun" to true
                 )
             ).await()
+            FirestoreUsage.recordWrite("markExecutionExecuted", FirestoreUsage.WriteType.UPDATE)
             Log.d(TAG, "Execution marked as executed: $executionId (success=$success)")
             Unit
         }
@@ -220,6 +242,7 @@ class ScheduleExecutionRepository(
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             executionRef(userId, executionId).delete().await()
+            FirestoreUsage.recordWrite("deleteExecution", FirestoreUsage.WriteType.DELETE)
             Log.d(TAG, "Execution deleted: $executionId")
             Unit
         }
@@ -232,6 +255,7 @@ class ScheduleExecutionRepository(
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             val doc = executionRef(userId, executionId).get().await()
+            FirestoreUsage.recordRead("getExecution", FirestoreUsage.ReadType.DOC_GET)
             if (doc.exists()) {
                 mapToExecution(doc.id, doc.data ?: emptyMap())
             } else {
@@ -267,6 +291,7 @@ class ScheduleExecutionRepository(
                 .whereLessThan("createdAt", cutoffTime)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("cleanupOldMissedExecutions", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
 
             if (result.isEmpty) {
                 return@withContext 0
@@ -277,6 +302,7 @@ class ScheduleExecutionRepository(
                 batch.delete(doc.reference)
             }
             batch.commit().await()
+            FirestoreUsage.recordWrite("cleanupOldMissedExecutions", FirestoreUsage.WriteType.BATCH_COMMIT, result.documents.size)
 
             val count = result.size()
             Log.d(TAG, "Cleaned up $count old missed executions (older than $olderThanDays days)")

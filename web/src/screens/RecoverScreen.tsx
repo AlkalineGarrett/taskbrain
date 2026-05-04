@@ -4,6 +4,7 @@ import { db, auth } from '@/firebase/config'
 import { type Note, noteFromFirestore } from '@/data/Note'
 import { NoteRepository } from '@/data/NoteRepository'
 import { noteStore } from '@/data/NoteStore'
+import { firestoreUsage } from '@/data/FirestoreUsage'
 import { NoteState } from '@/data/NoteState'
 import { newSentinelNoteId } from '@/data/NoteIdSentinel'
 import styles from './RecoverScreen.module.css'
@@ -190,6 +191,7 @@ export function RecoverScreen() {
 
     const notesRef = collection(db, 'notes')
     const snapshot = await getDocs(query(notesRef, where('userId', '==', userId)))
+    firestoreUsage.recordRead('RecoverScreen.loadNotes', 'GET_DOCS', snapshot.size)
     const allNotes = snapshot.docs.map(d => noteFromFirestore(d.id, d.data()))
 
     const built = buildRecoverGroups(allNotes)

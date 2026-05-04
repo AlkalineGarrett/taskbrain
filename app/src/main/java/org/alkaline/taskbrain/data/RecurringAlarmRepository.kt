@@ -57,6 +57,7 @@ class RecurringAlarmRepository(
             val userId = requireUserId()
             val ref = newDocRef(userId)
             ref.set(createData(recurringAlarm.copy(id = ref.id, userId = userId))).await()
+            FirestoreUsage.recordWrite("createRecurringAlarm", FirestoreUsage.WriteType.SET)
             Log.d(TAG, "RecurringAlarm created: ${ref.id}")
             ref.id
         }
@@ -68,6 +69,7 @@ class RecurringAlarmRepository(
             val data = toMap(recurringAlarm).toMutableMap()
             data["updatedAt"] = FieldValue.serverTimestamp()
             docRef(userId, recurringAlarm.id).set(data).await()
+            FirestoreUsage.recordWrite("updateRecurringAlarm", FirestoreUsage.WriteType.SET)
             Log.d(TAG, "RecurringAlarm updated: ${recurringAlarm.id}")
             Unit
         }
@@ -77,6 +79,7 @@ class RecurringAlarmRepository(
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             docRef(userId, id).delete().await()
+            FirestoreUsage.recordWrite("deleteRecurringAlarm", FirestoreUsage.WriteType.DELETE)
             Log.d(TAG, "RecurringAlarm deleted: $id")
             Unit
         }
@@ -89,11 +92,13 @@ class RecurringAlarmRepository(
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             val result = collection(userId).get().await()
+            FirestoreUsage.recordRead("deleteAllRecurringAlarms", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
             val batch = db.batch()
             for (doc in result.documents) {
                 batch.delete(doc.reference)
             }
             batch.commit().await()
+            FirestoreUsage.recordWrite("deleteAllRecurringAlarms", FirestoreUsage.WriteType.BATCH_COMMIT, result.documents.size)
             Log.d(TAG, "Deleted all recurring alarms (${result.documents.size} documents)")
             Unit
         }
@@ -103,6 +108,7 @@ class RecurringAlarmRepository(
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             val doc = docRef(userId, id).get().await()
+            FirestoreUsage.recordRead("getRecurringAlarm", FirestoreUsage.ReadType.DOC_GET)
             if (doc.exists()) fromMap(doc.id, doc.data ?: emptyMap()) else null
         }
     }.onFailure { Log.e(TAG, "Error getting recurring alarm", it) }
@@ -114,6 +120,7 @@ class RecurringAlarmRepository(
                 .whereEqualTo("status", RecurringAlarmStatus.ACTIVE.name)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("getActiveRecurringAlarms", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
             result.documents.mapNotNull { doc ->
                 try {
                     fromMap(doc.id, doc.data ?: emptyMap())
@@ -132,6 +139,7 @@ class RecurringAlarmRepository(
                 .whereEqualTo("noteId", noteId)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("getRecurringAlarmsForNote", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
             result.documents.mapNotNull { doc ->
                 try {
                     fromMap(doc.id, doc.data ?: emptyMap())
@@ -153,6 +161,7 @@ class RecurringAlarmRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
+            FirestoreUsage.recordWrite("recordRecurringCompletion", FirestoreUsage.WriteType.UPDATE)
             Log.d(TAG, "Recorded completion for recurring alarm: $id")
             Unit
         }
@@ -173,6 +182,7 @@ class RecurringAlarmRepository(
                 data.putAll(anchorTimeOfDay.toAnchorFields())
             }
             docRef(userId, id).update(data).await()
+            FirestoreUsage.recordWrite("updateCurrentAlarmId", FirestoreUsage.WriteType.UPDATE)
             Log.d(TAG, "Updated currentAlarmId for $id to $alarmId")
             Unit
         }
@@ -187,6 +197,7 @@ class RecurringAlarmRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
+            FirestoreUsage.recordWrite("endRecurringAlarm", FirestoreUsage.WriteType.UPDATE)
             Log.d(TAG, "Recurring alarm ended: $id")
             Unit
         }
@@ -210,6 +221,7 @@ class RecurringAlarmRepository(
                 data.putAll(anchorTimeOfDay.toAnchorFields())
             }
             docRef(userId, id).update(data).await()
+            FirestoreUsage.recordWrite("updateRecurringTimes", FirestoreUsage.WriteType.UPDATE)
             Log.d(TAG, "Updated times for recurring alarm: $id")
             Unit
         }
@@ -239,11 +251,13 @@ class RecurringAlarmRepository(
                 .whereEqualTo("noteId", noteId)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("recurring.updateLineContentForNote", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
             val batch = db.batch()
             for (doc in result.documents) {
                 batch.update(doc.reference, mapOf("lineContent" to newContent))
             }
             batch.commit().await()
+            FirestoreUsage.recordWrite("recurring.updateLineContentForNote", FirestoreUsage.WriteType.BATCH_COMMIT, result.documents.size)
         }
     }
 

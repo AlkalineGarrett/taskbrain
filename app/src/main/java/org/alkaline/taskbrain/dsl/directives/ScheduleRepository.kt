@@ -10,6 +10,7 @@ import com.google.firebase.firestore.Query
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import org.alkaline.taskbrain.data.FirestoreUsage
 import org.alkaline.taskbrain.dsl.cache.DailyTimeTrigger
 import org.alkaline.taskbrain.dsl.runtime.values.ScheduleFrequency
 import java.time.LocalDateTime
@@ -87,6 +88,7 @@ class ScheduleRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
                 scheduleRef(userId, existing.id).update(updates).await()
+                FirestoreUsage.recordWrite("upsertSchedule", FirestoreUsage.WriteType.UPDATE)
                 Log.d(TAG, "Schedule updated: ${existing.id}")
                 existing.id
             } else {
@@ -110,6 +112,7 @@ class ScheduleRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
                 ref.set(data).await()
+                FirestoreUsage.recordWrite("upsertSchedule", FirestoreUsage.WriteType.SET)
                 Log.d(TAG, "Schedule created: ${ref.id}")
                 ref.id
             }
@@ -127,6 +130,7 @@ class ScheduleRepository(
                 .limit(1)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("findScheduleByHash", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
             result.documents.firstOrNull()?.let { doc ->
                 mapToSchedule(doc.id, doc.data ?: emptyMap())
             }
@@ -143,6 +147,7 @@ class ScheduleRepository(
                 .whereEqualTo("noteId", noteId)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("getSchedulesForNote", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
             result.documents.mapNotNull { doc ->
                 try {
                     mapToSchedule(doc.id, doc.data ?: emptyMap())
@@ -164,6 +169,7 @@ class ScheduleRepository(
                 .whereEqualTo("status", ScheduleStatus.ACTIVE.name)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("getAllActiveSchedules", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
             result.documents.mapNotNull { doc ->
                 try {
                     mapToSchedule(doc.id, doc.data ?: emptyMap())
@@ -189,6 +195,7 @@ class ScheduleRepository(
                 .orderBy("nextExecution", Query.Direction.ASCENDING)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("getDueSchedules", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
             result.documents.mapNotNull { doc ->
                 try {
                     mapToSchedule(doc.id, doc.data ?: emptyMap())
@@ -208,6 +215,7 @@ class ScheduleRepository(
             val userId = requireUserId()
             val ref = scheduleRef(userId, scheduleId)
             val doc = ref.get().await()
+            FirestoreUsage.recordRead("markScheduleExecuted", FirestoreUsage.ReadType.DOC_GET)
 
             if (!doc.exists()) {
                 throw IllegalStateException("Schedule not found: $scheduleId")
@@ -241,6 +249,7 @@ class ScheduleRepository(
             }
 
             ref.update(updates).await()
+            FirestoreUsage.recordWrite("markScheduleExecuted", FirestoreUsage.WriteType.UPDATE)
             Log.d(TAG, "Schedule marked executed (success=$success): $scheduleId")
             Unit
         }
@@ -258,6 +267,7 @@ class ScheduleRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
+            FirestoreUsage.recordWrite("pauseSchedule", FirestoreUsage.WriteType.UPDATE)
             Log.d(TAG, "Schedule paused: $scheduleId")
             Unit
         }
@@ -271,6 +281,7 @@ class ScheduleRepository(
             val userId = requireUserId()
             val ref = scheduleRef(userId, scheduleId)
             val doc = ref.get().await()
+            FirestoreUsage.recordRead("resumeSchedule", FirestoreUsage.ReadType.DOC_GET)
 
             if (!doc.exists()) {
                 throw IllegalStateException("Schedule not found: $scheduleId")
@@ -287,6 +298,7 @@ class ScheduleRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
+            FirestoreUsage.recordWrite("resumeSchedule", FirestoreUsage.WriteType.UPDATE)
             Log.d(TAG, "Schedule resumed: $scheduleId")
             Unit
         }
@@ -304,6 +316,7 @@ class ScheduleRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
+            FirestoreUsage.recordWrite("cancelSchedule", FirestoreUsage.WriteType.UPDATE)
             Log.d(TAG, "Schedule cancelled: $scheduleId")
             Unit
         }
@@ -316,6 +329,7 @@ class ScheduleRepository(
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             scheduleRef(userId, scheduleId).delete().await()
+            FirestoreUsage.recordWrite("deleteSchedule", FirestoreUsage.WriteType.DELETE)
             Log.d(TAG, "Schedule deleted: $scheduleId")
             Unit
         }
@@ -331,6 +345,7 @@ class ScheduleRepository(
                 .whereEqualTo("noteId", noteId)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("cancelSchedulesForNote", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
 
             val batch = db.batch()
             for (doc in result.documents) {
@@ -343,6 +358,7 @@ class ScheduleRepository(
                 )
             }
             batch.commit().await()
+            FirestoreUsage.recordWrite("cancelSchedulesForNote", FirestoreUsage.WriteType.BATCH_COMMIT, result.documents.size)
             Log.d(TAG, "Cancelled ${result.documents.size} schedules for note: $noteId")
             Unit
         }
@@ -355,6 +371,7 @@ class ScheduleRepository(
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
             val doc = scheduleRef(userId, scheduleId).get().await()
+            FirestoreUsage.recordRead("getSchedule", FirestoreUsage.ReadType.DOC_GET)
             if (doc.exists()) {
                 mapToSchedule(doc.id, doc.data ?: emptyMap())
             } else {
@@ -381,6 +398,7 @@ class ScheduleRepository(
                 .orderBy("nextExecution", Query.Direction.ASCENDING)
                 .get()
                 .await()
+            FirestoreUsage.recordRead("getSchedulesForNext24Hours", FirestoreUsage.ReadType.GET_DOCS, result.documents.size)
 
             result.documents.mapNotNull { doc ->
                 try {
@@ -403,6 +421,7 @@ class ScheduleRepository(
             val userId = requireUserId()
             val ref = scheduleRef(userId, scheduleId)
             val doc = ref.get().await()
+            FirestoreUsage.recordRead("advanceNextExecution", FirestoreUsage.ReadType.DOC_GET)
 
             if (!doc.exists()) {
                 throw IllegalStateException("Schedule not found: $scheduleId")
@@ -416,6 +435,7 @@ class ScheduleRepository(
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
+            FirestoreUsage.recordWrite("advanceNextExecution", FirestoreUsage.WriteType.UPDATE)
             Log.d(TAG, "Schedule nextExecution advanced: $scheduleId")
             Unit
         }

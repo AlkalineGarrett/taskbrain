@@ -24,9 +24,6 @@ class SearchHistoryRepository(
 ) {
     private val prefs = context.getSharedPreferences("taskbrain_prefs", Context.MODE_PRIVATE)
 
-    private fun requireUserId(): String =
-        auth.currentUser?.uid ?: throw IllegalStateException("User not signed in")
-
     private fun historyCollection(userId: String) =
         db.collection("users").document(userId).collection("searchHistory")
 
@@ -41,25 +38,29 @@ class SearchHistoryRepository(
         val trimmed = local.take(MAX_ENTRIES)
         saveLocal(trimmed)
 
-        // Fire-and-forget Firebase write
-        try {
-            val userId = requireUserId()
-            val col = historyCollection(userId)
-            val data = hashMapOf(
-                "query" to entry.query,
-                "criteria" to entry.criteria,
-                "timestamp" to entry.timestamp,
-            )
-            col.add(data)
-            // Trim remotely in background — not critical
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to save search history to Firebase", e)
-        }
+        val userId = auth.currentUser?.uid ?: return
+        val col = historyCollection(userId)
+        val data = hashMapOf(
+            "query" to entry.query,
+            "criteria" to entry.criteria,
+            "timestamp" to entry.timestamp,
+        )
+        col.add(data)
+            .addOnSuccessListener {
+                FirestoreUsage.recordWrite("saveSearchHistory", FirestoreUsage.WriteType.SET)
+            }
+            .addOnFailureListener { e ->
+                Log.e(TAG, "Failed to save search history to Firebase", e)
+                NoteStore.raiseWarning(
+                    "Search history sync failed. Your local search history is still " +
+                    "available, but recent searches may not appear on other devices."
+                )
+            }
     }
 
     suspend fun syncFromFirebase() {
+        val userId = auth.currentUser?.uid ?: return
         try {
-            val userId = requireUserId()
             val snapshot = withContext(Dispatchers.IO) {
                 historyCollection(userId)
                     .orderBy("timestamp", Query.Direction.DESCENDING)
@@ -67,6 +68,11 @@ class SearchHistoryRepository(
                     .get()
                     .await()
             }
+            FirestoreUsage.recordRead(
+                "syncSearchHistory",
+                FirestoreUsage.ReadType.GET_DOCS,
+                snapshot.documents.size,
+            )
 
             val remote = snapshot.documents.mapNotNull { doc ->
                 val data = doc.data ?: return@mapNotNull null
@@ -81,7 +87,10 @@ class SearchHistoryRepository(
             val merged = mergeHistories(local, remote)
             saveLocal(merged)
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to sync search history from Firebase", e)
+            Log.e(TAG, "Failed to sync search history from Firebase", e)
+            NoteStore.raiseWarning(
+                "Search history sync failed. Recent searches from other devices may not appear."
+            )
         }
     }
 

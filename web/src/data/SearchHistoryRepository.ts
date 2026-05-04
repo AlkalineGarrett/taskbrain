@@ -8,6 +8,8 @@ import {
   type Firestore,
 } from 'firebase/firestore'
 import type { Auth } from 'firebase/auth'
+import { firestoreUsage } from './FirestoreUsage'
+import { noteStore } from './NoteStore'
 
 export interface SearchHistoryEntry {
   query: string
@@ -23,12 +25,6 @@ export class SearchHistoryRepository {
     private readonly db: Firestore,
     private readonly auth: Auth,
   ) {}
-
-  private requireUserId(): string {
-    const uid = this.auth.currentUser?.uid
-    if (!uid) throw new Error('User not signed in')
-    return uid
-  }
 
   private historyCollection(userId: string) {
     return collection(this.db, 'users', userId, 'searchHistory')
@@ -46,26 +42,32 @@ export class SearchHistoryRepository {
     const trimmed = local.slice(0, MAX_ENTRIES)
     this.saveLocal(trimmed)
 
-    // Fire-and-forget Firebase write
-    try {
-      const userId = this.requireUserId()
-      const col = this.historyCollection(userId)
-      void addDoc(col, {
-        query: entry.query,
-        criteria: entry.criteria,
-        timestamp: entry.timestamp,
-      })
-    } catch {
-      // Non-critical — local storage is primary
-    }
+    const userId = this.auth.currentUser?.uid
+    if (!userId) return
+    const col = this.historyCollection(userId)
+    addDoc(col, {
+      query: entry.query,
+      criteria: entry.criteria,
+      timestamp: entry.timestamp,
+    }).then(
+      () => firestoreUsage.recordWrite('saveSearchHistory', 'SET'),
+      (err) => {
+        console.error('SearchHistoryRepository.saveEntry failed', err)
+        noteStore.raiseWarning(
+          'Search history sync failed. Your local search history is still available, but recent searches may not appear on other devices.',
+        )
+      },
+    )
   }
 
   async syncFromFirebase(): Promise<void> {
+    const userId = this.auth.currentUser?.uid
+    if (!userId) return
     try {
-      const userId = this.requireUserId()
       const col = this.historyCollection(userId)
       const q = query(col, orderBy('timestamp', 'desc'), limit(MAX_ENTRIES))
       const snapshot = await getDocs(q)
+      firestoreUsage.recordRead('syncSearchHistory', 'GET_DOCS', snapshot.size)
 
       const remote: SearchHistoryEntry[] = snapshot.docs
         .map((doc) => {
@@ -81,8 +83,11 @@ export class SearchHistoryRepository {
       const local = this.loadLocal()
       const merged = mergeHistories(local, remote)
       this.saveLocal(merged)
-    } catch {
-      // Non-critical
+    } catch (err) {
+      console.error('SearchHistoryRepository.syncFromFirebase failed', err)
+      noteStore.raiseWarning(
+        'Search history sync failed. Recent searches from other devices may not appear.',
+      )
     }
   }
 

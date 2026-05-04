@@ -13,6 +13,7 @@ import {
 import { noteFromFirestore, type Note } from '@/data/Note'
 import { withStampedWrite } from '@/data/NoteRepository'
 import { noteStore } from '@/data/NoteStore'
+import { firestoreUsage } from '@/data/FirestoreUsage'
 import { type NoteOperations, NoteOperationException } from './NoteOperations'
 
 /**
@@ -34,6 +35,7 @@ export class NoteRepositoryOperations implements NoteOperations {
 
   private async fetchNote(noteId: string): Promise<Note> {
     const snap = await getDoc(this.noteRef(noteId))
+    firestoreUsage.recordRead('dsl.fetchNote', 'DOC_GET')
     if (!snap.exists()) {
       throw new NoteOperationException(`Note not found: ${noteId}`)
     }
@@ -44,6 +46,7 @@ export class NoteRepositoryOperations implements NoteOperations {
     const ref = this.noteRef(noteId)
     await withStampedWrite(async (_, stamp) => {
       await updateDoc(ref, { ...updates, updatedAt: serverTimestamp(), ...stamp })
+      firestoreUsage.recordWrite('dsl.updateNote', 'UPDATE')
     }, noteStore.getRawNoteById(noteId) ?? undefined)
     return this.fetchNote(noteId)
   }
@@ -60,12 +63,14 @@ export class NoteRepositoryOperations implements NoteOperations {
         parentNoteId: null,
         ...stamp,
       })
+      firestoreUsage.recordWrite('dsl.createNote', 'SET')
     }, undefined)
     return this.fetchNote(newRef.id)
   }
 
   async getNoteById(noteId: string): Promise<Note | null> {
     const snap = await getDoc(this.noteRef(noteId))
+    firestoreUsage.recordRead('dsl.getNoteById', 'DOC_GET')
     if (!snap.exists()) return null
     return noteFromFirestore(snap.id, snap.data())
   }
@@ -77,6 +82,7 @@ export class NoteRepositoryOperations implements NoteOperations {
       where('path', '==', path),
     )
     const snapshot = await getDocs(q)
+    firestoreUsage.recordRead('dsl.findByPath', 'GET_DOCS', snapshot.size)
     if (snapshot.empty) return null
     const d = snapshot.docs[0]!
     return noteFromFirestore(d.id, d.data())
