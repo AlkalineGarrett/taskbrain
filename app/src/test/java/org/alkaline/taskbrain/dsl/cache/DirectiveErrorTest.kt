@@ -340,7 +340,6 @@ class DirectiveErrorTest {
     fun `fromParseException creates SyntaxError`() {
         val error = DirectiveErrorFactory.fromParseException("Expected ']'", position = 10)
 
-        assertTrue(error is SyntaxError)
         assertTrue(error.isDeterministic)
         assertEquals(10, error.position)
     }

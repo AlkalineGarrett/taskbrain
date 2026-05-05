@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.alkaline.taskbrain.data.AlarmRepository
+import org.alkaline.taskbrain.data.NoteStatsRepository
 import org.alkaline.taskbrain.data.NoteStore
 import org.alkaline.taskbrain.data.RecurringAlarmRepository
 import org.alkaline.taskbrain.util.PermissionHelper
@@ -104,6 +105,7 @@ class MainActivity : AppCompatActivity() {
                     NoteStore.clear()
                     AlarmRepository.clear()
                     RecurringAlarmRepository.clear()
+                    NoteStatsRepository.clear()
                     auth.signOut()
                 },
                 isFingerDown = isFingerDown,

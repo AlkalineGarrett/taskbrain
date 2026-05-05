@@ -815,30 +815,11 @@ class EditorState {
             tracked[0] = tracked[0].copy(noteId = parentNoteId)
         }
 
-        // Diagnostics: warn loudly if the editor's noteIds are mostly empty at save time.
-        // This is the symptom of the content-drop bug — log it BEFORE the save guard fires
-        // so we can correlate with the upstream cause.
-        val nonEmptyLines = tracked.count { it.content.isNotEmpty() }
-        val nonEmptyMissingId = tracked.count { it.content.isNotEmpty() && it.noteId == null }
-        if (parentNoteId.isEmpty() && nonEmptyLines > 0) {
+        if (parentNoteId.isEmpty() && tracked.any { it.content.isNotEmpty() }) {
             android.util.Log.w(
                 "LineReconciliation",
                 "EditorState.toNoteLines: parentNoteId is empty — line[0] will save with no parent id. " +
-                    "lines.size=${lines.size}, nonEmpty=$nonEmptyLines"
-            )
-        }
-        if (nonEmptyLines >= 3 && nonEmptyMissingId >= nonEmptyLines / 2) {
-            android.util.Log.w(
-                "LineReconciliation",
-                "EditorState.toNoteLines: $nonEmptyMissingId of $nonEmptyLines non-empty lines have no noteId. " +
-                    "This will cause new docs to be allocated on save. " +
-                    "parentNoteId='$parentNoteId'. " +
-                    "First missing: ${
-                        tracked.withIndex()
-                            .filter { it.value.content.isNotEmpty() && it.value.noteId == null }
-                            .take(3)
-                            .joinToString { "[${it.index}] '${it.value.content.take(40)}'" }
-                    }"
+                    "lines.size=${lines.size}"
             )
         }
 

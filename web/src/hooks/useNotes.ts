@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { NoteStats } from '@/data/NoteStats'
 import { NoteRepository } from '@/data/NoteRepository'
-import { NoteStatsRepository } from '@/data/NoteStatsRepository'
+import { noteStatsRepo } from '@/data/NoteStatsRepository'
 import { noteStore } from '@/data/NoteStore'
 import { useAllNotes } from '@/hooks/useNoteStore'
 import {
@@ -13,7 +13,6 @@ import { db, auth } from '@/firebase/config'
 import { ERROR_LOAD } from '@/strings'
 
 const repo = new NoteRepository(db, auth)
-const statsRepo = new NoteStatsRepository(db, auth)
 
 export function useNotes() {
   // Notes come from the live NoteStore listener — no explicit Firestore read.
@@ -37,7 +36,7 @@ export function useNotes() {
   const loadStats = useCallback(async () => {
     try {
       setError(null)
-      const allStats = await statsRepo.loadAllNoteStats()
+      const allStats = await noteStatsRepo.loadAllNoteStats()
       setStats(allStats)
     } catch (e) {
       setError(e instanceof Error ? e.message : ERROR_LOAD)
@@ -46,9 +45,11 @@ export function useNotes() {
     }
   }, [])
 
-  useEffect(() => { void loadStats() }, [loadStats])
+  useEffect(() => {
+    void loadStats()
+    return noteStatsRepo.subscribe(() => { void loadStats() })
+  }, [loadStats])
 
-  // Notes are live; refresh re-pulls only stats (which has no listener).
   const refresh = useCallback(async () => {
     await loadStats()
   }, [loadStats])

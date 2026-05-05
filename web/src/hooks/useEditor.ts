@@ -4,7 +4,7 @@ import { EditorController } from '@/editor/EditorController'
 import { UndoManager, type UndoManagerState } from '@/editor/UndoManager'
 import { toEditorLines, type EditorLineInput, type NoteLine } from '@/data/Note'
 import { NoteRepository, type SaveResult } from '@/data/NoteRepository'
-import { NoteStatsRepository } from '@/data/NoteStatsRepository'
+import { noteStatsRepo } from '@/data/NoteStatsRepository'
 import { noteStore } from '@/data/NoteStore'
 import { resolveNoteIds } from '@/editor/resolveNoteIds'
 import { db, auth } from '@/firebase/config'
@@ -16,7 +16,6 @@ const VIEW_COOLDOWN_MS = 5 * 60 * 1000
 const lastViewWriteMs = new Map<string, number>()
 
 const repo = new NoteRepository(db, auth)
-const statsRepo = new NoteStatsRepository(db, auth)
 
 /**
  * Editor-specific state cache for instant tab switching.
@@ -168,7 +167,7 @@ export function useEditor(noteId: string | undefined) {
       if (last !== undefined && Date.now() - last < VIEW_COOLDOWN_MS) return
       recordViewTimer = setTimeout(() => {
         if (cancelled) return
-        statsRepo.recordView(noteId)
+        noteStatsRepo.recordView(noteId)
           .then(() => { lastViewWriteMs.set(noteId, Date.now()) })
           .catch((e) => { console.error('recordView failed', e) })
       }, VIEW_DWELL_MS)

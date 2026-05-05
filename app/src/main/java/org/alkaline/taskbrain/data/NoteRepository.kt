@@ -564,8 +564,7 @@ class NoteRepository(
         // marks a new line from paste/split/agent/typed/etc.).
         val newRefs = mutableMapOf<Int, DocumentReference>()
         for (i in 1 until linesToSave.size) {
-            val id = linesToSave[i].noteId
-            if (id == null || NoteIdSentinel.isSentinel(id)) {
+            if (NoteIdSentinel.isSentinel(linesToSave[i].noteId)) {
                 newRefs[i] = newNoteRef()
             }
         }
@@ -1148,6 +1147,7 @@ class NoteRepository(
      * Called after the main diagnostics to provide full context without
      * blocking the guard (runs as a separate coroutine).
      */
+    @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
     private fun launchDescendantDiagnostics(noteId: String, toDelete: Set<String>) {
         GlobalScope.launch(Dispatchers.IO) {
             try {

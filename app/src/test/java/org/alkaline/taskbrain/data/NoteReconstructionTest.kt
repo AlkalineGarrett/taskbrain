@@ -279,7 +279,7 @@ class NoteReconstructionTest {
     }
 
     @Test
-    fun `reconstructContent - legacy "" in containedNotes is dropped as an orphan`() {
+    fun `reconstructContent - legacy empty-string entry in containedNotes is dropped as an orphan`() {
         // Pre-migration, "" was a spacer sentinel. Post-migration, all empty
         // lines are real docs — an "" entry is data corruption that the
         // orphan-drop path catches and flags via fixed = true.
