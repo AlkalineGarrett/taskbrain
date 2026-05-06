@@ -169,6 +169,75 @@ describe('EditorController gutter cut → paste at position 0', () => {
   })
 })
 
+describe('EditorController moveSelectionAcrossEditors', () => {
+  it('preserves noteIds when moving lines into a different editor', () => {
+    const source = new EditorState()
+    source.lines = [
+      new LineState('Title', undefined, ['srcRoot']),
+      new LineState('line A', undefined, ['noteA']),
+      new LineState('line B', undefined, ['noteB']),
+    ]
+    source.focusedLineIndex = 1
+    const sourceCtrl = new EditorController(source)
+    const start = source.getLineStartOffset(1)
+    const end = source.getLineStartOffset(2) + source.lines[2]!.text.length
+    sourceCtrl.setSelection(start, end)
+
+    const dest = new EditorState()
+    dest.lines = [
+      new LineState('Other', undefined, ['destRoot']),
+      new LineState('', undefined, ['destEmpty']),
+    ]
+    dest.focusedLineIndex = 1
+    const destCtrl = new EditorController(dest)
+    const dropOffset = dest.getLineStartOffset(1)
+
+    sourceCtrl.moveSelectionAcrossEditors(destCtrl, dropOffset)
+
+    expect(source.lines.find(l => l.text === 'line A')).toBeUndefined()
+    expect(source.lines.find(l => l.text === 'line B')).toBeUndefined()
+    const movedA = dest.lines.find(l => l.text === 'line A')
+    const movedB = dest.lines.find(l => l.text === 'line B')
+    expect(movedA?.noteIds).toEqual(['noteA'])
+    expect(movedB?.noteIds).toEqual(['noteB'])
+  })
+
+  it('falls back to in-editor move when target is the same controller', () => {
+    const state = new EditorState()
+    state.lines = [
+      new LineState('Title', undefined, ['root']),
+      new LineState('line A', undefined, ['noteA']),
+      new LineState('line B', undefined, ['noteB']),
+    ]
+    state.focusedLineIndex = 1
+    const ctrl = new EditorController(state)
+    const start = state.getLineStartOffset(1)
+    const end = start + state.lines[1]!.text.length
+    ctrl.setSelection(start, end)
+
+    const after = state.getLineStartOffset(2) + state.lines[2]!.text.length
+    ctrl.moveSelectionAcrossEditors(ctrl, after)
+
+    const movedA = state.lines.find(l => l.text === 'line A')
+    expect(movedA?.noteIds).toEqual(['noteA'])
+  })
+
+  it('no-op when source has no selection', () => {
+    const source = new EditorState()
+    source.lines = [new LineState('A', undefined, ['noteA'])]
+    source.focusedLineIndex = 0
+    const sourceCtrl = new EditorController(source)
+    const dest = new EditorState()
+    dest.lines = [new LineState('B', undefined, ['noteB'])]
+    dest.focusedLineIndex = 0
+    const destCtrl = new EditorController(dest)
+
+    sourceCtrl.moveSelectionAcrossEditors(destCtrl, 0)
+    expect(source.lines.map(l => l.text)).toEqual(['A'])
+    expect(dest.lines.map(l => l.text)).toEqual(['B'])
+  })
+})
+
 describe('EditorController delete', () => {
   it('removes selected text', () => {
     const ctrl = controllerWithText('hello world')

@@ -24,6 +24,7 @@ vi.mock('@/editor/useEditorInteractions', () => ({
 import { EditorState } from '@/editor/EditorState'
 import { EditorController } from '@/editor/EditorController'
 import { InlineEditSession } from '@/editor/InlineEditSession'
+import { UnifiedUndoManager } from '@/editor/UnifiedUndoManager'
 import { linesFromContent } from '../editor/inlineEditSessionTestHelpers'
 import { useGutterRouting } from '@/hooks/useGutterRouting'
 
@@ -54,6 +55,7 @@ function setup(opts: RoutingSetup = {}) {
       activeSessionRef,
       activateSession: activate,
       deactivateSession: deactivate,
+      unifiedUndoManager: new UnifiedUndoManager(),
       moveDraggingClassName: opts.moveDraggingClassName,
     })
   })

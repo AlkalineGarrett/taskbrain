@@ -1,14 +1,15 @@
-import { useCallback, useEffect, useState, type MutableRefObject } from 'react'
+import { useCallback, useEffect, type MutableRefObject } from 'react'
 import type { EditorController } from '@/editor/EditorController'
 import type { InlineEditSession } from '@/editor/InlineEditSession'
 import type { InlineSessionManager } from '@/editor/InlineSessionManager'
-import { UnifiedUndoManager } from '@/editor/UnifiedUndoManager'
+import type { UnifiedUndoManager } from '@/editor/UnifiedUndoManager'
 
 const MAIN_CONTEXT_ID = 'main'
 const INLINE_CONTEXT_PREFIX = 'inline:'
 const inlineContextId = (noteId: string) => `${INLINE_CONTEXT_PREFIX}${noteId}`
 
 interface UseUnifiedUndoOptions {
+  unifiedUndoManager: UnifiedUndoManager
   controller: EditorController
   sessionManager: InlineSessionManager
   activeSessionRef: MutableRefObject<InlineEditSession | null>
@@ -19,9 +20,12 @@ interface UseUnifiedUndoOptions {
 
 /**
  * Wires the unified undo/redo manager to the main controller and all inline
- * edit sessions, and exposes activation-aware undo/redo entry points.
+ * edit sessions, and exposes activation-aware undo/redo entry points. The
+ * manager itself is owned by the screen so cross-editor operations (like
+ * drag-drop) can drive it directly via withGroup.
  */
 export function useUnifiedUndo({
+  unifiedUndoManager,
   controller,
   sessionManager,
   activeSessionRef,
@@ -29,7 +33,6 @@ export function useUnifiedUndo({
   deactivateSession,
   invalidateAndRecompute,
 }: UseUnifiedUndoOptions) {
-  const [unifiedUndoManager] = useState(() => new UnifiedUndoManager())
 
   useEffect(() => {
     unifiedUndoManager.registerEditor(MAIN_CONTEXT_ID, controller)

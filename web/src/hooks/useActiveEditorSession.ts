@@ -3,6 +3,7 @@ import type { EditorController } from '@/editor/EditorController'
 import type { EditorState } from '@/editor/EditorState'
 import type { InlineEditSession } from '@/editor/InlineEditSession'
 import type { InlineSessionManager } from '@/editor/InlineSessionManager'
+import type { UnifiedUndoManager } from '@/editor/UnifiedUndoManager'
 import type { ActiveEditorContextValue } from '@/editor/ActiveEditorContext'
 
 /**
@@ -14,6 +15,7 @@ export function useActiveEditorSession(
   controller: EditorController,
   editorState: EditorState,
   sessionManager: InlineSessionManager,
+  unifiedUndoManager: UnifiedUndoManager,
 ) {
   // Both state and ref hold the active session — not redundant:
   //  - state drives renders so derived values (activeController, activeState,
@@ -69,7 +71,8 @@ export function useActiveEditorSession(
     deactivateSession,
     notifyActiveChange,
     sessionManager,
-  }), [activeController, activeState, activeSession, activateSession, deactivateSession, notifyActiveChange, sessionManager])
+    unifiedUndoManager,
+  }), [activeController, activeState, activeSession, activateSession, deactivateSession, notifyActiveChange, sessionManager, unifiedUndoManager])
 
   return {
     activeSession,

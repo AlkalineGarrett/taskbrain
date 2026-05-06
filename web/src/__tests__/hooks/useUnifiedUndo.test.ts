@@ -7,6 +7,7 @@ import { UndoManager } from '@/editor/UndoManager'
 import { InlineEditSession } from '@/editor/InlineEditSession'
 import { linesFromContent } from '../editor/inlineEditSessionTestHelpers'
 import { InlineSessionManager } from '@/editor/InlineSessionManager'
+import { UnifiedUndoManager } from '@/editor/UnifiedUndoManager'
 import { useUnifiedUndo } from '@/hooks/useUnifiedUndo'
 
 function createMainEditor() {
@@ -32,6 +33,7 @@ function commitEdit(controller: EditorController, newText: string) {
 function setup(initial: { activeSession?: InlineEditSession | null } = {}) {
   const controller = createMainEditor()
   const sessionManager = new InlineSessionManager()
+  const unifiedUndoManager = new UnifiedUndoManager()
   const invalidate = vi.fn()
   const activate = vi.fn()
   const deactivate = vi.fn(() => null)
@@ -39,6 +41,7 @@ function setup(initial: { activeSession?: InlineEditSession | null } = {}) {
   const { result, rerender } = renderHook(() => {
     const activeSessionRef = useRef<InlineEditSession | null>(initial.activeSession ?? null)
     const undo = useUnifiedUndo({
+      unifiedUndoManager,
       controller,
       sessionManager,
       activeSessionRef,

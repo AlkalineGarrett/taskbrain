@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef } from 'react'
 import type { DirectiveSegment } from '@/dsl/directives/DirectiveSegmenter'
 import type { EditorState } from './EditorState'
 import type { EditorController } from './EditorController'
-import { hitTestLineFromPoint, positionDropCursorFromPoint } from './TextMeasure'
+import type { UnifiedUndoManager } from './UnifiedUndoManager'
+import { hitTestLineFromPoint, positionDropCursorAtHit } from './TextMeasure'
+import { dropTargetRegistry } from './DropTargetRegistry'
 
 /**
  * Shared editor interaction handlers for both the main editor and view editors.
@@ -21,10 +23,27 @@ export function useEditorInteractions(
   getController: () => EditorController | null,
   lineAttr = 'data-line-index',
   getSegments: ((lineIndex: number) => DirectiveSegment[] | null) | null = null,
+  unifiedUndoManager: UnifiedUndoManager | null = null,
 ) {
   const isDraggingRef = useRef(false)
   const isMoveDraggingRef = useRef(false)
   const gutterAnchorRef = useRef<[number, number]>([-1, -1])
+
+  // Register this editor as a cross-editor drop target so a move-drag started
+  // anywhere can drop into it. Re-registers if the container or drop cursor
+  // element changes; the registry holds the concrete elements, not refs.
+  useEffect(() => {
+    const containerEl = containerRef.current
+    if (!containerEl) return
+    return dropTargetRegistry.register({
+      containerEl,
+      dropCursorEl: dropCursorRef.current,
+      getState,
+      getController,
+      lineAttr,
+      getSegments,
+    })
+  }, [containerRef, dropCursorRef, getState, getController, lineAttr, getSegments])
 
   // --- Hit testing ---
 
@@ -77,7 +96,9 @@ export function useEditorInteractions(
     isMoveDraggingRef.current = true
   }, [])
 
-  // Single mousemove + mouseup listener for drag selection, move drag, and gutter reset
+  // Single mousemove + mouseup listener for drag selection, move drag, and gutter reset.
+  // Move-drag hit-tests across the cross-editor registry so a drag started here
+  // can drop into another embedded editor; selection-drag stays scoped to this editor.
   useEffect(() => {
     const handleMouseMove = (e: globalThis.MouseEvent) => {
       if (isDraggingRef.current) {
@@ -86,26 +107,36 @@ export function useEditorInteractions(
         const offset = getGlobalOffset(e.clientX, e.clientY)
         if (offset != null) state.extendSelectionTo(offset)
       } else if (isMoveDraggingRef.current) {
-        const cursor = dropCursorRef.current
-        const el = containerRef.current
-        const state = getState()
-        if (!cursor || !el || !state) return
-        positionDropCursorFromPoint(
-          cursor, el, state.lines,
-          (i) => state.getLineStartOffset(i),
-          e.clientX, e.clientY, lineAttr, getSegments,
-        )
+        const result = dropTargetRegistry.findTargetAtPoint(e.clientX, e.clientY)
+        if (!result) {
+          dropTargetRegistry.hideAllDropCursorsExcept(null)
+          return
+        }
+        const { target, hit } = result
+        if (target.dropCursorEl) {
+          positionDropCursorAtHit(target.dropCursorEl, target.containerEl, hit)
+        }
+        dropTargetRegistry.hideAllDropCursorsExcept(target)
       }
     }
     const handleMouseUp = (e: globalThis.MouseEvent) => {
       gutterAnchorRef.current = [-1, -1]
       if (isMoveDraggingRef.current) {
         isMoveDraggingRef.current = false
-        if (dropCursorRef.current) dropCursorRef.current.style.display = 'none'
-        const ctrl = getController()
-        if (ctrl) {
-          const offset = getGlobalOffset(e.clientX, e.clientY)
-          if (offset != null) ctrl.moveSelectionTo(offset)
+        dropTargetRegistry.hideAllDropCursorsExcept(null)
+        const sourceCtrl = getController()
+        if (!sourceCtrl) return
+        const result = dropTargetRegistry.findTargetAtPoint(e.clientX, e.clientY)
+        if (!result) return
+        const targetCtrl = result.target.getController()
+        if (targetCtrl === sourceCtrl) {
+          sourceCtrl.moveSelectionTo(result.hit.globalOffset)
+        } else if (targetCtrl) {
+          // Cross-editor drop: wrap source-delete + target-paste in one undo
+          // group so a single press of cmd-z reverts both halves.
+          const performMove = () => sourceCtrl.moveSelectionAcrossEditors(targetCtrl, result.hit.globalOffset)
+          if (unifiedUndoManager) unifiedUndoManager.withGroup(performMove)
+          else performMove()
         }
         return
       }
@@ -117,7 +148,7 @@ export function useEditorInteractions(
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [containerRef, dropCursorRef, getState, getController, getGlobalOffset, lineAttr, getSegments])
+  }, [getState, getController, getGlobalOffset, gutterAnchorRef, unifiedUndoManager])
 
   return {
     handleDragStart,

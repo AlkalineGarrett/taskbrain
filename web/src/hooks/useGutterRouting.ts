@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, type MutableRefObject } from 'react'
 import type { EditorController } from '@/editor/EditorController'
 import type { EditorState } from '@/editor/EditorState'
 import type { InlineEditSession } from '@/editor/InlineEditSession'
+import type { UnifiedUndoManager } from '@/editor/UnifiedUndoManager'
 import { useEditorInteractions } from '@/editor/useEditorInteractions'
 
 interface UseGutterRoutingOptions {
@@ -10,6 +11,7 @@ interface UseGutterRoutingOptions {
   activeSessionRef: MutableRefObject<InlineEditSession | null>
   activateSession: (session: InlineEditSession) => void
   deactivateSession: (expectedSession?: InlineEditSession) => InlineEditSession | null
+  unifiedUndoManager: UnifiedUndoManager
   /** CSS class added to the editor container while a move-drag is in progress. */
   moveDraggingClassName?: string
 }
@@ -29,6 +31,7 @@ export function useGutterRouting({
   activeSessionRef,
   activateSession,
   deactivateSession,
+  unifiedUndoManager,
   moveDraggingClassName,
 }: UseGutterRoutingOptions) {
   const editorRef = useRef<HTMLDivElement>(null)
@@ -43,7 +46,10 @@ export function useGutterRouting({
     handleGutterDragUpdate: baseGutterDragUpdate,
     selectLineRange,
     gutterAnchorRef,
-  } = useEditorInteractions(editorRef, dropCursorRef, getParentState, getParentController)
+  } = useEditorInteractions(
+    editorRef, dropCursorRef, getParentState, getParentController,
+    'data-line-index', null, unifiedUndoManager,
+  )
 
   const handleMoveStart = useCallback(() => {
     baseHandleMoveStart()

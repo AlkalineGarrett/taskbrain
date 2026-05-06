@@ -3,6 +3,7 @@ import type { EditorController } from './EditorController'
 import type { EditorState } from './EditorState'
 import type { InlineEditSession } from './InlineEditSession'
 import type { InlineSessionManager } from './InlineSessionManager'
+import type { UnifiedUndoManager } from './UnifiedUndoManager'
 
 export interface ActiveEditorContextValue {
   /** The controller that command bar buttons should route to. */
@@ -21,6 +22,9 @@ export interface ActiveEditorContextValue {
   notifyActiveChange: () => void
   /** Centralized manager for inline edit sessions (eagerly created for all embedded notes). */
   sessionManager: InlineSessionManager
+  /** Cross-editor undo coordinator. Cross-editor drag-drop wraps its source-delete
+   *  + target-paste in `unifiedUndoManager.withGroup` so one undo reverts both. */
+  unifiedUndoManager: UnifiedUndoManager
 }
 
 export const ActiveEditorContext = createContext<ActiveEditorContextValue | null>(null)

@@ -28,6 +28,7 @@ import { ActiveEditorContext } from '@/editor/ActiveEditorContext'
 import { UndoActionsContext } from '@/editor/UndoActionsContext'
 import { ParentShowCompletedContext } from '@/editor/ParentShowCompletedContext'
 import { InlineSessionManager } from '@/editor/InlineSessionManager'
+import { UnifiedUndoManager } from '@/editor/UnifiedUndoManager'
 import styles from './NoteEditorScreen.module.css'
 
 export function NoteEditorScreen() {
@@ -38,6 +39,7 @@ export function NoteEditorScreen() {
   const noteId = loadedNoteId ?? urlNoteId
 
   const [sessionManager] = useState(() => new InlineSessionManager())
+  const [unifiedUndoManager] = useState(() => new UnifiedUndoManager())
 
   const allNotes = useAllNotes()
   const syncError = useNoteStoreError()
@@ -82,9 +84,10 @@ export function NoteEditorScreen() {
     activateSession,
     deactivateSession,
     activeEditorCtx,
-  } = useActiveEditorSession(controller, editorState, sessionManager)
+  } = useActiveEditorSession(controller, editorState, sessionManager, unifiedUndoManager)
 
-  const { unifiedUndoManager, handleUndo, handleRedo } = useUnifiedUndo({
+  const { handleUndo, handleRedo } = useUnifiedUndo({
+    unifiedUndoManager,
     controller,
     sessionManager,
     activeSessionRef,
@@ -130,6 +133,7 @@ export function NoteEditorScreen() {
     activeSessionRef,
     activateSession,
     deactivateSession,
+    unifiedUndoManager,
     moveDraggingClassName: styles.moveDragging,
   })
 

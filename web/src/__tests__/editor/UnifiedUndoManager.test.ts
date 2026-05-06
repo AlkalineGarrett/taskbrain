@@ -306,6 +306,71 @@ describe('UnifiedUndoManager stateVersion tracking', () => {
   })
 })
 
+describe('UnifiedUndoManager withGroup', () => {
+  it('drains both grouped entries with one undo', () => {
+    const unified = new UnifiedUndoManager()
+    const sourceCtrl = createEditor()
+    const targetCtrl = createEditor()
+    unified.registerEditor('source', sourceCtrl)
+    unified.registerEditor('target', targetCtrl)
+
+    simulateEdit(sourceCtrl, 'src1')
+    simulateEdit(targetCtrl, 'tgt1')
+
+    unified.withGroup(() => {
+      simulateEdit(sourceCtrl, 'src2')
+      simulateEdit(targetCtrl, 'tgt2')
+    })
+
+    const activated: string[] = []
+    const result1 = unified.undo('target', (id) => activated.push(id))
+    expect(result1).not.toBeNull()
+    expect(activated).toContain('source')
+    expect(sourceCtrl.state.text).toBe('src1')
+    expect(targetCtrl.state.text).toBe('tgt1')
+
+    // Second undo should pop the next non-grouped entry (target's pre-group edit)
+    const result2 = unified.undo('source', () => {})
+    expect(result2!.contextId).toBe('target')
+    expect(targetCtrl.state.text).toBe('')
+  })
+
+  it('redoes both grouped entries with one redo', () => {
+    const unified = new UnifiedUndoManager()
+    const sourceCtrl = createEditor()
+    const targetCtrl = createEditor()
+    unified.registerEditor('source', sourceCtrl)
+    unified.registerEditor('target', targetCtrl)
+
+    unified.withGroup(() => {
+      simulateEdit(sourceCtrl, 'src')
+      simulateEdit(targetCtrl, 'tgt')
+    })
+
+    unified.undo('target', () => {})
+    expect(sourceCtrl.state.text).toBe('')
+    expect(targetCtrl.state.text).toBe('')
+
+    unified.redo('source', () => {})
+    expect(sourceCtrl.state.text).toBe('src')
+    expect(targetCtrl.state.text).toBe('tgt')
+  })
+
+  it('non-grouped entries still undo one at a time', () => {
+    const unified = new UnifiedUndoManager()
+    const ctrl = createEditor()
+    unified.registerEditor('main', ctrl)
+
+    simulateEdit(ctrl, 'edit1')
+    simulateEdit(ctrl, 'edit2')
+
+    unified.undo('main', () => {})
+    expect(ctrl.state.text).toBe('edit1')
+    unified.undo('main', () => {})
+    expect(ctrl.state.text).toBe('')
+  })
+})
+
 describe('UnifiedUndoManager edge cases', () => {
   it('undo returns null when stack is empty', () => {
     const unified = new UnifiedUndoManager()

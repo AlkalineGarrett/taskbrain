@@ -139,7 +139,7 @@ function ViewNoteSection({
   session: preCreatedSession,
   directiveResults: viewDirectiveResults,
 }: ViewNoteSectionProps) {
-  const { activateSession, deactivateSession, activeSession, notifyActiveChange, sessionManager } = useActiveEditor()
+  const { activateSession, deactivateSession, activeSession, notifyActiveChange, sessionManager, unifiedUndoManager } = useActiveEditor()
   const parentShowCompleted = useContext(ParentShowCompletedContext)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [, setRenderVersion] = useState(0)
@@ -204,6 +204,7 @@ function ViewNoteSection({
     selectLineRange, gutterAnchorRef,
   } = useEditorInteractions(
     containerRef, dropCursorRef, getState, getController, 'data-view-line-index',
+    null, unifiedUndoManager,
   )
 
   // Focus management: activate session on mouseDown (capture phase fires before

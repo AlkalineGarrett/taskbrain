@@ -5,6 +5,7 @@ import { EditorController } from '@/editor/EditorController'
 import { InlineEditSession } from '@/editor/InlineEditSession'
 import { linesFromContent } from '../editor/inlineEditSessionTestHelpers'
 import { InlineSessionManager } from '@/editor/InlineSessionManager'
+import { UnifiedUndoManager } from '@/editor/UnifiedUndoManager'
 import { useActiveEditorSession } from '@/hooks/useActiveEditorSession'
 
 function makeParent() {
@@ -20,15 +21,17 @@ function makeParent() {
 describe('useActiveEditorSession', () => {
   let parent: ReturnType<typeof makeParent>
   let sessionManager: InlineSessionManager
+  let unifiedUndoManager: UnifiedUndoManager
 
   beforeEach(() => {
     parent = makeParent()
     sessionManager = new InlineSessionManager()
+    unifiedUndoManager = new UnifiedUndoManager()
   })
 
   it('starts with no active session and routes to parent', () => {
     const { result } = renderHook(() =>
-      useActiveEditorSession(parent.controller, parent.state, sessionManager),
+      useActiveEditorSession(parent.controller, parent.state, sessionManager, unifiedUndoManager),
     )
     expect(result.current.activeSession).toBeNull()
     expect(result.current.activeController).toBe(parent.controller)
@@ -38,7 +41,7 @@ describe('useActiveEditorSession', () => {
   it('activateSession routes commands to the inline controller/state', () => {
     const session = new InlineEditSession('view1', linesFromContent('view1', 'A\nB'))
     const { result } = renderHook(() =>
-      useActiveEditorSession(parent.controller, parent.state, sessionManager),
+      useActiveEditorSession(parent.controller, parent.state, sessionManager, unifiedUndoManager),
     )
 
     act(() => result.current.activateSession(session))
@@ -57,7 +60,7 @@ describe('useActiveEditorSession', () => {
     session1.editorState.setSelection(0, 1)
 
     const { result } = renderHook(() =>
-      useActiveEditorSession(parent.controller, parent.state, sessionManager),
+      useActiveEditorSession(parent.controller, parent.state, sessionManager, unifiedUndoManager),
     )
 
     act(() => result.current.activateSession(session1))
@@ -70,7 +73,7 @@ describe('useActiveEditorSession', () => {
   it('re-activating the same session does NOT clear its selection', () => {
     const session = new InlineEditSession('view1', linesFromContent('view1', 'A'))
     const { result } = renderHook(() =>
-      useActiveEditorSession(parent.controller, parent.state, sessionManager),
+      useActiveEditorSession(parent.controller, parent.state, sessionManager, unifiedUndoManager),
     )
 
     act(() => result.current.activateSession(session))
@@ -83,7 +86,7 @@ describe('useActiveEditorSession', () => {
   it('deactivateSession returns prior session and clears its selection', () => {
     const session = new InlineEditSession('view1', linesFromContent('view1', 'A'))
     const { result } = renderHook(() =>
-      useActiveEditorSession(parent.controller, parent.state, sessionManager),
+      useActiveEditorSession(parent.controller, parent.state, sessionManager, unifiedUndoManager),
     )
 
     act(() => result.current.activateSession(session))
@@ -105,7 +108,7 @@ describe('useActiveEditorSession', () => {
     const sessionB = new InlineEditSession('viewB', linesFromContent('viewB', 'B'))
 
     const { result } = renderHook(() =>
-      useActiveEditorSession(parent.controller, parent.state, sessionManager),
+      useActiveEditorSession(parent.controller, parent.state, sessionManager, unifiedUndoManager),
     )
 
     act(() => result.current.activateSession(sessionB))
@@ -124,7 +127,7 @@ describe('useActiveEditorSession', () => {
   it('activeEditorCtx exposes the manager and current active state', () => {
     const session = new InlineEditSession('view1', linesFromContent('view1', 'A'))
     const { result } = renderHook(() =>
-      useActiveEditorSession(parent.controller, parent.state, sessionManager),
+      useActiveEditorSession(parent.controller, parent.state, sessionManager, unifiedUndoManager),
     )
 
     expect(result.current.activeEditorCtx.sessionManager).toBe(sessionManager)
@@ -139,7 +142,7 @@ describe('useActiveEditorSession', () => {
     let renders = 0
     const { result } = renderHook(() => {
       renders += 1
-      return useActiveEditorSession(parent.controller, parent.state, sessionManager)
+      return useActiveEditorSession(parent.controller, parent.state, sessionManager, unifiedUndoManager)
     })
     const before = renders
     act(() => result.current.notifyActiveChange())

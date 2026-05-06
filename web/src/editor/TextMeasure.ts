@@ -408,6 +408,19 @@ export function positionDropCursorFromPoint(
   getSegments: ((lineIndex: number) => DirectiveSegment[] | null) | null = null,
 ): void {
   const hit = hitTestLineFromPoint(containerEl, lines, getLineStartOffset, clientX, clientY, lineAttr, getSegments)
+  positionDropCursorAtHit(cursor, containerEl, hit)
+}
+
+/**
+ * Position a drop-cursor at a precomputed hit result. Lets callers that
+ * already hit-tested (e.g. the cross-editor registry) reuse the result
+ * instead of paying for a second hit-test.
+ */
+export function positionDropCursorAtHit(
+  cursor: HTMLElement,
+  containerEl: Element,
+  hit: LineHitResult | null,
+): void {
   if (!hit?.inputEl) {
     cursor.style.display = 'none'
     return
