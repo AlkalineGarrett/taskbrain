@@ -52,16 +52,23 @@ fun rememberUnifiedUndoState(
         onDispose { manager.unregisterEditor(MAIN_CONTEXT_ID) }
     }
 
-    DisposableEffect(viewNotes) {
-        for (note in viewNotes) {
-            val session = inlineEditState.viewSessions[note.id]
-            if (session != null) {
-                manager.registerEditor(inlineContextId(note.id), session.controller)
-            }
+    // viewNotes is published before ensureSessionsForNotes finishes filling
+    // inlineEditState.viewSessions, so keying on viewNotes alone runs this
+    // effect when no sessions exist yet — leaving paste/undo on the embedded
+    // editor disconnected from the unified stack. Reading viewSessions[id]
+    // subscribes to that map entry, so the moment the suspending session
+    // loader publishes a session the key list changes and we re-register.
+    val inlineSessionIds = viewNotes.mapNotNull { note ->
+        inlineEditState.viewSessions[note.id]?.let { note.id }
+    }
+    DisposableEffect(inlineSessionIds) {
+        for (id in inlineSessionIds) {
+            val session = inlineEditState.viewSessions[id] ?: continue
+            manager.registerEditor(inlineContextId(id), session.controller)
         }
         onDispose {
-            for (note in viewNotes) {
-                manager.unregisterEditor(inlineContextId(note.id))
+            for (id in inlineSessionIds) {
+                manager.unregisterEditor(inlineContextId(id))
             }
         }
     }

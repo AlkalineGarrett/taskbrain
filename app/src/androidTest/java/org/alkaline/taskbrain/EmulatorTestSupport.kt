@@ -1,5 +1,8 @@
 package org.alkaline.taskbrain
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
@@ -8,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.waitUntilAtLeastOneExists
+import androidx.test.platform.app.InstrumentationRegistry
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.runBlocking
@@ -75,5 +79,18 @@ object EmulatorTestSupport {
     ) {
         waitUntilAtLeastOneExists(hasContentDescription(description), timeoutMillis)
         onNodeWithContentDescription(description).performClick()
+    }
+
+    /**
+     * Set the system clipboard to [text]. `setPrimaryClip` is a main-thread API,
+     * so this hops to the main looper via the instrumentation.
+     */
+    fun setSystemClipboardText(text: String, label: String = "test-clipboard") {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync {
+            val clipboard = instrumentation.targetContext
+                .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+        }
     }
 }
