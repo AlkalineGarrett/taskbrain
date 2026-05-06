@@ -312,6 +312,12 @@ private fun EditorRow(
         }.toSet()
     }
 
+    // Density-converted heights for view-line gutter hit testing. Must match
+    // the values LineGutter uses for visual layout, or taps drift across notes.
+    val density = LocalDensity.current
+    val gutterDefaultLineHeight = with(density) { EditorConfig.DefaultLineHeight.toPx() }
+    val gutterSeparatorHeight = with(density) { EditorConfig.NoteSeparatorHeight.toPx() }
+
     Row(modifier = Modifier.fillMaxWidth()) {
         if (showGutter) {
             LineGutter(
@@ -324,7 +330,7 @@ private fun EditorRow(
                 onLineSelected = { lineIndex, yPosition ->
                     val coordinator = gutterCoordinator
                     if (lineIndex in inlineEditLineIndices) {
-                        val res = resolveViewLineAtY(lineIndex, yPosition, lineLayouts, inlineEditState, directiveResults, state)
+                        val res = resolveViewLineAtY(lineIndex, yPosition, lineLayouts, inlineEditState, directiveResults, state, gutterDefaultLineHeight, gutterSeparatorHeight)
                         if (res != null) {
                             coordinator?.activate(EditorId.View(res.noteId))
                             res.sessionGutter.selectLine(res.viewLineIndex, res.sessionState)
@@ -342,7 +348,7 @@ private fun EditorRow(
                 onLineDragStart = { lineIndex, yPosition ->
                     val coordinator = gutterCoordinator
                     if (lineIndex in inlineEditLineIndices) {
-                        val res = resolveViewLineAtY(lineIndex, yPosition, lineLayouts, inlineEditState, directiveResults, state)
+                        val res = resolveViewLineAtY(lineIndex, yPosition, lineLayouts, inlineEditState, directiveResults, state, gutterDefaultLineHeight, gutterSeparatorHeight)
                         if (res != null) {
                             coordinator?.activate(EditorId.View(res.noteId))
                             res.sessionGutter.startDrag(res.viewLineIndex, res.sessionState)
@@ -358,7 +364,7 @@ private fun EditorRow(
                 },
                 onLineDragUpdate = { lineIndex, yPosition ->
                     if (lineIndex in inlineEditLineIndices) {
-                        val res = resolveViewLineAtY(lineIndex, yPosition, lineLayouts, inlineEditState, directiveResults, state)
+                        val res = resolveViewLineAtY(lineIndex, yPosition, lineLayouts, inlineEditState, directiveResults, state, gutterDefaultLineHeight, gutterSeparatorHeight)
                         if (res != null) {
                             res.sessionGutter.extendSelectionToLine(res.viewLineIndex, res.sessionState)
                         }
@@ -805,7 +811,12 @@ private data class ViewLineResolution(
 )
 
 /** Resolve Y position within a view-directive parent line to a view-line index.
- *  Iterates all notes in the view to find which note the Y position falls in. */
+ *  Iterates all notes in the view to find which note the Y position falls in.
+ *
+ *  `defaultLineHeight` and `separatorHeightPx` must be the same density-converted
+ *  values the visual `LineGutter` uses (`EditorConfig.DefaultLineHeight.toPx()` and
+ *  `EditorConfig.NoteSeparatorHeight.toPx()`); otherwise the resolver and the
+ *  rendered boxes drift line-by-line down the embedded view. */
 private fun resolveViewLineAtY(
     parentLineIndex: Int,
     yPosition: Float,
@@ -813,7 +824,8 @@ private fun resolveViewLineAtY(
     inlineEditState: InlineEditState?,
     directiveResults: Map<String, DirectiveResult>,
     parentState: EditorState,
-    defaultLineHeight: Float = 57f
+    defaultLineHeight: Float,
+    separatorHeightPx: Float
 ): ViewLineResolution? {
     if (inlineEditState == null) return null
     val viewNotes = findViewNotesForLine(parentLineIndex, parentState, directiveResults)
@@ -821,8 +833,6 @@ private fun resolveViewLineAtY(
 
     val parentLayout = parentLineLayouts.getOrNull(parentLineIndex) ?: return null
     val relativeY = yPosition - parentLayout.yOffset
-    // Approximate dp→px using the ratio between measured and nominal default line height (24dp)
-    val separatorHeightPx = EditorConfig.NoteSeparatorHeight.value * (defaultLineHeight / 24f)
     val metrics = computeViewLayoutMetrics(viewNotes, inlineEditState, parentLayout.height, separatorHeightPx, defaultLineHeight)
     var adjustedY = relativeY - metrics.topGap
 

@@ -26,7 +26,6 @@ import org.alkaline.taskbrain.ui.currentnote.gestures.LineLayoutInfo
 
 // Layout constants for directive edit row gaps
 private val DirectiveEditRowGapHeightFallback = 40.dp  // Fallback if no measured height available
-private val DefaultLineHeight = 24.dp
 /** Y-movement threshold (px) for distinguishing tap from drag within a single parent line. */
 private const val GUTTER_DRAG_THRESHOLD_PX = 20f
 
@@ -338,7 +337,7 @@ internal fun LineGutter(
 ) {
     val density = LocalDensity.current
     val gutterWidthPx = with(density) { EditorConfig.GutterWidth.toPx() }
-    val defaultLineHeight = with(density) { DefaultLineHeight.toPx() }
+    val defaultLineHeight = with(density) { EditorConfig.DefaultLineHeight.toPx() }
     val fallbackGapHeightPx = with(density) { DirectiveEditRowGapHeightFallback.toPx() }
 
     // Data needed to compute layouts on-demand during gesture handling

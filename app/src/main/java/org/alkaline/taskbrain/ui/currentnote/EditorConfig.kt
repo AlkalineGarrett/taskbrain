@@ -40,6 +40,12 @@ object EditorConfig {
     /** Width of the line number gutter */
     val GutterWidth: Dp = 21.dp
 
+    /** Fallback height used for an unmeasured gutter line and as the conversion
+     *  base for resolving y-positions inside a multi-note view. Both the visual
+     *  gutter and the gutter→view-line resolver must read this through the
+     *  current Density (`toPx()`) so they agree on every device. */
+    val DefaultLineHeight: Dp = 24.dp
+
     /** Height of the separator between notes in a multi-note view (matches NoteSeparator's 6.dp vertical padding × 2) */
     val NoteSeparatorHeight: Dp = 12.dp
 
