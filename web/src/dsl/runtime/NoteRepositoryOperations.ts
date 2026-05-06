@@ -11,8 +11,6 @@ import {
   type Firestore,
 } from 'firebase/firestore'
 import { noteFromFirestore, type Note } from '@/data/Note'
-import { withStampedWrite } from '@/data/NoteRepository'
-import { noteStore } from '@/data/NoteStore'
 import { firestoreUsage } from '@/data/FirestoreUsage'
 import { type NoteOperations, NoteOperationException } from './NoteOperations'
 
@@ -44,27 +42,22 @@ export class NoteRepositoryOperations implements NoteOperations {
 
   private async updateAndFetch(noteId: string, updates: Record<string, unknown>): Promise<Note> {
     const ref = this.noteRef(noteId)
-    await withStampedWrite(async (_, stamp) => {
-      await updateDoc(ref, { ...updates, updatedAt: serverTimestamp(), ...stamp })
-      firestoreUsage.recordWrite('dsl.updateNote', 'UPDATE')
-    }, noteStore.getRawNoteById(noteId) ?? undefined)
+    await updateDoc(ref, { ...updates, updatedAt: serverTimestamp() })
+    firestoreUsage.recordWrite('dsl.updateNote', 'UPDATE')
     return this.fetchNote(noteId)
   }
 
   async createNote(path: string, content: string): Promise<Note> {
     const newRef = doc(this.notesRef)
-    await withStampedWrite(async (_, stamp) => {
-      await setDoc(newRef, {
-        userId: this.userId,
-        content,
-        path,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        parentNoteId: null,
-        ...stamp,
-      })
-      firestoreUsage.recordWrite('dsl.createNote', 'SET')
-    }, undefined)
+    await setDoc(newRef, {
+      userId: this.userId,
+      content,
+      path,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      parentNoteId: null,
+    })
+    firestoreUsage.recordWrite('dsl.createNote', 'SET')
     return this.fetchNote(newRef.id)
   }
 

@@ -18,7 +18,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Before
 import org.junit.BeforeClass
 import org.junit.Test
-import java.util.UUID
 
 /**
  * IT-CH — heal Firestore-corrupt `containedNotes` via the Fix-button save.
@@ -79,8 +78,6 @@ class CorruptContainedNotesHealTest {
         firestore().collection("notes").document(rootId).update(
             mapOf(
                 "containedNotes" to listOf(c1, c2, foreignId),
-                "version" to FieldValue.increment(1),
-                "lastWriterOpId" to "external_${UUID.randomUUID()}",
                 "updatedAt" to FieldValue.serverTimestamp(),
             ),
         ).await()

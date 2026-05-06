@@ -18,7 +18,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.BeforeClass
 import org.junit.Test
-import java.util.UUID
 
 /**
  * Multi-source interleavings — two clients editing the same note's tree.
@@ -62,8 +61,6 @@ class ConcurrentEditsTest {
         firestore().collection("notes").document(a2).update(
             mapOf(
                 "content" to "a2-from-other-client",
-                "version" to FieldValue.increment(1),
-                "lastWriterOpId" to "external_${UUID.randomUUID()}",
                 "updatedAt" to FieldValue.serverTimestamp(),
             ),
         ).await()
@@ -102,8 +99,6 @@ class ConcurrentEditsTest {
         firestore().collection("notes").document(a1).update(
             mapOf(
                 "content" to "B-version",
-                "version" to FieldValue.increment(1),
-                "lastWriterOpId" to "external_${UUID.randomUUID()}",
                 "updatedAt" to FieldValue.serverTimestamp(),
             ),
         ).await()
@@ -141,8 +136,6 @@ class ConcurrentEditsTest {
         firestore().collection("notes").document(a1).update(
             mapOf(
                 "content" to "a1-edited-by-B",
-                "version" to FieldValue.increment(1),
-                "lastWriterOpId" to "external_${UUID.randomUUID()}",
                 "updatedAt" to FieldValue.serverTimestamp(),
             ),
         ).await()
@@ -189,8 +182,6 @@ class ConcurrentEditsTest {
         firestore().collection("notes").document(a2).update(
             mapOf(
                 "content" to "a2-from-other-client",
-                "version" to FieldValue.increment(1),
-                "lastWriterOpId" to "external_${UUID.randomUUID()}",
                 "updatedAt" to FieldValue.serverTimestamp(),
             ),
         ).await()
@@ -248,24 +239,18 @@ class ConcurrentEditsTest {
         firestore().collection("notes").document(x).update(
             mapOf(
                 "parentNoteId" to c2,
-                "version" to FieldValue.increment(1),
-                "lastWriterOpId" to "external_${UUID.randomUUID()}",
                 "updatedAt" to FieldValue.serverTimestamp(),
             ),
         ).await()
         firestore().collection("notes").document(rootId).update(
             mapOf(
                 "containedNotes" to listOf(c1, c2),
-                "lastWriterOpId" to "external_${UUID.randomUUID()}",
-                "version" to FieldValue.increment(1),
                 "updatedAt" to FieldValue.serverTimestamp(),
             ),
         ).await()
         firestore().collection("notes").document(c2).update(
             mapOf(
                 "containedNotes" to listOf(x),
-                "lastWriterOpId" to "external_${UUID.randomUUID()}",
-                "version" to FieldValue.increment(1),
                 "updatedAt" to FieldValue.serverTimestamp(),
             ),
         ).await()

@@ -265,91 +265,6 @@ describe('NoteRepository', () => {
       expect(batch.commit).toHaveBeenCalled()
     })
 
-    it('stamps the same lastWriterOpId on every write and registers it with NoteStore', async () => {
-      // Echo-suppression contract: a save batch carries one clientOpId across
-      // all docs (root + descendants + soft-deletes). NoteStore must register
-      // that opId so the listener can drop the server echo when it arrives.
-      const registerSpy = vi.spyOn(noteStore, 'registerPendingOp')
-      const releaseSpy = vi.spyOn(noteStore, 'releasePendingOp')
-      const { setSpy } = setupSaveBatch()
-      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
-        if (args.length === 1) return { id: 'new_child' } as any
-        return { id: args[args.length - 1] } as any
-      })
-
-      await repository.saveNoteWithChildren('note_1', [
-        { content: 'Parent', noteId: 'note_1' },
-        { content: '\tNew child', noteId: newSentinelNoteId('typed') },
-      ], null)
-
-      expect(registerSpy).toHaveBeenCalledTimes(1)
-      const opId = registerSpy.mock.calls[0]![0]
-      expect(typeof opId).toBe('string')
-      expect(opId.length).toBeGreaterThan(0)
-      expect(releaseSpy).toHaveBeenCalledWith(opId)
-
-      // Every write op carries the same opId.
-      const opIds = setSpy.mock.calls.map((c: any[]) => (c[1] as { lastWriterOpId?: string }).lastWriterOpId)
-      expect(opIds.every((id) => id === opId)).toBe(true)
-      expect(opIds.length).toBeGreaterThan(0)
-      registerSpy.mockRestore()
-      releaseSpy.mockRestore()
-    })
-
-    it('stamps version=1 on a fresh descendant doc', async () => {
-      const { setSpy } = setupSaveBatch()
-      vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
-        if (args.length === 1) return { id: 'fresh_id' } as any
-        return { id: args[args.length - 1] } as any
-      })
-
-      await repository.saveNoteWithChildren('note_1', [
-        { content: 'Parent', noteId: 'note_1' },
-        { content: '\tNew', noteId: newSentinelNoteId('typed') },
-      ], null)
-
-      // Find the CREATE call (2-arg, no merge option) and confirm version=1.
-      const createCall = setSpy.mock.calls.find((c: any[]) => c.length === 2)
-      expect(createCall).toBeDefined()
-      expect(createCall![1].version).toBe(1)
-    })
-
-    it('bumps version on an existing descendant rewrite', async () => {
-      // existingChild has version=4 in NoteStore — the merge write should land
-      // version=5 so external listeners can detect a real change.
-      const existingChild: Note = note({
-        id: 'c1',
-        userId: USER_ID,
-        parentNoteId: 'note_1',
-        rootNoteId: 'note_1',
-        content: 'old',
-        version: 4,
-      })
-      const rootNote: Note = note({ id: 'note_1', containedNotes: ['c1'], version: 2 })
-      vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['c1']))
-      vi.spyOn(noteStore, 'getNoteById').mockImplementation((id) =>
-        id === 'note_1' ? rootNote : id === 'c1' ? existingChild : undefined,
-      )
-      vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
-        id === 'note_1' ? rootNote : id === 'c1' ? existingChild : undefined,
-      )
-      const { setSpy } = setupSaveBatch()
-      vi.mocked(mockDoc).mockImplementation((...args: any[]) => ({ id: args[args.length - 1] } as any))
-
-      await repository.saveNoteWithChildren('note_1', [
-        { content: 'Parent', noteId: 'note_1' },
-        { content: '\tedited', noteId: 'c1' },
-      ], null)
-
-      const c1Write = setSpy.mock.calls.find((c: any[]) => (c[0] as { id: string }).id === 'c1')
-      expect(c1Write).toBeDefined()
-      expect(c1Write![1].version).toBe(5)
-
-      const rootWrite = setSpy.mock.calls.find((c: any[]) => (c[0] as { id: string }).id === 'note_1')
-      expect(rootWrite).toBeDefined()
-      expect(rootWrite![1].version).toBe(3)
-    })
-
     it('creates new child notes and returns their IDs', async () => {
       vi.mocked(mockDoc).mockImplementation((...args: any[]) => {
         if (args.length === 1) {
@@ -1160,9 +1075,9 @@ describe('NoteRepository', () => {
   // region restoreCutDeletedNotes (Phase 6)
 
   describe('restoreCutDeletedNotes', () => {
-    it('flips state=null for each id and stamps a fresh opId', async () => {
-      const c1 = note({ id: 'c1', content: 'a', state: 'cut-delete', parentNoteId: 'r', rootNoteId: 'r', version: 3 })
-      const c2 = note({ id: 'c2', content: 'b', state: 'cut-delete', parentNoteId: 'r', rootNoteId: 'r', version: 1 })
+    it('flips state=null for each id', async () => {
+      const c1 = note({ id: 'c1', content: 'a', state: 'cut-delete', parentNoteId: 'r', rootNoteId: 'r' })
+      const c2 = note({ id: 'c2', content: 'b', state: 'cut-delete', parentNoteId: 'r', rootNoteId: 'r' })
       vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
         id === 'c1' ? c1 : id === 'c2' ? c2 : undefined,
       )
@@ -1174,16 +1089,7 @@ describe('NoteRepository', () => {
       expect(batch.commit).toHaveBeenCalled()
       const writes = setSpy.mock.calls
       expect(writes.length).toBe(2)
-      // Every write sets state=null and bumps version (3→4, 1→2).
-      const c1Write = writes.find((c: any[]) => c[1].version === 4)
-      const c2Write = writes.find((c: any[]) => c[1].version === 2)
-      expect(c1Write).toBeDefined()
-      expect(c2Write).toBeDefined()
-      expect(c1Write![1].state).toBeNull()
-      expect(c2Write![1].state).toBeNull()
-      // Every write carries a single shared lastWriterOpId.
-      const opIds = writes.map((c: any[]) => c[1].lastWriterOpId)
-      expect(opIds.every((id) => id != null && id === opIds[0])).toBe(true)
+      expect(writes.every((c: any[]) => c[1].state === null)).toBe(true)
     })
 
     it('skips ids that are not in NoteStore', async () => {
@@ -1483,10 +1389,10 @@ describe('NoteRepository', () => {
   // region Delete/Restore Tests
 
   describe('softDeleteNote', () => {
-    it('deletes root and new-format descendants with opId + version stamps', async () => {
-      const root = note({ id: 'note_1', version: 5 })
-      const c1 = note({ id: 'child_1', version: 2 })
-      const c2 = note({ id: 'child_2', version: 7 })
+    it('deletes root and new-format descendants', async () => {
+      const root = note({ id: 'note_1' })
+      const c1 = note({ id: 'child_1' })
+      const c2 = note({ id: 'child_2' })
       vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set(['child_1', 'child_2']))
       vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
         id === 'note_1' ? root : id === 'child_1' ? c1 : id === 'child_2' ? c2 : undefined,
@@ -1496,21 +1402,14 @@ describe('NoteRepository', () => {
 
       await repository.softDeleteNote('note_1')
 
-      // root + 2 children → 3 merge writes.
+      // root + 2 children → 3 merge writes; every write flips state.
       expect(setSpy.mock.calls.length).toBe(3)
-      // Every write flips state to 'deleted' and stamps a single shared opId.
-      const states = setSpy.mock.calls.map((c: any[]) => c[1].state)
-      expect(states.every((s) => s === 'deleted')).toBe(true)
-      const opIds = setSpy.mock.calls.map((c: any[]) => c[1].lastWriterOpId)
-      expect(opIds.every((id) => id != null && id === opIds[0])).toBe(true)
-      // Versions bumped from each existing note.
-      const rootWrite = setSpy.mock.calls.find((c: any[]) => (c[0] as { id: string }).id === 'note_1')
-      expect(rootWrite![1].version).toBe(6)
+      expect(setSpy.mock.calls.every((c: any[]) => c[1].state === 'deleted')).toBe(true)
       expect(batch.commit).toHaveBeenCalled()
     })
 
     it('deletes only root when no descendants', async () => {
-      const root = note({ id: 'note_1', version: 1 })
+      const root = note({ id: 'note_1' })
       vi.spyOn(noteStore, 'getDescendantIds').mockReturnValue(new Set())
       vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
         id === 'note_1' ? root : undefined,
@@ -1526,10 +1425,10 @@ describe('NoteRepository', () => {
   })
 
   describe('undeleteNote', () => {
-    it('restores root and new-format descendants with opId + version stamps', async () => {
-      const root = note({ id: 'note_1', state: 'deleted', version: 3 })
-      const c1 = note({ id: 'child_1', state: 'deleted', version: 1 })
-      const c2 = note({ id: 'child_2', state: 'deleted', version: 4 })
+    it('restores root and new-format descendants', async () => {
+      const root = note({ id: 'note_1', state: 'deleted' })
+      const c1 = note({ id: 'child_1', state: 'deleted' })
+      const c2 = note({ id: 'child_2', state: 'deleted' })
       vi.spyOn(noteStore, 'getAllDescendantIds').mockReturnValue(new Set(['child_1', 'child_2']))
       vi.spyOn(noteStore, 'getRawNoteById').mockImplementation((id) =>
         id === 'note_1' ? root : id === 'child_1' ? c1 : id === 'child_2' ? c2 : undefined,
@@ -1542,9 +1441,6 @@ describe('NoteRepository', () => {
       expect(setSpy.mock.calls.length).toBe(3)
       // Every write flips state to null.
       expect(setSpy.mock.calls.every((c: any[]) => c[1].state === null)).toBe(true)
-      // Single shared opId.
-      const opIds = setSpy.mock.calls.map((c: any[]) => c[1].lastWriterOpId)
-      expect(opIds.every((id) => id != null && id === opIds[0])).toBe(true)
     })
 
   })

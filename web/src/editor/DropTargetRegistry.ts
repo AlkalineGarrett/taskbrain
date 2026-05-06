@@ -4,8 +4,10 @@ import type { EditorController } from './EditorController'
 import { hitTestLineFromPoint, type LineHitResult } from './TextMeasure'
 
 export interface DropTarget {
-  containerEl: HTMLElement
-  dropCursorEl: HTMLElement | null
+  /** Source of truth for the container DOM node — read at hit-test time so
+   *  re-renders that swap the underlying element don't leave a stale snapshot. */
+  getContainer: () => HTMLElement | null
+  getDropCursor: () => HTMLElement | null
   getState: () => EditorState | null
   getController: () => EditorController | null
   lineAttr: string
@@ -14,6 +16,7 @@ export interface DropTarget {
 
 export interface DropTargetHit {
   target: DropTarget
+  containerEl: HTMLElement
   hit: LineHitResult
 }
 
@@ -37,55 +40,61 @@ class DropTargetRegistryImpl {
   }
 
   /**
-   * Find the target whose container holds the point. Falls back to the target
-   * with the closest container when the cursor is between/outside them, so
-   * dragging slightly past a container's edge still resolves to a drop point
-   * inside it instead of dropping the operation.
+   * Find the target whose container holds the point. When multiple targets
+   * contain it (the main editor's container nests the embedded views), the
+   * smallest-area match wins so the embedded section beats its enclosing
+   * parent. Falls back to the closest target by Chebyshev distance when the
+   * cursor is outside every container.
    */
   findTargetAtPoint(clientX: number, clientY: number): DropTargetHit | null {
-    let direct: DropTarget | null = null
-    let nearest: DropTarget | null = null
+    let direct: { target: DropTarget; el: HTMLElement } | null = null
+    let directArea = Infinity
+    let nearest: { target: DropTarget; el: HTMLElement } | null = null
     let nearestDist = Infinity
 
     for (const t of this.targets) {
-      const rect = t.containerEl.getBoundingClientRect()
-      if (
+      const el = t.getContainer()
+      if (!el) continue
+      const rect = el.getBoundingClientRect()
+      const inside =
         clientY >= rect.top && clientY < rect.bottom &&
         clientX >= rect.left && clientX < rect.right
-      ) {
-        direct = t
-        break
+      if (inside) {
+        const area = rect.width * rect.height
+        if (area < directArea) {
+          directArea = area
+          direct = { target: t, el }
+        }
+        continue
       }
-      const dyTop = rect.top - clientY
-      const dyBot = clientY - rect.bottom
-      const dy = dyTop > 0 ? dyTop : dyBot > 0 ? dyBot : 0
-      const dxL = rect.left - clientX
-      const dxR = clientX - rect.right
-      const dx = dxL > 0 ? dxL : dxR > 0 ? dxR : 0
+      // Chebyshev distance from point to rect.
+      const dy = Math.max(0, rect.top - clientY, clientY - rect.bottom)
+      const dx = Math.max(0, rect.left - clientX, clientX - rect.right)
       const dist = Math.max(dx, dy)
       if (dist < nearestDist) {
         nearestDist = dist
-        nearest = t
+        nearest = { target: t, el }
       }
     }
 
-    const target = direct ?? nearest
-    if (!target) return null
-    const state = target.getState()
+    const picked = direct ?? nearest
+    if (!picked) return null
+    const state = picked.target.getState()
     if (!state) return null
     const hit = hitTestLineFromPoint(
-      target.containerEl, state.lines,
+      picked.el, state.lines,
       (i) => state.getLineStartOffset(i),
-      clientX, clientY, target.lineAttr, target.getSegments,
+      clientX, clientY, picked.target.lineAttr, picked.target.getSegments,
     )
     if (!hit) return null
-    return { target, hit }
+    return { target: picked.target, containerEl: picked.el, hit }
   }
 
   hideAllDropCursorsExcept(except: DropTarget | null): void {
     for (const t of this.targets) {
       if (t === except) continue
-      if (t.dropCursorEl) t.dropCursorEl.style.display = 'none'
+      const cursor = t.getDropCursor()
+      if (cursor) cursor.style.display = 'none'
     }
   }
 

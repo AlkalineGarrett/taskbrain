@@ -8,6 +8,7 @@ import { InlineEditSession } from '@/editor/InlineEditSession'
 import { linesFromContent } from '../editor/inlineEditSessionTestHelpers'
 import { InlineSessionManager } from '@/editor/InlineSessionManager'
 import { UnifiedUndoManager } from '@/editor/UnifiedUndoManager'
+import { note } from '../factories'
 import { useUnifiedUndo } from '@/hooks/useUnifiedUndo'
 
 function createMainEditor() {
@@ -92,12 +93,7 @@ describe('useUnifiedUndo', () => {
     // Add the inline session, then force a re-render so the
     // hook's effect picks it up and registers the inline controller.
     await sessionManager.ensureSessions(
-      [{
-        id: 'view1', userId: '', parentNoteId: null, content: 'A', createdAt: null, updatedAt: null,
-        tags: [], containedNotes: [], state: null, path: '', rootNoteId: null,
-        showCompleted: true, onceCache: {},
-        version: 0, lastWriterOpId: null, containedNotesBase: null,
-      }],
+      [note({ id: 'view1', content: 'A' })],
       async (id) => [{ content: 'A', noteId: id }],
     )
     rerender()

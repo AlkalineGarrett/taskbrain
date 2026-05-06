@@ -384,12 +384,11 @@ class NoteRepository(
      * Per-batch context shared by every [planSaveNoteWithChildren] in a
      * single `saveNoteWithChildren` or `saveMultipleNotes` invocation.
      * Bundling these together keeps the planner signatures from sprawling
-     * and ensures every plan in the batch sees the same userId / opId /
-     * cut-buffer snapshot.
+     * and ensures every plan in the batch sees the same userId / cut-buffer
+     * snapshot.
      */
     private data class SaveContext(
         val userId: String,
-        val opId: String,
         val pendingCuts: Map<String, String>,
         /** Real noteIds claimed by ANY session in the same `saveMultipleNotes`
          *  batch. A line moved cross-note via paste-with-tryReclaim consumes
@@ -424,17 +423,15 @@ class NoteRepository(
     ): Result<SaveResult> = ioLogged("saveNoteWithChildren") body@{
         if (trackedLines.isEmpty()) return@body SaveResult(emptyMap(), emptyMap())
         val userId = requireUserId()
-        withPendingOp { opId ->
-            // Single-note save: no cross-session reparent coordination needed.
-            val ctx = SaveContext(userId, opId, NoteStore.getPendingCuts(), emptySet())
-            val plan = planSaveNoteWithChildren(
-                noteId, trackedLines, extraOpsBuilder, localBases, ctx,
-            )
-            val cutDelete = buildCutDeleteOps(listOf(plan.survivingIds), ctx)
-            commitInBatches("saveNoteWithChildren", plan.ops + cutDelete.ops)
-            for (id in cutDelete.committedCutIds) NoteStore.clearPendingCut(id)
-            SaveResult(plan.createdIds, plan.postSaveContainedNotes)
-        }
+        // Single-note save: no cross-session reparent coordination needed.
+        val ctx = SaveContext(userId, NoteStore.getPendingCuts(), emptySet())
+        val plan = planSaveNoteWithChildren(
+            noteId, trackedLines, extraOpsBuilder, localBases, ctx,
+        )
+        val cutDelete = buildCutDeleteOps(listOf(plan.survivingIds), ctx)
+        commitInBatches("saveNoteWithChildren", plan.ops + cutDelete.ops)
+        for (id in cutDelete.committedCutIds) NoteStore.clearPendingCut(id)
+        SaveResult(plan.createdIds, plan.postSaveContainedNotes)
     }
 
     /**
@@ -449,36 +446,34 @@ class NoteRepository(
     ): Result<Map<String, SaveResult>> = ioLogged("saveMultipleNotes") body@{
         if (items.isEmpty()) return@body emptyMap()
         val userId = requireUserId()
-        withPendingOp { opId ->
-            // Pre-compute the union of real noteIds claimed across every
-            // session's trackedLines so each session's planSave can exclude
-            // them from toDelete — see SaveContext.globalSurvivingIds for
-            // the race this prevents.
-            val globalSurvivingIds = items.asSequence()
-                .flatMap { it.trackedLines.asSequence() }
-                .map { it.noteId }
-                .filter { NoteIdSentinel.isRealNoteId(it) }
-                .toSet()
-            val ctx = SaveContext(
-                userId, opId,
-                NoteStore.getPendingCuts(),
-                globalSurvivingIds,
-            )
-            val plans = items
-                .filter { it.trackedLines.isNotEmpty() }
-                .map { item ->
-                    planSaveNoteWithChildren(
-                        item.noteId, item.trackedLines, extraOpsBuilder = null,
-                        localBases = item.localBases, ctx = ctx,
-                    )
-                }
-            val cutDelete = buildCutDeleteOps(plans.map { it.survivingIds }, ctx)
-            val allOps = plans.flatMap { it.ops } + cutDelete.ops
-            commitInBatches("saveMultipleNotes", allOps)
-            for (id in cutDelete.committedCutIds) NoteStore.clearPendingCut(id)
-            plans.associate {
-                it.noteId to SaveResult(it.createdIds, it.postSaveContainedNotes)
+        // Pre-compute the union of real noteIds claimed across every session's
+        // trackedLines so each session's planSave can exclude them from
+        // toDelete — see SaveContext.globalSurvivingIds for the race this
+        // prevents.
+        val globalSurvivingIds = items.asSequence()
+            .flatMap { it.trackedLines.asSequence() }
+            .map { it.noteId }
+            .filter { NoteIdSentinel.isRealNoteId(it) }
+            .toSet()
+        val ctx = SaveContext(
+            userId,
+            NoteStore.getPendingCuts(),
+            globalSurvivingIds,
+        )
+        val plans = items
+            .filter { it.trackedLines.isNotEmpty() }
+            .map { item ->
+                planSaveNoteWithChildren(
+                    item.noteId, item.trackedLines, extraOpsBuilder = null,
+                    localBases = item.localBases, ctx = ctx,
+                )
             }
+        val cutDelete = buildCutDeleteOps(plans.map { it.survivingIds }, ctx)
+        val allOps = plans.flatMap { it.ops } + cutDelete.ops
+        commitInBatches("saveMultipleNotes", allOps)
+        for (id in cutDelete.committedCutIds) NoteStore.clearPendingCut(id)
+        plans.associate {
+            it.noteId to SaveResult(it.createdIds, it.postSaveContainedNotes)
         }
     }
 
@@ -509,7 +504,7 @@ class NoteRepository(
             // we only need to schedule the cut-delete write for the rest.
             if (!reviving) idsToPark.add(lineId)
         }
-        return CutDeleteOps(buildStateChangeOps(idsToPark, NoteState.CUT_DELETE, ctx.opId), committedCutIds)
+        return CutDeleteOps(buildStateChangeOps(idsToPark, NoteState.CUT_DELETE), committedCutIds)
     }
 
     /**
@@ -519,8 +514,6 @@ class NoteRepository(
      * content-drop guard as before — assertions throw inline so a bad item in
      * a multi-note save aborts the whole batch before any commit.
      *
-     * [ctx.opId] is the same value for every doc in the batch; the listener
-     * uses it to identify our own server echo and skip the editor reload.
      * [localBases], when non-null, is the `containedNotes` snapshot the
      * editor observed at edit-session start (root + every live descendant);
      * used to 3-way merge against the current remote at every depth so
@@ -536,7 +529,7 @@ class NoteRepository(
         localBases: Map<String, List<String>>?,
         ctx: SaveContext,
     ): SavePlan {
-        val (userId, opId, pendingCuts) = ctx
+        val (userId, pendingCuts) = ctx
         assertNoteStoreLoaded("saveNoteWithChildren", noteId)
         warnIfDescendantsLikelyStale("saveNoteWithChildren", noteId)
 
@@ -690,7 +683,6 @@ class NoteRepository(
             val rootBase = localBases?.get(noteId)
             val rootData = baseNoteData(userId, rootContent).apply {
                 put("containedNotes", mergedContained[0])
-                putAll(stampWrite(opId, existingRoot))
                 // Stamp containedNotesBase only when an anchor was recorded —
                 // skipping when null avoids writing a tautological field on
                 // legacy paths that don't track an edit-session anchor.
@@ -728,7 +720,6 @@ class NoteRepository(
                     put("containedNotes", mergedContained[i])
                     put("state", null)
                     put("updatedAt", FieldValue.serverTimestamp())
-                    putAll(stampWrite(opId, existingDescendant))
                     if (base != null) put("containedNotesBase", base)
                 }
                 ops.add(BatchOp(noteRef(descId), descData, merge = true))
@@ -743,7 +734,7 @@ class NoteRepository(
                         "containedNotes" to mergedContained[i],
                         "createdAt" to FieldValue.serverTimestamp(),
                         "updatedAt" to FieldValue.serverTimestamp(),
-                    ).apply { putAll(stampWrite(opId, existing = null)) },
+                    ),
                     merge = false
                 ))
             }
@@ -761,7 +752,7 @@ class NoteRepository(
                 mapOf(
                     "state" to NoteState.DELETED,
                     "updatedAt" to FieldValue.serverTimestamp(),
-                ) + stampWrite(opId, NoteStore.getRawNoteById(id)),
+                ),
                 merge = true
             ))
         }
@@ -848,13 +839,11 @@ class NoteRepository(
      */
     suspend fun createNote(): Result<String> = ioLogged("createNote") {
         val userId = requireUserId()
-        withPendingOp { opId ->
-            val data = newNoteData(userId, "").apply { putAll(stampWrite(opId, existing = null)) }
-            val ref = notesCollection.add(data).await()
-            FirestoreUsage.recordWrite("createNote", FirestoreUsage.WriteType.SET)
-            Log.d(TAG, "Note created with ID: ${ref.id}")
-            ref.id
-        }
+        val data = newNoteData(userId, "")
+        val ref = notesCollection.add(data).await()
+        FirestoreUsage.recordWrite("createNote", FirestoreUsage.WriteType.SET)
+        Log.d(TAG, "Note created with ID: ${ref.id}")
+        ref.id
     }
 
     /**
@@ -862,16 +851,11 @@ class NoteRepository(
      */
     suspend fun createMultiLineNote(content: String): Result<String> = ioLogged("createMultiLineNote") body@{
         val userId = requireUserId()
-        // Register the opId so the listener suppresses the create echo
-        // — same contract as saveNoteWithChildren.
-        return@body withPendingOp { opId ->
-            createMultiLineNoteInner(userId, opId, content)
-        }
+        return@body createMultiLineNoteInner(userId, content)
     }
 
     private suspend fun createMultiLineNoteInner(
         userId: String,
-        opId: String,
         content: String,
     ): String {
         val lines = content.lines()
@@ -879,7 +863,7 @@ class NoteRepository(
         val childLines = lines.drop(1)
 
         if (childLines.isEmpty() || childLines.all { it.trimStart('\t').isEmpty() }) {
-            val data = newNoteData(userId, firstLine).apply { putAll(stampWrite(opId, existing = null)) }
+            val data = newNoteData(userId, firstLine)
             val ref = notesCollection.add(data).await()
             FirestoreUsage.recordWrite("createMultiLineNote", FirestoreUsage.WriteType.SET)
             return ref.id
@@ -925,7 +909,6 @@ class NoteRepository(
 
         batch.set(parentRef, newNoteData(userId, firstLine).apply {
             put("containedNotes", rootChildren)
-            putAll(stampWrite(opId, existing = null))
         })
 
         for (node in nodes) {
@@ -937,7 +920,7 @@ class NoteRepository(
                 "containedNotes" to node.children.toList(),
                 "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp(),
-            ).apply { putAll(stampWrite(opId, existing = null)) })
+            ))
         }
 
         batch.commit().await()
@@ -957,9 +940,7 @@ class NoteRepository(
         assertNoteStoreLoaded("softDeleteNote", noteId)
         warnIfDescendantsLikelyStale("softDeleteNote", noteId)
         val idsToDelete = NoteStore.getDescendantIds(noteId) + noteId
-        withPendingOp { opId ->
-            commitInBatches("softDeleteNote", buildStateChangeOps(idsToDelete, NoteState.DELETED, opId))
-        }
+        commitInBatches("softDeleteNote", buildStateChangeOps(idsToDelete, NoteState.DELETED))
     }
 
     /**
@@ -972,39 +953,31 @@ class NoteRepository(
         // only lists active children, so it can't detect missing soft-deleted
         // descendants — the heuristic doesn't apply here.
         val idsToRestore = NoteStore.getAllDescendantIds(noteId) + noteId
-        withPendingOp { opId ->
-            commitInBatches("undeleteNote", buildStateChangeOps(idsToRestore, null, opId))
-        }
+        commitInBatches("undeleteNote", buildStateChangeOps(idsToRestore, null))
     }
 
     /**
      * Restores parked cut-delete docs by flipping `state` back to null. The
      * stray-child healing inside reconstruction picks each restored doc up
      * under its preserved parentNoteId; the next save of that root writes
-     * the healed `containedNotes` back to Firestore. Bumps `version` and
-     * stamps a fresh `lastWriterOpId` so the listener treats the write as
-     * our own echo.
+     * the healed `containedNotes` back to Firestore.
      */
     suspend fun restoreCutDeletedNotes(noteIds: List<String>): Result<Unit> = ioLogged("restoreCutDeletedNotes") body@{
         requireUserId()
         if (noteIds.isEmpty()) return@body
-        withPendingOp { opId ->
-            commitInBatches("restoreCutDeletedNotes", buildStateChangeOps(noteIds, null, opId))
-        }
+        commitInBatches("restoreCutDeletedNotes", buildStateChangeOps(noteIds, null))
     }
 
     // ── Utility operations ──────────────────────────────────────────────
 
     suspend fun updateShowCompleted(noteId: String, showCompleted: Boolean): Result<Unit> = ioLogged("updateShowCompleted") {
         requireUserId()
-        withPendingOp { opId ->
-            noteRef(noteId).update(
-                mapOf(
-                    "showCompleted" to showCompleted,
-                    "updatedAt" to FieldValue.serverTimestamp(),
-                ) + stampWrite(opId, NoteStore.getRawNoteById(noteId)),
-            ).await()
-        }
+        noteRef(noteId).update(
+            mapOf(
+                "showCompleted" to showCompleted,
+                "updatedAt" to FieldValue.serverTimestamp(),
+            ),
+        ).await()
         FirestoreUsage.recordWrite("updateShowCompleted", FirestoreUsage.WriteType.UPDATE)
     }
 
@@ -1199,10 +1172,6 @@ class NoteRepository(
         val merge: Boolean
     )
 
-    // [newClientOpId] and [stampWrite] live in WriteStamp.kt so direct-write
-    // bypass sites (DSL ops, once-cache flush, settings updates) can also
-    // stamp + register their writes for echo suppression.
-
     /**
      * 3-way merge of `containedNotes` ID lists. Returns:
      *   (local ∪ remote_added) − remote_removed
@@ -1282,43 +1251,25 @@ class NoteRepository(
     }
 
     /**
-     * Run [block] with a freshly-allocated `clientOpId` registered against
-     * the NoteStore for the duration of the operation. Centralizes the
-     * register/try/finally/release boilerplate that every save-path mutation
-     * needs to ride the echo-suppression contract.
-     */
-    private suspend fun <T> withPendingOp(block: suspend (opId: String) -> T): T {
-        val opId = newClientOpId()
-        NoteStore.registerPendingOp(opId)
-        return try {
-            block(opId)
-        } finally {
-            NoteStore.releasePendingOp(opId)
-        }
-    }
-
-    /**
-     * Build merge writes that flip `state` for each id, stamped with [opId]
-     * and a fresh `version`. Skips ids absent from NoteStore (defends against
-     * the doc being hard-deleted between caller's id-collection and write).
-     * Shared by softDeleteNote, undeleteNote, restoreCutDeletedNotes, and
-     * buildCutDeleteOps so all state flips ride the echo-suppression contract.
+     * Build merge writes that flip `state` for each id. Skips ids absent
+     * from NoteStore (defends against the doc being hard-deleted between
+     * caller's id-collection and write). Shared by softDeleteNote,
+     * undeleteNote, restoreCutDeletedNotes, and buildCutDeleteOps.
      */
     private fun buildStateChangeOps(
         ids: Iterable<String>,
         newState: String?,
-        opId: String,
     ): List<BatchOp> {
         val ops = mutableListOf<BatchOp>()
         for (id in ids) {
-            val existing = NoteStore.getRawNoteById(id) ?: continue
+            if (NoteStore.getRawNoteById(id) == null) continue
             ops.add(
                 BatchOp(
                     noteRef(id),
                     mapOf(
                         "state" to newState,
                         "updatedAt" to FieldValue.serverTimestamp(),
-                    ) + stampWrite(opId, existing),
+                    ),
                     merge = true,
                 ),
             )

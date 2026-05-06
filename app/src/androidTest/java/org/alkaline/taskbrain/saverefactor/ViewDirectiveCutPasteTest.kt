@@ -7,7 +7,6 @@ import org.alkaline.taskbrain.EmulatorTestSupport
 import org.alkaline.taskbrain.data.NoteLine
 import org.alkaline.taskbrain.data.NoteRepository
 import org.alkaline.taskbrain.data.NoteStore
-import org.alkaline.taskbrain.saverefactor.SaveRefactorTestSupport.distinctLastWriterOpIds
 import org.alkaline.taskbrain.saverefactor.SaveRefactorTestSupport.readRawNote
 import org.alkaline.taskbrain.saverefactor.SaveRefactorTestSupport.repo
 import org.alkaline.taskbrain.saverefactor.SaveRefactorTestSupport.waitForListener
@@ -119,12 +118,6 @@ class ViewDirectiveCutPasteTest {
         @Suppress("UNCHECKED_CAST")
         val cContained = readRawNote(cId)!!["containedNotes"] as List<String>
         assertEquals(listOf(a2Id, c1Id, c2Id), cContained)
-
-        // Atomicity: A, C, and a2 share one lastWriterOpId (proves the
-        // three writes landed in a single saveMultipleNotes batch — not
-        // two independent saveNoteWithChildren calls).
-        val opIds = distinctLastWriterOpIds(listOf(aId, cId, a2Id))
-        assertEquals("expected one shared opId across the batch, got $opIds", 1, opIds.size)
 
         // Reload via the same path the editor uses. Reconstruction returns
         // line content without indent tabs (the editor adds them at render

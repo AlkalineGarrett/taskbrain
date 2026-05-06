@@ -66,11 +66,10 @@ export interface SaveResult {
  * Per-batch context shared by every [planSave] in a single
  * `saveNoteWithChildren` or `saveMultipleNotes` invocation. Bundling these
  * together keeps the planner signatures from sprawling and ensures every plan
- * in the batch sees the same userId / opId / cut-buffer snapshot.
+ * in the batch sees the same userId / cut-buffer snapshot.
  */
 interface SaveContext {
   userId: string
-  opId: string
   pendingCuts: Map<string, string>
   /** Real noteIds claimed by ANY session in the same `saveMultipleNotes`
    *  batch. A line moved cross-note via paste-with-tryReclaim consumes its
@@ -101,46 +100,6 @@ export interface SaveItem {
 /** Cap for waiting on the listener to surface a specific note. */
 const NOTE_STORE_AWAIT_MS = 1500
 const MAX_BATCH_SIZE = 500
-
-/**
- * Generates a fresh `clientOpId` for a save operation. Stamped on every doc
- * the save writes; the listener uses it to identify and suppress the server
- * echo so the editor doesn't reload over characters typed since the save
- * started. `crypto.randomUUID` is widely available in modern browsers and
- * the test environment (jsdom + node ≥19).
- */
-function newClientOpId(): string {
-  return crypto.randomUUID()
-}
-
-/**
- * Per-write fields tagging this commit so the listener can identify our own
- * server echo and skip the editor reload that would otherwise clobber
- * characters typed since the save started. Also bumps `version` (monotonic
- * per-doc counter; new docs start at 1).
- */
-export function stampWrite(opId: string, existing: Note | undefined): { lastWriterOpId: string; version: number } {
-  return { lastWriterOpId: opId, version: (existing?.version ?? 0) + 1 }
-}
-
-/**
- * Wrap a direct Firestore write so its echo is suppressed by the listener.
- * Use from sites that don't go through `NoteRepository.withPendingOp` (DSL
- * ops, once-cache flush, settings updates). Returns the wrapped operation's
- * result.
- */
-export async function withStampedWrite<T>(
-  fn: (opId: string, stamp: { lastWriterOpId: string; version: number }) => Promise<T>,
-  existing: Note | undefined,
-): Promise<T> {
-  const opId = newClientOpId()
-  noteStore.registerPendingOp(opId)
-  try {
-    return await fn(opId, stampWrite(opId, existing))
-  } finally {
-    noteStore.releasePendingOp(opId)
-  }
-}
 
 /**
  * 3-way merge of `containedNotes` ID lists. Returns:
@@ -505,22 +464,20 @@ export class NoteRepository {
         return { createdIds: new Map(), postSaveContainedNotes: new Map() }
       }
       const userId = this.requireUserId()
-      return this.withPendingOp(async (opId) => {
-        // Single-note save: no cross-session reparent coordination needed.
-        const ctx: SaveContext = {
-          userId, opId,
-          pendingCuts: noteStore.getPendingCuts(),
-          globalSurvivingIds: new Set(),
-        }
-        const plan = this.planSave({ noteId, trackedLines, localBases }, ctx)
-        const cutDeleteOps = this.buildCutDeleteOps([plan.survivingIds], ctx)
-        await this.commitInBatches('saveNoteWithChildren', [...plan.ops, ...cutDeleteOps.ops])
-        for (const id of cutDeleteOps.committedCutIds) noteStore.clearPendingCut(id)
-        return {
-          createdIds: plan.createdIds,
-          postSaveContainedNotes: plan.postSaveContainedNotes,
-        }
-      })
+      // Single-note save: no cross-session reparent coordination needed.
+      const ctx: SaveContext = {
+        userId,
+        pendingCuts: noteStore.getPendingCuts(),
+        globalSurvivingIds: new Set(),
+      }
+      const plan = this.planSave({ noteId, trackedLines, localBases }, ctx)
+      const cutDeleteOps = this.buildCutDeleteOps([plan.survivingIds], ctx)
+      await this.commitInBatches('saveNoteWithChildren', [...plan.ops, ...cutDeleteOps.ops])
+      for (const id of cutDeleteOps.committedCutIds) noteStore.clearPendingCut(id)
+      return {
+        createdIds: plan.createdIds,
+        postSaveContainedNotes: plan.postSaveContainedNotes,
+      }
     })
   }
 
@@ -537,38 +494,36 @@ export class NoteRepository {
     return this.logged('saveMultipleNotes', async () => {
       if (items.length === 0) return new Map()
       const userId = this.requireUserId()
-      return this.withPendingOp(async (opId) => {
-        // Pre-compute the union of real noteIds claimed across every
-        // session's trackedLines so each session's planSave can exclude
-        // them from toDelete — see SaveContext.globalSurvivingIds for the
-        // race this prevents.
-        const globalSurvivingIds = new Set<string>()
-        for (const item of items) {
-          for (const line of item.trackedLines) {
-            if (isRealNoteId(line.noteId)) globalSurvivingIds.add(line.noteId!)
-          }
+      // Pre-compute the union of real noteIds claimed across every session's
+      // trackedLines so each session's planSave can exclude them from
+      // toDelete — see SaveContext.globalSurvivingIds for the race this
+      // prevents.
+      const globalSurvivingIds = new Set<string>()
+      for (const item of items) {
+        for (const line of item.trackedLines) {
+          if (isRealNoteId(line.noteId)) globalSurvivingIds.add(line.noteId!)
         }
-        const ctx: SaveContext = {
-          userId, opId,
-          pendingCuts: noteStore.getPendingCuts(),
-          globalSurvivingIds,
-        }
-        const plans = items
-          .filter((item) => item.trackedLines.length > 0)
-          .map((item) => this.planSave(item, ctx))
-        const cutDeleteOps = this.buildCutDeleteOps(plans.map((p) => p.survivingIds), ctx)
-        const allOps = plans.flatMap((p) => p.ops).concat(cutDeleteOps.ops)
-        await this.commitInBatches('saveMultipleNotes', allOps)
-        for (const id of cutDeleteOps.committedCutIds) noteStore.clearPendingCut(id)
-        const result = new Map<string, SaveResult>()
-        for (const plan of plans) {
-          result.set(plan.noteId, {
-            createdIds: plan.createdIds,
-            postSaveContainedNotes: plan.postSaveContainedNotes,
-          })
-        }
-        return result
-      })
+      }
+      const ctx: SaveContext = {
+        userId,
+        pendingCuts: noteStore.getPendingCuts(),
+        globalSurvivingIds,
+      }
+      const plans = items
+        .filter((item) => item.trackedLines.length > 0)
+        .map((item) => this.planSave(item, ctx))
+      const cutDeleteOps = this.buildCutDeleteOps(plans.map((p) => p.survivingIds), ctx)
+      const allOps = plans.flatMap((p) => p.ops).concat(cutDeleteOps.ops)
+      await this.commitInBatches('saveMultipleNotes', allOps)
+      for (const id of cutDeleteOps.committedCutIds) noteStore.clearPendingCut(id)
+      const result = new Map<string, SaveResult>()
+      for (const plan of plans) {
+        result.set(plan.noteId, {
+          createdIds: plan.createdIds,
+          postSaveContainedNotes: plan.postSaveContainedNotes,
+        })
+      }
+      return result
     })
   }
 
@@ -596,7 +551,7 @@ export class NoteRepository {
       // only need to schedule the cut-delete write for the rest.
       if (!reviving) idsToPark.push(lineId)
     }
-    const ops = this.buildStateChangeOps(idsToPark, NoteState.CUT_DELETE, ctx.opId)
+    const ops = this.buildStateChangeOps(idsToPark, NoteState.CUT_DELETE)
     return { ops, committedCutIds }
   }
 
@@ -606,8 +561,6 @@ export class NoteRepository {
    * batch). Assertions throw inline so a bad item in a multi-note save aborts
    * the whole batch before any commit.
    *
-   * [ctx.opId] is the same value for every doc in the batch; the listener
-   * uses it to identify our own server echo and skip the editor reload.
    * [item.localBases], when non-null, is the `containedNotes` snapshot the
    * editor observed at edit-session start (root + every live descendant);
    * used to 3-way merge against the current remote at every depth so
@@ -620,7 +573,7 @@ export class NoteRepository {
     item: SaveItem,
     ctx: SaveContext,
   ): SavePlan {
-    const { userId, opId, pendingCuts } = ctx
+    const { userId, pendingCuts } = ctx
     const { noteId, trackedLines, localBases } = item
     this.assertNoteStoreLoaded('saveNoteWithChildren', noteId)
     this.warnIfDescendantsLikelyStale('saveNoteWithChildren', noteId)
@@ -778,7 +731,6 @@ export class NoteRepository {
       const rootData: Record<string, unknown> = {
         ...this.baseNoteData(userId, rootContent),
         containedNotes: mergedContained[0]!,
-        ...stampWrite(opId, existingRoot ?? undefined),
       }
       // Stamp containedNotesBase only when an anchor was recorded — skipping
       // when null avoids writing a tautological field on legacy paths that
@@ -805,7 +757,6 @@ export class NoteRepository {
           rootNoteId: noteId,
           containedNotes: mergedContained[i]!,
           state: null, // Clear deleted state for reparented notes
-          ...stampWrite(opId, noteStore.getRawNoteById(id)),
           updatedAt: serverTimestamp(),
         }
         if (base != null) data.containedNotesBase = base
@@ -819,7 +770,6 @@ export class NoteRepository {
             parentNoteId: parentId,
             rootNoteId: noteId,
             containedNotes: mergedContained[i]!,
-            ...stampWrite(opId, undefined),
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           },
@@ -836,7 +786,6 @@ export class NoteRepository {
         ref: this.noteRef(id),
         data: {
           state: NoteState.DELETED,
-          ...stampWrite(opId, noteStore.getRawNoteById(id)),
           updatedAt: serverTimestamp(),
         },
         merge: true,
@@ -856,43 +805,23 @@ export class NoteRepository {
   }
 
   /**
-   * Run [fn] with a freshly-allocated `clientOpId` registered against the
-   * NoteStore for the duration of the operation. Centralizes the
-   * register/try/finally/release boilerplate that every save-path mutation
-   * needs to ride the echo-suppression contract.
-   */
-  private async withPendingOp<T>(fn: (opId: string) => Promise<T>): Promise<T> {
-    const opId = newClientOpId()
-    noteStore.registerPendingOp(opId)
-    try {
-      return await fn(opId)
-    } finally {
-      noteStore.releasePendingOp(opId)
-    }
-  }
-
-  /**
-   * Build merge writes that flip `state` for each id, stamped with [opId]
-   * and a fresh `version`. Skips ids absent from NoteStore (defends against
-   * the doc being hard-deleted between caller's id-collection and write).
-   * Shared by softDeleteNote, undeleteNote, restoreCutDeletedNotes, and
-   * buildCutDeleteOps so all state flips ride the echo-suppression contract.
+   * Build merge writes that flip `state` for each id. Skips ids absent
+   * from NoteStore (defends against the doc being hard-deleted between
+   * caller's id-collection and write). Shared by softDeleteNote,
+   * undeleteNote, restoreCutDeletedNotes, and buildCutDeleteOps.
    */
   private buildStateChangeOps(
     ids: Iterable<string>,
     newState: string | null,
-    opId: string,
   ): BatchWriteOp[] {
     const ops: BatchWriteOp[] = []
     for (const id of ids) {
-      const existing = noteStore.getRawNoteById(id)
-      if (!existing) continue
+      if (!noteStore.getRawNoteById(id)) continue
       ops.push({
         ref: this.noteRef(id),
         data: {
           state: newState,
           updatedAt: serverTimestamp(),
-          ...stampWrite(opId, existing),
         },
         merge: true,
       })
@@ -1078,12 +1007,10 @@ export class NoteRepository {
   async createNote(): Promise<string> {
     return this.logged('createNote', async () => {
       const userId = this.requireUserId()
-      return this.withPendingOp(async (opId) => {
-        const data = { ...this.newNoteData(userId, ''), ...stampWrite(opId, undefined) }
-        const ref = await addDoc(this.notesRef, data)
-        firestoreUsage.recordWrite('createNote', 'SET')
-        return ref.id
-      })
+      const data = this.newNoteData(userId, '')
+      const ref = await addDoc(this.notesRef, data)
+      firestoreUsage.recordWrite('createNote', 'SET')
+      return ref.id
     })
   }
 
@@ -1093,15 +1020,12 @@ export class NoteRepository {
   async createMultiLineNote(content: string): Promise<string> {
     return this.logged('createMultiLineNote', async () => {
       const userId = this.requireUserId()
-      // Register the opId so the listener suppresses the create echo —
-      // same contract as saveNoteWithChildren.
-      return this.withPendingOp((opId) => this.createMultiLineNoteInner(userId, opId, content))
+      return this.createMultiLineNoteInner(userId, content)
     })
   }
 
   private async createMultiLineNoteInner(
     userId: string,
-    opId: string,
     content: string,
   ): Promise<string> {
       const lines = content.split('\n')
@@ -1109,7 +1033,7 @@ export class NoteRepository {
       const childLines = lines.slice(1)
 
       if (childLines.length === 0 || childLines.every((l) => l.replace(/^\t+/, '') === '')) {
-        const data = { ...this.newNoteData(userId, firstLine), ...stampWrite(opId, undefined) }
+        const data = this.newNoteData(userId, firstLine)
         const ref = await addDoc(this.notesRef, data)
         firestoreUsage.recordWrite('createMultiLineNote', 'SET')
         return ref.id
@@ -1157,7 +1081,6 @@ export class NoteRepository {
       batch.set(parentRef, {
         ...this.newNoteData(userId, firstLine),
         containedNotes: rootChildren,
-        ...stampWrite(opId, undefined),
       })
 
       for (const node of nodes) {
@@ -1169,7 +1092,6 @@ export class NoteRepository {
           containedNotes: node.children,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
-          ...stampWrite(opId, undefined),
         })
       }
 
@@ -1190,10 +1112,8 @@ export class NoteRepository {
       this.assertNoteStoreLoaded('softDeleteNote', noteId)
       this.warnIfDescendantsLikelyStale('softDeleteNote', noteId)
       const idsToDelete = new Set([noteId, ...noteStore.getDescendantIds(noteId)])
-      await this.withPendingOp(async (opId) => {
-        const ops = this.buildStateChangeOps(idsToDelete, NoteState.DELETED, opId)
-        await this.commitInBatches('softDeleteNote', ops)
-      })
+      const ops = this.buildStateChangeOps(idsToDelete, NoteState.DELETED)
+      await this.commitInBatches('softDeleteNote', ops)
     })
   }
 
@@ -1242,10 +1162,8 @@ export class NoteRepository {
       // stale-descendants warning: a deleted note's containedNotes only lists
       // active children, so it can't detect missing soft-deleted descendants.
       const idsToRestore = new Set([noteId, ...noteStore.getAllDescendantIds(noteId)])
-      await this.withPendingOp(async (opId) => {
-        const ops = this.buildStateChangeOps(idsToRestore, null, opId)
-        await this.commitInBatches('undeleteNote', ops)
-      })
+      const ops = this.buildStateChangeOps(idsToRestore, null)
+      await this.commitInBatches('undeleteNote', ops)
     })
   }
 
@@ -1253,17 +1171,14 @@ export class NoteRepository {
    * Restores parked cut-delete docs by flipping `state` back to null. The
    * stray-child healing inside reconstruction picks each restored doc up
    * under its preserved parentNoteId; the next save of that root writes the
-   * healed `containedNotes` back to Firestore. Bumps `version` and stamps a
-   * fresh `lastWriterOpId` so the listener treats the write as our own echo.
+   * healed `containedNotes` back to Firestore.
    */
   async restoreCutDeletedNotes(noteIds: string[]): Promise<void> {
     return this.logged('restoreCutDeletedNotes', async () => {
       this.requireUserId()
       if (noteIds.length === 0) return
-      await this.withPendingOp(async (opId) => {
-        const ops = this.buildStateChangeOps(noteIds, null, opId)
-        await this.commitInBatches('restoreCutDeletedNotes', ops)
-      })
+      const ops = this.buildStateChangeOps(noteIds, null)
+      await this.commitInBatches('restoreCutDeletedNotes', ops)
     })
   }
 
@@ -1272,12 +1187,9 @@ export class NoteRepository {
   async updateShowCompleted(noteId: string, showCompleted: boolean): Promise<void> {
     return this.logged('updateShowCompleted', async () => {
       this.requireUserId()
-      await this.withPendingOp(async (opId) => {
-        await updateDoc(this.noteRef(noteId), {
-          showCompleted,
-          updatedAt: serverTimestamp(),
-          ...stampWrite(opId, noteStore.getRawNoteById(noteId) ?? undefined),
-        })
+      await updateDoc(this.noteRef(noteId), {
+        showCompleted,
+        updatedAt: serverTimestamp(),
       })
       firestoreUsage.recordWrite('updateShowCompleted', 'UPDATE')
     })

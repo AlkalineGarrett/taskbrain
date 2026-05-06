@@ -7,7 +7,6 @@ import org.alkaline.taskbrain.EmulatorTestSupport
 import org.alkaline.taskbrain.data.NoteLine
 import org.alkaline.taskbrain.data.NoteRepository
 import org.alkaline.taskbrain.data.NoteStore
-import org.alkaline.taskbrain.saverefactor.SaveRefactorTestSupport.distinctLastWriterOpIds
 import org.alkaline.taskbrain.saverefactor.SaveRefactorTestSupport.readRawNote
 import org.alkaline.taskbrain.saverefactor.SaveRefactorTestSupport.repo
 import org.alkaline.taskbrain.saverefactor.SaveRefactorTestSupport.waitForListener
@@ -41,8 +40,11 @@ class AtomicBatchSaveTest {
     }
 
     /**
-     * IT-2a — two notes saved together share one lastWriterOpId
-     * (proof of single-batch commit), and both reach the wire.
+     * IT-2a — two notes saved together commit through one batch and all
+     * docs reach the wire. Atomicity is a property of Firestore's
+     * `WriteBatch.commit()`; observing it from doc contents is no longer
+     * possible since we don't stamp a per-batch opId, so the test instead
+     * verifies every planned write landed.
      */
     @Test
     fun saveMultipleNotes_commitsAllDocsInOneBatch() = runBlocking {
@@ -71,12 +73,6 @@ class AtomicBatchSaveTest {
         assertEquals("r2-edited", readRawNote(rId2)!!["content"])
         assertEquals("child1-edited", readRawNote(c1)!!["content"])
         assertEquals("child2-edited", readRawNote(c2)!!["content"])
-
-        val opIds = distinctLastWriterOpIds(listOf(rId1, rId2, c1, c2))
-        assertEquals(
-            "all four docs must share one opId (single batch); got $opIds",
-            1, opIds.size,
-        )
     }
 
     /**

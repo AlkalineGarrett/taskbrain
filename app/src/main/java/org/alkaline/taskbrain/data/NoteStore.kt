@@ -110,13 +110,6 @@ object NoteStore {
     /** Cap for waiting on the listener to surface a specific note. */
     private const val NOTE_STORE_AWAIT_MS = 1500L
 
-    /**
-     * Window for suppressing own-save echoes. Long enough for a Firestore
-     * round-trip plus listener delivery; short enough that a stale opId can't
-     * mask a genuine concurrent edit on a different client.
-     */
-    private const val PENDING_OP_TTL_MS = 5000L
-
     fun setPersistCallback(callback: (noteId: String, content: String) -> Unit) {
         persistCallback = callback
     }
@@ -317,44 +310,6 @@ object NoteStore {
         pendingCuts.clear()
     }
 
-    /** Mirrors web NoteStore.pendingOpIds — see that file for full rationale. */
-    private val pendingOpIds = ConcurrentHashMap<String, Long>()
-
-    /** Register a save's `clientOpId` so its own-echo can be suppressed. */
-    fun registerPendingOp(opId: String) {
-        pendingOpIds[opId] = System.currentTimeMillis() + PENDING_OP_TTL_MS
-    }
-
-    /**
-     * Schedule release of a `clientOpId` after [PENDING_OP_TTL_MS] — long
-     * enough for the server echo to round-trip, short enough to not mask a
-     * genuine external change that arrives later.
-     */
-    fun releasePendingOp(opId: String) {
-        mainHandler.postDelayed({ pendingOpIds.remove(opId) }, PENDING_OP_TTL_MS)
-    }
-
-    /** True when [opId] matches a recently-registered local save. */
-    fun isOurEcho(opId: String?): Boolean {
-        if (opId == null) return false
-        val expireAt = pendingOpIds[opId] ?: return false
-        if (expireAt < System.currentTimeMillis()) {
-            pendingOpIds.remove(opId)
-            return false
-        }
-        return true
-    }
-
-    /**
-     * Test-only hatch: clear pendingOpIds. The singleton leaks state across
-     * tests via the timer-pruned map; tests that exercise the registry call
-     * this in `@Before` to start clean.
-     */
-    @androidx.annotation.VisibleForTesting
-    fun clearPendingOpsForTest() {
-        pendingOpIds.clear()
-    }
-
     /** Add a new note to the reconstructed list. */
     fun addNote(note: Note) {
         _notes.value = _notes.value + note
@@ -509,18 +464,12 @@ object NoteStore {
                 val note = parseNote(change.document.id, change.document.data) ?: continue
                 val rootId = note.rootNoteId ?: note.id
 
-                // Always update rawNotes (Firestore data is never re-delivered if skipped).
                 if (change.type == DocumentChange.Type.REMOVED) {
                     rawNotes.remove(change.document.id)
                 } else {
                     rawNotes[change.document.id] = note
                 }
-                // Skip the changedNoteIds emission for our own save echoes —
-                // the editor already has this content (or newer); reloading
-                // would clobber characters typed since the save started.
-                if (!isOurEcho(note.lastWriterOpId)) {
-                    affectedRoots.add(rootId)
-                }
+                affectedRoots.add(rootId)
             }
 
             if (affectedRoots.isNotEmpty()) {
@@ -661,8 +610,6 @@ object NoteStore {
                 rootNoteId = data["rootNoteId"] as? String,
                 showCompleted = data["showCompleted"] as? Boolean ?: true,
                 onceCache = (data["onceCache"] as? Map<String, Map<String, Any>>) ?: emptyMap(),
-                version = (data[FIELD_VERSION] as? Long) ?: 0L,
-                lastWriterOpId = data[FIELD_LAST_WRITER_OP_ID] as? String,
                 containedNotesBase = data["containedNotesBase"] as? List<String>,
             )
         } catch (e: Exception) {

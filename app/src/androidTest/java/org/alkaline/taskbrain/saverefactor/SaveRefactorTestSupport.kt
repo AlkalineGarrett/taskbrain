@@ -8,7 +8,6 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeout
 import org.alkaline.taskbrain.data.NoteRepository
 import org.alkaline.taskbrain.data.NoteStore
-import java.util.UUID
 
 /**
  * Shared helpers for the save-refactor emulator test suite. Built on top
@@ -54,10 +53,8 @@ internal object SaveRefactorTestSupport {
 
     /**
      * Write a note doc directly via [FirebaseFirestore], bypassing
-     * `NoteRepository.planSave`. Stamps a fresh `lastWriterOpId` that
-     * the primary client cannot match against its own pending-op
-     * registry, so the write is delivered as a genuine "external"
-     * change. Use this to simulate concurrent clients in merge tests.
+     * `NoteRepository.planSave`. Use this to simulate concurrent clients
+     * in merge tests.
      */
     suspend fun writeAsOtherClient(
         noteId: String,
@@ -75,8 +72,6 @@ internal object SaveRefactorTestSupport {
             put("rootNoteId", rootNoteId)
             put("containedNotes", containedNotes)
             if (state != null) put("state", state)
-            put("version", 1)
-            put("lastWriterOpId", "external_${UUID.randomUUID()}")
             put("createdAt", FieldValue.serverTimestamp())
             put("updatedAt", FieldValue.serverTimestamp())
         }
@@ -93,8 +88,6 @@ internal object SaveRefactorTestSupport {
         firestore().collection("notes").document(parentId).update(
             mapOf(
                 "containedNotes" to FieldValue.arrayUnion(childId),
-                "version" to FieldValue.increment(1),
-                "lastWriterOpId" to "external_${UUID.randomUUID()}",
                 "updatedAt" to FieldValue.serverTimestamp(),
             ),
         ).await()
@@ -107,19 +100,5 @@ internal object SaveRefactorTestSupport {
      */
     fun forgetListenerSnapshot() {
         NoteStore.clear()
-    }
-
-    /**
-     * Save batches stamp every doc with the same `lastWriterOpId`. Read
-     * all docs in [noteIds] and return the set of distinct opIds. A
-     * batched save produces a set of size 1.
-     */
-    suspend fun distinctLastWriterOpIds(noteIds: List<String>): Set<String> {
-        val ids = mutableSetOf<String>()
-        for (id in noteIds) {
-            val data = readRawNote(id) ?: continue
-            (data["lastWriterOpId"] as? String)?.let { ids.add(it) }
-        }
-        return ids
     }
 }

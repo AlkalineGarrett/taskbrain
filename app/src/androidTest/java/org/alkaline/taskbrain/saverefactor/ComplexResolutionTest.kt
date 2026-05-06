@@ -135,13 +135,14 @@ class ComplexResolutionTest {
     }
 
     /**
-     * IT-R3 — three saves in close succession. Each must register and
-     * release its opId such that listener echoes are suppressed for ALL
-     * three. The pendingOpIds registry under load: no spurious
-     * `changedNoteIds` emission for our own note id.
+     * IT-R3 — three saves in close succession. Each Firestore commit
+     * round-trips through the listener and surfaces as `changedNoteIds`;
+     * the data layer doesn't filter own-echoes. (Editor-level reload
+     * protection lives in `CurrentNoteViewModel`'s `dirty`/`saving` /
+     * content-equality guards, not here.)
      */
     @Test
-    fun burstOfSaves_noEchoesEmittedForOurOwnNote() = runBlocking {
+    fun burstOfSaves_emitsChangedNoteIdsForEveryCommit() = runBlocking {
         val rootId = repo().createMultiLineNote("seed").getOrThrow()
         waitForListener(rootId)
 
@@ -160,15 +161,14 @@ class ComplexResolutionTest {
                 ).getOrThrow()
             }
 
-            // Wait long enough for all three echoes to deliver. Echo
-            // suppression should keep our note out of every emission.
+            // Wait long enough for all three echoes to deliver.
             kotlinx.coroutines.delay(2_500)
 
             val rootEmissions = collected.count { rootId in it }
-            assertEquals(
-                "expected zero changedNoteIds emissions for our own note id " +
-                    "across the burst; got $rootEmissions (full=$collected)",
-                0, rootEmissions,
+            assertTrue(
+                "expected at least one changedNoteIds emission for our own note " +
+                    "id across the burst; got $rootEmissions (full=$collected)",
+                rootEmissions >= 1,
             )
             // Final wire content reflects the last write.
             assertEquals("seed v3", readRawNote(rootId)!!["content"])

@@ -19,7 +19,6 @@ import org.junit.BeforeClass
 import org.junit.Test
 import com.google.firebase.firestore.FieldValue
 import kotlinx.coroutines.tasks.await
-import java.util.UUID
 
 /**
  * Phase 4 — concurrent removal honored by the 3-way merge.
@@ -52,23 +51,17 @@ class MergeRemovalTest {
         val c2 = children[1]
 
         // Other client soft-deletes c1 and removes it from root's
-        // containedNotes. Done as direct Firestore writes so the
-        // listener delivers the change without going through our
-        // own NoteRepository (which would stamp our opId).
-        val external = "external_${UUID.randomUUID()}"
+        // containedNotes — direct Firestore writes simulate a second
+        // client without going through our NoteRepository.
         firestore().collection("notes").document(c1).update(
             mapOf(
                 "state" to NoteState.DELETED,
-                "version" to FieldValue.increment(1),
-                "lastWriterOpId" to external,
                 "updatedAt" to FieldValue.serverTimestamp(),
             ),
         ).await()
         firestore().collection("notes").document(rootId).update(
             mapOf(
                 "containedNotes" to listOf(c2),
-                "version" to FieldValue.increment(1),
-                "lastWriterOpId" to "external_${UUID.randomUUID()}",
                 "updatedAt" to FieldValue.serverTimestamp(),
             ),
         ).await()

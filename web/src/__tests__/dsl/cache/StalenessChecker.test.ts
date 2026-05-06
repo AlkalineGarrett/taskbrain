@@ -24,8 +24,6 @@ function makeNote(id: string, content = 'Note content', path = `path/${id}`): No
     rootNoteId: null,
     showCompleted: true,
     onceCache: {},
-    version: 0,
-    lastWriterOpId: null,
     containedNotesBase: null,
   }
 }

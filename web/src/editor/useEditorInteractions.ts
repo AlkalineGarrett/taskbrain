@@ -30,14 +30,12 @@ export function useEditorInteractions(
   const gutterAnchorRef = useRef<[number, number]>([-1, -1])
 
   // Register this editor as a cross-editor drop target so a move-drag started
-  // anywhere can drop into it. Re-registers if the container or drop cursor
-  // element changes; the registry holds the concrete elements, not refs.
+  // anywhere can drop into it. Accessors close over the refs so a re-render
+  // that swaps the container/cursor DOM nodes is picked up at hit-test time.
   useEffect(() => {
-    const containerEl = containerRef.current
-    if (!containerEl) return
     return dropTargetRegistry.register({
-      containerEl,
-      dropCursorEl: dropCursorRef.current,
+      getContainer: () => containerRef.current,
+      getDropCursor: () => dropCursorRef.current,
       getState,
       getController,
       lineAttr,
@@ -112,11 +110,9 @@ export function useEditorInteractions(
           dropTargetRegistry.hideAllDropCursorsExcept(null)
           return
         }
-        const { target, hit } = result
-        if (target.dropCursorEl) {
-          positionDropCursorAtHit(target.dropCursorEl, target.containerEl, hit)
-        }
-        dropTargetRegistry.hideAllDropCursorsExcept(target)
+        const cursor = result.target.getDropCursor()
+        if (cursor) positionDropCursorAtHit(cursor, result.containerEl, result.hit)
+        dropTargetRegistry.hideAllDropCursorsExcept(result.target)
       }
     }
     const handleMouseUp = (e: globalThis.MouseEvent) => {

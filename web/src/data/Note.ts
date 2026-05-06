@@ -20,23 +20,6 @@ export interface Note {
   /** Persistent cache for once[...] expression results. Keys are normalized AST strings, values are serialized DslValues. */
   onceCache: Record<string, Record<string, unknown>>
   /**
-   * Monotonically-increasing per-note write counter. Bumped on every successful save.
-   * Used by listeners to drop out-of-order/stale echoes (apply only if
-   * version > lastAppliedVersion). Advisory — not enforced via transactions;
-   * concurrent writes from two clients can both produce the same version, in
-   * which case last-write-wins at Firestore. Defaults to 0 on legacy docs
-   * predating this field (set by [noteFromFirestore]).
-   */
-  version: number
-  /**
-   * Identity stamp written by the save that produced this revision. The local
-   * listener checks each echo's lastWriterOpId against an in-memory set of
-   * in-flight saves; matches are treated as our own echo (raw cache update
-   * only, no editor reload). Distinct UUID per save batch. `null` on legacy
-   * docs and on writes from clients predating this field.
-   */
-  lastWriterOpId: string | null
-  /**
    * Snapshot of containedNotes as the saving client read it before applying
    * its diff. Receiving clients use this for 3-way merge: base = this field,
    * local = client's current view, remote = the new containedNotes. `null`
@@ -85,8 +68,6 @@ export function noteFromFirestore(id: string, data: Record<string, unknown>): No
     rootNoteId: (data.rootNoteId as string) ?? null,
     showCompleted: (data.showCompleted as boolean) ?? true,
     onceCache: (data.onceCache as Record<string, Record<string, unknown>>) ?? {},
-    version: (data.version as number) ?? 0,
-    lastWriterOpId: (data.lastWriterOpId as string) ?? null,
     containedNotesBase: (data.containedNotesBase as string[]) ?? null,
   }
 }

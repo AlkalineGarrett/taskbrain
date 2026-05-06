@@ -308,54 +308,6 @@ class NoteRepositoryTest {
     }
 
     @Test
-    fun `saveNoteWithChildren stamps lastWriterOpId and version on every write`() = runTest {
-        // Echo-suppression contract: every doc the save writes carries the
-        // same clientOpId so the listener can drop the server echo, plus a
-        // version bumped from the in-memory note's version (or 1 for new docs).
-        val rootNote = Note(id = "note_1", content = "Old", containedNotes = listOf("c1"), version = 7L)
-        val existingChild = Note(
-            id = "c1", content = "old child",
-            parentNoteId = "note_1", rootNoteId = "note_1", version = 3L,
-        )
-        every { NoteStore.getNoteById("note_1") } returns rootNote
-        every { NoteStore.getRawNoteById("note_1") } returns rootNote
-        every { NoteStore.getRawNoteById("c1") } returns existingChild
-        every { NoteStore.getDescendantIds("note_1") } returns setOf("c1")
-        mockDocument("note_1", rootNote)
-        mockDocument("c1", existingChild)
-        val newChildRef = mockk<DocumentReference> { every { id } returns "new_id" }
-        every { mockCollection.document() } returns newChildRef
-        val batch = mockBatch()
-        val captured = mutableListOf<Map<String, Any?>>()
-        every { batch.set(any(), capture(captured), any<SetOptions>()) } returns batch
-        every { batch.set(any(), capture(captured)) } returns batch
-
-        repository.saveNoteWithChildren(
-            "note_1",
-            listOf(
-                NoteLine("New root content", "note_1"),
-                NoteLine("\tedited", "c1"),
-                NoteLine("\tbrand new", NoteIdSentinel.new(NoteIdSentinel.Origin.TYPED)),
-            ),
-            extraOpsBuilder = null, localBases = null,
-        ).getOrThrow()
-
-        // Every write must carry a non-null lastWriterOpId, all the same.
-        val opIds = captured.map { it["lastWriterOpId"] }
-        assertTrue("expected non-empty opIds, got $opIds", opIds.isNotEmpty())
-        assertTrue("opIds must be non-null: $opIds", opIds.all { it is String && (it as String).isNotEmpty() })
-        assertTrue("opIds must all match: $opIds", opIds.toSet().size == 1)
-
-        // Version bumps: root 7→8, edited child 3→4, fresh child=1.
-        val rootWrite = captured.first { it["content"] == "New root content" }
-        assertEquals(8L, rootWrite["version"])
-        val editedWrite = captured.first { it["content"] == "edited" }
-        assertEquals(4L, editedWrite["version"])
-        val freshWrite = captured.first { it["content"] == "brand new" }
-        assertEquals(1L, freshWrite["version"])
-    }
-
-    @Test
     fun `saveNoteWithChildren creates new child notes and returns their IDs`() = runTest {
         mockDocument("note_1", null)
         val childRef = mockk<DocumentReference> { every { id } returns "new_child" }
@@ -848,7 +800,7 @@ class NoteRepositoryTest {
 
         val deletedContents = captured.filter { it["state"] == "deleted" }
         // Soft-delete writes don't carry "content"; they only carry state +
-        // updatedAt + lastWriterOpId + version. There should be ZERO of them.
+        // updatedAt. There should be ZERO of them.
         assertEquals("expected no soft-deletes, got: $deletedContents", 0, deletedContents.size)
     }
 
@@ -1215,9 +1167,9 @@ class NoteRepositoryTest {
     // region restoreCutDeletedNotes (Phase 6)
 
     @Test
-    fun `restoreCutDeletedNotes flips state=null and bumps version per id`() = runTest {
-        val c1 = Note(id = "c1", content = "a", state = "cut-delete", parentNoteId = "r", rootNoteId = "r", version = 3L)
-        val c2 = Note(id = "c2", content = "b", state = "cut-delete", parentNoteId = "r", rootNoteId = "r", version = 1L)
+    fun `restoreCutDeletedNotes flips state=null per id`() = runTest {
+        val c1 = Note(id = "c1", content = "a", state = "cut-delete", parentNoteId = "r", rootNoteId = "r")
+        val c2 = Note(id = "c2", content = "b", state = "cut-delete", parentNoteId = "r", rootNoteId = "r")
         every { NoteStore.getRawNoteById("c1") } returns c1
         every { NoteStore.getRawNoteById("c2") } returns c2
         mockDocument("c1", c1)
@@ -1229,13 +1181,7 @@ class NoteRepositoryTest {
         repository.restoreCutDeletedNotes(listOf("c1", "c2")).getOrThrow()
 
         assertEquals(2, captured.size)
-        // Both writes flip state to null and stamp the same lastWriterOpId.
         assertTrue(captured.all { it["state"] == null })
-        val opIds = captured.map { it["lastWriterOpId"] }
-        assertTrue("expected single opId across writes: $opIds", opIds.toSet().size == 1)
-        // Versions bumped (3→4, 1→2).
-        val versions = captured.map { it["version"] }.toSet()
-        assertEquals(setOf(4L, 2L), versions)
     }
 
     @Test
@@ -1529,10 +1475,10 @@ class NoteRepositoryTest {
     // region Delete/Restore Tests
 
     @Test
-    fun `softDeleteNote deletes root and descendants with opId + version stamps`() = runTest {
-        val root = Note(id = "note_1", version = 5L)
-        val c1 = Note(id = "child_1", version = 2L)
-        val c2 = Note(id = "child_2", version = 7L)
+    fun `softDeleteNote deletes root and descendants`() = runTest {
+        val root = Note(id = "note_1")
+        val c1 = Note(id = "child_1")
+        val c2 = Note(id = "child_2")
         every { NoteStore.getDescendantIds("note_1") } returns setOf("child_1", "child_2")
         every { NoteStore.getRawNoteById("note_1") } returns root
         every { NoteStore.getRawNoteById("child_1") } returns c1
@@ -1546,17 +1492,11 @@ class NoteRepositoryTest {
         // root + 2 children
         assertEquals(3, captured.size)
         assertTrue(captured.all { it["state"] == "deleted" })
-        // Single shared opId.
-        val opIds = captured.map { it["lastWriterOpId"] }
-        assertTrue("expected one opId across writes: $opIds", opIds.toSet().size == 1)
-        // Root version bumped 5→6.
-        val rootWrite = captured.find { it["version"] == 6L }
-        assertNotNull("expected root write at version=6", rootWrite)
     }
 
     @Test
     fun `softDeleteNote deletes only root when no descendants`() = runTest {
-        val root = Note(id = "note_1", version = 1L)
+        val root = Note(id = "note_1")
         every { NoteStore.getDescendantIds("note_1") } returns emptySet()
         every { NoteStore.getRawNoteById("note_1") } returns root
         val batch = mockBatch()
@@ -1570,10 +1510,10 @@ class NoteRepositoryTest {
     }
 
     @Test
-    fun `undeleteNote restores root and descendants with opId + version stamps`() = runTest {
-        val root = Note(id = "note_1", state = "deleted", version = 3L)
-        val c1 = Note(id = "child_1", state = "deleted", version = 1L)
-        val c2 = Note(id = "child_2", state = "deleted", version = 4L)
+    fun `undeleteNote restores root and descendants`() = runTest {
+        val root = Note(id = "note_1", state = "deleted")
+        val c1 = Note(id = "child_1", state = "deleted")
+        val c2 = Note(id = "child_2", state = "deleted")
         every { NoteStore.getAllDescendantIds("note_1") } returns setOf("child_1", "child_2")
         every { NoteStore.getRawNoteById("note_1") } returns root
         every { NoteStore.getRawNoteById("child_1") } returns c1
@@ -1586,8 +1526,6 @@ class NoteRepositoryTest {
 
         assertEquals(3, captured.size)
         assertTrue(captured.all { it["state"] == null })
-        val opIds = captured.map { it["lastWriterOpId"] }
-        assertTrue("expected one opId across writes: $opIds", opIds.toSet().size == 1)
     }
 
     // endregion

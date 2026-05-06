@@ -32,6 +32,58 @@ export interface MoveButtonState {
 // can recover noteIds when pasted into a different embedded note.
 let sharedCutLines: LineState[] = []
 
+/** Snapshot of the current line selection's text + noteIds, for use as
+ *  cutLines/movedLines in PasteHandler.recoverCutNoteIds. */
+function snapshotSelectedLineStates(state: EditorState): LineState[] {
+  const [first, last] = state.getSelectedLineRange()
+  return state.lines.slice(first, last + 1)
+    .map(l => new LineState(l.text, undefined, [...l.noteIds]))
+}
+
+/** Park each cut line's real noteId in NoteStore's reclaim buffer so the
+ *  source-note save excludes them from soft-delete. Content key is
+ *  tab-stripped so paste at any indent level can match. */
+function parkCutIdsForReclaim(cutLines: LineState[]): void {
+  for (const line of cutLines) {
+    const id = line.noteIds[0]
+    if (id != null && isRealNoteId(id)) {
+      noteStore.recordCut(id, line.text.replace(/^\t+/, ''))
+    }
+  }
+}
+
+/** After a paste with `cutLines`, drop reclaim entries for any id recovered
+ *  in-memory (so a duplicate-content paste doesn't double-claim it), and
+ *  cross-save reclaim any pasted line still carrying a sentinel head. */
+function reclaimRecoveredCutIds(cutLines: LineState[], pastedLines: LineState[]): void {
+  for (const cl of cutLines) {
+    const id = cl.noteIds[0]
+    if (id != null && isRealNoteId(id)) noteStore.clearPendingCut(id)
+  }
+  for (const line of pastedLines) {
+    const head = line.noteIds[0]
+    if (head != null && isSentinelNoteId(head)) {
+      const stripped = line.text.replace(/^\t+/, '')
+      const reclaimed = noteStore.tryReclaim(stripped)
+      if (reclaimed != null) line.noteIds = [reclaimed]
+    }
+  }
+}
+
+/** Commit a PasteResult to an EditorState: swap lines, park cursor, clear
+ *  selection, fire focus + change notifications. */
+function applyPasteResultToState(state: EditorState, result: { lines: LineState[]; cursorLineIndex: number; cursorPosition: number }): void {
+  state.lines = result.lines
+  state.focusedLineIndex = result.cursorLineIndex
+  state.lines[result.cursorLineIndex]?.updateFull(
+    state.lines[result.cursorLineIndex]!.text,
+    result.cursorPosition,
+  )
+  state.clearSelection()
+  state.requestFocusUpdate()
+  state.notifyChange()
+}
+
 export class EditorController {
   readonly state: EditorState
   readonly undoManager: UndoManager
@@ -233,34 +285,8 @@ export class EditorController {
         parsed,
         cutLines.length > 0 ? cutLines : undefined,
       )
-      // The sharedCutLines path inside executePaste recovered each cut line's
-      // real noteId already — drop those ids from the cross-save buffer so
-      // a second paste of the same content doesn't double-claim them.
-      for (const cl of cutLines) {
-        const id = cl.noteIds[0]
-        if (id != null && isRealNoteId(id)) noteStore.clearPendingCut(id)
-      }
-      // Cross-save reclaim: a pasted line whose head is a sentinel (new-line
-      // marker) didn't recover from this session's sharedCutLines. Try the
-      // NoteStore cut buffer — content match recovers cuts parked as
-      // cut-delete by an intervening save.
-      for (const line of result.lines) {
-        const head = line.noteIds[0]
-        if (head != null && isSentinelNoteId(head)) {
-          const stripped = line.text.replace(/^\t+/, '')
-          const reclaimed = noteStore.tryReclaim(stripped)
-          if (reclaimed != null) line.noteIds = [reclaimed]
-        }
-      }
-      this.state.lines = result.lines
-      this.state.focusedLineIndex = result.cursorLineIndex
-      this.state.lines[result.cursorLineIndex]?.updateFull(
-        this.state.lines[result.cursorLineIndex]!.text,
-        result.cursorPosition,
-      )
-      this.state.clearSelection()
-      this.state.requestFocusUpdate()
-      this.state.notifyChange()
+      reclaimRecoveredCutIds(cutLines, result.lines)
+      applyPasteResultToState(this.state, result)
     })
   }
 
@@ -295,22 +321,12 @@ export class EditorController {
   cutSelection(): string | null {
     if (!this.state.hasSelection) return null
     return this.executeOperation(OperationType.CUT, () => {
-      // Capture cut lines (with noteIds) before deletion for paste recovery
-      const [rangeFirst, rangeLast] = this.state.getSelectedLineRange()
-      sharedCutLines = this.state.lines.slice(rangeFirst, rangeLast + 1)
-        .map(l => new LineState(l.text, undefined, [...l.noteIds]))
-
-      // Feed every cut line with a real noteId into the cross-save reclaim
-      // buffer. Source-note save will skip soft-delete; if a paste in this
-      // session matches by content, the line keeps its original noteId.
-      // Unmatched cuts get cut-delete on save so they're parked, not orphaned.
-      // Content key is tab-stripped so paste at any indent level can match.
-      for (const line of sharedCutLines) {
-        const id = line.noteIds[0]
-        if (id != null && isRealNoteId(id)) {
-          noteStore.recordCut(id, line.text.replace(/^\t+/, ''))
-        }
-      }
+      sharedCutLines = snapshotSelectedLineStates(this.state)
+      // Park cut ids in the reclaim buffer so the source-note save skips
+      // soft-delete. A paste in this session recovers identity by content
+      // match; unmatched cuts get cut-delete on save and stay reclaimable
+      // until a later paste claims them.
+      parkCutIdsForReclaim(sharedCutLines)
 
       const clipText = this.getSelectedTextWithPrefix()
       if (clipText.length > 0) {
@@ -458,17 +474,8 @@ export class EditorController {
 
     this.undoManager.captureStateBeforeChange(this.state.lines, this.state.focusedLineIndex)
 
-    // Get clipboard text with prefix (same as cut)
     const clipText = this.getSelectedTextWithPrefix()
-
-    // Snapshot the moved lines (with noteIds) before deletion so the paste
-    // step can recover ids by content match — drag-drop preserves identity
-    // like cut+paste does, instead of allocating fresh docs on save.
-    const [rangeFirst, rangeLast] = this.state.getSelectedLineRange()
-    const movedLines = this.state.lines.slice(rangeFirst, rangeLast + 1)
-      .map(l => new LineState(l.text, undefined, [...l.noteIds]))
-
-    // Delete the selection
+    const movedLines = snapshotSelectedLineStates(this.state)
     this.state.deleteSelectionInternal()
 
     // Adjust target offset for removed text
@@ -476,12 +483,10 @@ export class EditorController {
       ? targetGlobalOffset - (selEnd - selStart)
       : targetGlobalOffset
 
-    // Position cursor at the drop target
     const [lineIndex, localOffset] = this.state.getLineAndLocalOffset(adjustedTarget)
     this.state.focusedLineIndex = lineIndex
     this.state.lines[lineIndex]?.updateFull(this.state.lines[lineIndex]!.text, localOffset)
 
-    // Parse and paste using the structured paste system (same as paste)
     const parsed = parseClipboardContent(clipText, null)
     const result = executePaste(
       this.state.lines,
@@ -490,16 +495,7 @@ export class EditorController {
       parsed,
       movedLines,
     )
-    this.state.lines = result.lines
-    this.state.focusedLineIndex = result.cursorLineIndex
-    this.state.lines[result.cursorLineIndex]?.updateFull(
-      this.state.lines[result.cursorLineIndex]!.text,
-      result.cursorPosition,
-    )
-    this.state.clearSelection()
-
-    this.state.requestFocusUpdate()
-    this.state.notifyChange()
+    applyPasteResultToState(this.state, result)
     this.undoManager.beginEditingLine(this.state.lines, this.state.focusedLineIndex, this.state.focusedLineIndex)
   }
 
@@ -509,7 +505,8 @@ export class EditorController {
    * lines retain their original noteIds via PasteHandler.recoverCutNoteIds,
    * and source's save is taught (via NoteStore.recordCut) not to soft-delete
    * those ids. Two undo entries are recorded — one per editor — coordinated
-   * by UnifiedUndoManager so the user reverts with two presses.
+   * by UnifiedUndoManager so the user reverts with two presses (or one when
+   * wrapped in `withGroup`).
    */
   moveSelectionAcrossEditors(target: EditorController, targetGlobalOffset: number): void {
     if (target === this) {
@@ -521,27 +518,14 @@ export class EditorController {
     const clipText = this.getSelectedTextWithPrefix()
     if (clipText.length === 0) return
 
-    const [rangeFirst, rangeLast] = this.state.getSelectedLineRange()
-    const movedLines = this.state.lines.slice(rangeFirst, rangeLast + 1)
-      .map(l => new LineState(l.text, undefined, [...l.noteIds]))
+    const movedLines = snapshotSelectedLineStates(this.state)
+    parkCutIdsForReclaim(movedLines)
 
-    // Park real ids in the cross-save reclaim buffer so the source-note save
-    // skips soft-delete; PasteHandler will recover them in-memory below and
-    // we'll clear the matching entries.
-    for (const line of movedLines) {
-      const id = line.noteIds[0]
-      if (id != null && isRealNoteId(id)) {
-        noteStore.recordCut(id, line.text.replace(/^\t+/, ''))
-      }
-    }
-
-    // Source: delete the selection (records source undo)
     this.undoManager.captureStateBeforeChange(this.state.lines, this.state.focusedLineIndex)
     this.state.deleteSelectionInternal()
     this.state.requestFocusUpdate()
     this.state.notifyChange()
 
-    // Target: position cursor and paste with movedLines (records target undo)
     target.undoManager.captureStateBeforeChange(target.state.lines, target.state.focusedLineIndex)
     const [tLineIndex, tLocalOffset] = target.state.getLineAndLocalOffset(targetGlobalOffset)
     target.state.focusedLineIndex = tLineIndex
@@ -555,32 +539,8 @@ export class EditorController {
       parsed,
       movedLines,
     )
-
-    // Drop reclaim entries for any line whose id was recovered in-memory; a
-    // second paste of the same content shouldn't double-claim. Also try the
-    // cross-save reclaim path for any line whose head is still a sentinel.
-    for (const ml of movedLines) {
-      const id = ml.noteIds[0]
-      if (id != null && isRealNoteId(id)) noteStore.clearPendingCut(id)
-    }
-    for (const line of result.lines) {
-      const head = line.noteIds[0]
-      if (head != null && isSentinelNoteId(head)) {
-        const stripped = line.text.replace(/^\t+/, '')
-        const reclaimed = noteStore.tryReclaim(stripped)
-        if (reclaimed != null) line.noteIds = [reclaimed]
-      }
-    }
-
-    target.state.lines = result.lines
-    target.state.focusedLineIndex = result.cursorLineIndex
-    target.state.lines[result.cursorLineIndex]?.updateFull(
-      target.state.lines[result.cursorLineIndex]!.text,
-      result.cursorPosition,
-    )
-    target.state.clearSelection()
-    target.state.requestFocusUpdate()
-    target.state.notifyChange()
+    reclaimRecoveredCutIds(movedLines, result.lines)
+    applyPasteResultToState(target.state, result)
     target.undoManager.beginEditingLine(target.state.lines, target.state.focusedLineIndex, target.state.focusedLineIndex)
   }
 

@@ -7,7 +7,6 @@ import {
   waitForNoteInStore,
   waitForSaved,
   waitForNoteInStoreContaining,
-  syncNoteStore,
 } from './support'
 
 /**
@@ -17,8 +16,8 @@ import {
  * `[view(find(name="..."))]` directives. The user drags a line out of A's
  * embedded editor and drops it into B's. The test verifies:
  *   1. The moved line appears in B's editor with its original Firestore noteId
- *      (preservation is the original user-reported bug — without it the line
- *      gets a paste sentinel and ends up as a fresh doc on save).
+ *      (without preservation it would get a paste sentinel and end up as a
+ *      fresh doc on save).
  *   2. After save + reload, the line is in B with the same noteId.
  *   3. A single press of cmd+z reverts both halves of the move at once
  *      (UnifiedUndoManager's withGroup path).

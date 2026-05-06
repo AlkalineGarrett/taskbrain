@@ -4,7 +4,7 @@ import type { UndoSnapshot } from './UndoManager'
 interface UnifiedStackEntry {
   contextId: string
   /** Non-null entries with matching ids undo/redo as one group (e.g. cross-editor move). */
-  groupId: string | null
+  groupId: number | null
 }
 
 /**
@@ -24,7 +24,7 @@ export class UnifiedUndoManager {
   private readonly editors = new Map<string, EditorController>()
   private readonly unifiedUndoStack: UnifiedStackEntry[] = []
   private readonly unifiedRedoStack: UnifiedStackEntry[] = []
-  private activeGroupId: string | null = null
+  private activeGroupId: number | null = null
   private groupCounter = 0
   private _stateVersion = 0
 
@@ -70,7 +70,7 @@ export class UnifiedUndoManager {
       ctrl.commitUndoState()
     }
     const prev = this.activeGroupId
-    this.activeGroupId = `g${++this.groupCounter}`
+    this.activeGroupId = ++this.groupCounter
     try {
       return callback()
     } finally {
@@ -171,7 +171,7 @@ export class UnifiedUndoManager {
     apply: (ctrl: EditorController) => UndoSnapshot | null,
   ): { contextId: string; snapshot: UndoSnapshot } | null {
     let firstResult: { contextId: string; snapshot: UndoSnapshot } | null = null
-    let groupId: string | null = null
+    let groupId: number | null = null
     let currentActive = activeContextId
 
     while (fromStack.length > 0) {

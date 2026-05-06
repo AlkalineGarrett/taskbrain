@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { doc, updateDoc } from 'firebase/firestore'
 import type { NoteLine } from '@/data/Note'
-import { NoteRepository, withStampedWrite, type SaveResult } from '@/data/NoteRepository'
+import { NoteRepository, type SaveResult } from '@/data/NoteRepository'
 import { noteStore } from '@/data/NoteStore'
 import type { InlineEditSession } from '@/editor/InlineEditSession'
 import type { InlineSessionManager } from '@/editor/InlineSessionManager'
@@ -89,11 +89,7 @@ export function useSaveCoordinator({
     for (const [cacheKey, value] of Object.entries(pendingOnceCacheEntries)) {
       updates[`onceCache.${cacheKey}`] = value
     }
-    // Stamp + register so the listener treats this as our own echo —
-    // otherwise toggling once-cache fires a spurious editor reload.
-    await withStampedWrite(async (_, stamp) => {
-      await updateDoc(doc(db, 'notes', noteId), { ...updates, ...stamp })
-    }, noteStore.getRawNoteById(noteId) ?? undefined).catch((e) => {
+    await updateDoc(doc(db, 'notes', noteId), updates).catch((e) => {
       console.error('Failed to persist once cache entries:', e)
     })
   }, [noteId, pendingOnceCacheEntries])
