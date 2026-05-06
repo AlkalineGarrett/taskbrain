@@ -3,6 +3,7 @@ import { doc, updateDoc } from 'firebase/firestore'
 import type { NoteLine } from '@/data/Note'
 import { NoteRepository, type SaveResult } from '@/data/NoteRepository'
 import { noteStore } from '@/data/NoteStore'
+import { firestoreUsage } from '@/data/FirestoreUsage'
 import type { InlineEditSession } from '@/editor/InlineEditSession'
 import type { InlineSessionManager } from '@/editor/InlineSessionManager'
 import type { SaveStatus } from '@/components/CommandBar'
@@ -89,9 +90,12 @@ export function useSaveCoordinator({
     for (const [cacheKey, value] of Object.entries(pendingOnceCacheEntries)) {
       updates[`onceCache.${cacheKey}`] = value
     }
-    await updateDoc(doc(db, 'notes', noteId), updates).catch((e) => {
+    try {
+      await updateDoc(doc(db, 'notes', noteId), updates)
+      firestoreUsage.recordWrite('flushOnceCacheEntries', 'UPDATE')
+    } catch (e) {
       console.error('Failed to persist once cache entries:', e)
-    })
+    }
   }, [noteId, pendingOnceCacheEntries])
 
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
