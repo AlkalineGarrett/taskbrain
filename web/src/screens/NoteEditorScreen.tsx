@@ -31,6 +31,11 @@ import { InlineSessionManager } from '@/editor/InlineSessionManager'
 import { UnifiedUndoManager } from '@/editor/UnifiedUndoManager'
 import styles from './NoteEditorScreen.module.css'
 
+/** Hard cap on the on-tab-switch scroll-reset window. After this we trust
+ *  layout has settled and stop fighting any further scrollTop changes,
+ *  even if the user hasn't yet signalled scroll intent. */
+const SCROLL_RESET_RELEASE_MS = 5000
+
 export function NoteEditorScreen() {
   const { noteId: urlNoteId } = useParams<{ noteId: string }>()
   const { controller, editorState, loading, loadedNoteId, showLoading, error, saveError, clearSaveError, setSaveError, dirty, prepareMainSaveItem, showCompleted, toggleShowCompleted, needsFix, notesNeedingFix } = useEditor(urlNoteId)
@@ -136,6 +141,45 @@ export function NoteEditorScreen() {
     unifiedUndoManager,
     moveDraggingClassName: styles.moveDragging,
   })
+
+  // Reset the scroll container to the top when the loaded note changes.
+  // Embedded notes from `[view find(...)]` directives render across many
+  // frames as their directive results compute (some via Firestore), and
+  // their layout shifts (or focus/textarea-resize side-effects) can pull
+  // scrollTop down between renders.
+  //
+  // Strategy: snap scrollTop back to 0 whenever the container fires a
+  // `scroll` event from anything other than user input. Listening to
+  // `scroll` is essentially free when nothing is scrolling — far better
+  // than per-frame polling. Stop on first wheel/touch/keydown so the
+  // user can scroll freely once async rendering has settled. The cap
+  // bounds the worst case if a user neither scrolls nor types.
+  useEffect(() => {
+    const el = editorRef.current
+    if (!el) return
+    el.scrollTop = 0
+
+    let releaseToUser = false
+    const release = () => { releaseToUser = true }
+    const onScroll = () => {
+      if (releaseToUser) return
+      if (el.scrollTop !== 0) el.scrollTop = 0
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    el.addEventListener('wheel', release, { passive: true })
+    el.addEventListener('touchstart', release, { passive: true })
+    el.addEventListener('keydown', release, { passive: true })
+    const cap = window.setTimeout(release, SCROLL_RESET_RELEASE_MS)
+
+    return () => {
+      release()
+      window.clearTimeout(cap)
+      el.removeEventListener('scroll', onScroll)
+      el.removeEventListener('wheel', release)
+      el.removeEventListener('touchstart', release)
+      el.removeEventListener('keydown', release)
+    }
+  }, [loadedNoteId, editorRef])
 
   const { handleDeleteNote, handleRestoreNote } = useNoteDeletion(noteId)
 

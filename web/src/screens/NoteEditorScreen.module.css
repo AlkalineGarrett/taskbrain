@@ -20,6 +20,13 @@
   margin-left: calc(-50vw + 400px);
   overflow-y: auto;
   position: relative;
+  /* Disable browser scroll-anchoring. When embedded notes from a view
+   * directive render asynchronously, the scrollable height jumps from
+   * a few lines to thousands of pixels in one shot; the default anchor
+   * heuristic can pin to a late-arriving child near the bottom and
+   * reposition scrollTop accordingly. We always want the explicit
+   * top-on-note-change reset in NoteEditorScreen.tsx to win. */
+  overflow-anchor: none;
 }
 
 
