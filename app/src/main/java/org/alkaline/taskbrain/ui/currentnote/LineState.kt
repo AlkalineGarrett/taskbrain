@@ -34,6 +34,17 @@ class LineState(
     var noteIdContentLengths: List<Int> = emptyList()
         internal set
 
+    /**
+     * IME composing range within content (post-prefix). Non-null while
+     * the IME is actively composing text on this line (autocorrect /
+     * autocomplete underlining). Cleared on commit / structural mutation.
+     *
+     * Lives on [LineState] rather than in a parallel IME-side buffer so
+     * that there is exactly one source of truth for the line's state.
+     */
+    var composingRange: IntRange? by mutableStateOf<IntRange?>(null)
+        internal set
+
     /** Stable temporary ID for directive key generation before a Firestore noteId is assigned. */
     val tempId: String = UUID.randomUUID().toString()
 

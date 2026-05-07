@@ -1422,14 +1422,21 @@ class EditorController(
      * null to clear. No-op on a missing line.
      *
      * Composing state is metadata for the IME's underlining; it has no
-     * effect on the line's text. Currently a stub — composing state
-     * still lives on [EditingBuffer] in [LineImeState]. Stage 5 lifts
-     * it onto [LineState] so this method becomes the canonical setter.
+     * effect on the line's text. The range is preserved across edits
+     * to the line as long as it stays in bounds (callers are
+     * responsible for clearing when the composition is invalidated by
+     * structural changes).
      */
-    @Suppress("UNUSED_PARAMETER")
     fun setComposingRange(lineId: String, range: IntRange?) {
-        // Intentional no-op until Stage 5. Buffer-side composing state
-        // remains the source of truth for now.
+        val lineIndex = indexOf(lineId) ?: return
+        val line = state.lines.getOrNull(lineIndex) ?: return
+        line.composingRange = range
+    }
+
+    /** Read the current composing range on a line, or null if none. */
+    fun getComposingRange(lineId: String): IntRange? {
+        val lineIndex = indexOf(lineId) ?: return null
+        return state.lines.getOrNull(lineIndex)?.composingRange
     }
 }
 
