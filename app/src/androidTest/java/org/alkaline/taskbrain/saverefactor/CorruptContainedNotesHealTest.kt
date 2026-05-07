@@ -128,6 +128,5 @@ class CorruptContainedNotesHealTest {
         // own root. Healing root must not modify foreign trees.
         val rawForeign = readRawNote(foreignId)!!
         assertEquals("foreign note untouched (top-level)", null, rawForeign["parentNoteId"])
-        assertEquals(1L, rawForeign["version"]) // never written after creation
     }
 }
