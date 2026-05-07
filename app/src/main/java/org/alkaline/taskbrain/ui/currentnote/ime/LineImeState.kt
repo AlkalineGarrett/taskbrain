@@ -258,46 +258,58 @@ class LineImeState(
 
         if (batchDepth == 0 && needsSyncAfterBatch) {
             needsSyncAfterBatch = false
-            syncBufferToController()
+            syncBufferFromController()
             sendImeNotification()
         }
 
         return batchDepth > 0
     }
 
+    /**
+     * Run [apply] and then sync. [apply] is expected to mutate the
+     * controller directly via the operation API (replaceRange,
+     * deleteAroundCursor, etc.) — NOT to mutate `buffer` and rely on
+     * downward propagation. After [apply] returns, the buffer is
+     * pulled fresh from the controller. Composition state set inside
+     * [apply] (via [buffer.setComposition]) is preserved through the
+     * sync; everything else is overwritten.
+     */
     private fun applyCommand(apply: () -> Unit) {
         apply()
 
         if (batchDepth > 0) {
             needsSyncAfterBatch = true
         } else {
-            syncBufferToController()
+            syncBufferFromController()
             sendImeNotification()
         }
     }
 
     /**
-     * Sync the buffer's edits down to the controller, then pull the
-     * controller's line content back up into the buffer. The pull-back
-     * is required because [EditorController.updateLineContent] may
-     * split, merge, or rewrite the line at [lineIndex] — without it,
-     * the buffer can hold stale text (e.g., a `\n` the controller
-     * already consumed via splitLineOnNewline). On the next IME call
-     * that stale content gets resent, triggering the same controller
-     * mutation again — phantom lines per character.
+     * Pull the controller's line content + cursor into the buffer
+     * while preserving any composing range that's still in bounds.
      *
-     * **Invariant:** after this returns, `buffer.text ==
-     * controller.getLineContent(lineIndex)` and `buffer.cursor` is
-     * within the buffer's range. The composing region is preserved
-     * when the controller's content is unchanged; otherwise it's
-     * cleared (a structural mutation invalidates positions anyway).
+     * The buffer is a derived view of controller state: structural
+     * mutations are owned by the controller (via the operation API),
+     * and the buffer simply reflects the latest text + cursor for IME
+     * notifications and getTextBeforeCursor / getExtractedText queries.
+     *
+     * Composition state lives on the buffer (a transient IME-side
+     * marker) and is kept across syncs as long as its range still fits
+     * the new content length; otherwise it's cleared.
      */
-    private fun syncBufferToController() {
-        controller.updateLineContent(lineIndex, buffer.text, buffer.cursor)
+    private fun syncBufferFromController() {
         val freshContent = controller.getLineContent(lineIndex)
         val freshCursor = controller.getContentCursor(lineIndex)
+        val savedCompStart = buffer.compositionStart
+        val savedCompEnd = buffer.compositionEnd
         if (buffer.text != freshContent || buffer.cursor != freshCursor) {
             buffer.reset(freshContent, freshCursor)
+            // Reapply composition if it's still valid in the new text.
+            if (savedCompStart >= 0 && savedCompEnd >= 0 &&
+                savedCompEnd <= freshContent.length && savedCompStart < savedCompEnd) {
+                buffer.setComposition(savedCompStart, savedCompEnd)
+            }
         }
         updateExposedComposition()
     }
@@ -328,24 +340,29 @@ class LineImeState(
         }
 
         applyCommand {
-            // If there's a composition, replace it; otherwise replace selection/insert at cursor
-            if (buffer.hasComposition()) {
-                val start = buffer.compositionStart
-                buffer.replace(buffer.compositionStart, buffer.compositionEnd, text)
-                buffer.cursor = if (newCursorPosition > 0) {
-                    start + text.length + newCursorPosition - 1
+            // The replacement range: composition (if active) or
+            // cursor-only insert. commitText always finalizes
+            // composition, so we clear the composition marker.
+            val rangeStart = if (buffer.hasComposition()) buffer.compositionStart else buffer.cursor
+            val rangeEnd = if (buffer.hasComposition()) buffer.compositionEnd else buffer.cursor
+            buffer.commitComposition()
+
+            controller.replaceRange(lineId, rangeStart until rangeEnd, text)
+
+            // newCursorPosition spec: >0 → start + textLen + (n-1);
+            // ≤0 → start + n. Default n=1 → cursor at end-of-text,
+            // which is what replaceRange already produces. Override
+            // only for non-default. Skip override on multi-line
+            // commits — the cursor home is then on a different line
+            // (replaceRange returned a CursorPos for the new line)
+            // and overriding via this lineId is meaningless.
+            if (newCursorPosition != 1 && !text.contains('\n')) {
+                val finalCursor = if (newCursorPosition > 0) {
+                    rangeStart + text.length + newCursorPosition - 1
                 } else {
-                    start + newCursorPosition
-                }.coerceIn(0, buffer.length)
-                buffer.commitComposition()
-            } else {
-                val start = buffer.selectionStart
-                buffer.replace(buffer.selectionStart, buffer.selectionEnd, text)
-                buffer.cursor = if (newCursorPosition > 0) {
-                    start + text.length + newCursorPosition - 1
-                } else {
-                    start + newCursorPosition
-                }.coerceIn(0, buffer.length)
+                    rangeStart + newCursorPosition
+                }
+                controller.setCursorByLineId(lineId, finalCursor.coerceAtLeast(0))
             }
         }
     }
@@ -363,15 +380,24 @@ class LineImeState(
         }
 
         applyCommand {
-            val start = if (buffer.hasComposition()) buffer.compositionStart else buffer.selectionStart
-            val end = if (buffer.hasComposition()) buffer.compositionEnd else buffer.selectionEnd
-            buffer.replace(start, end, text)
-            buffer.setComposition(start, start + text.length)
-            buffer.cursor = if (newCursorPosition > 0) {
-                start + text.length + newCursorPosition - 1
-            } else {
-                start + newCursorPosition
-            }.coerceIn(0, buffer.length)
+            val rangeStart = if (buffer.hasComposition()) buffer.compositionStart else buffer.cursor
+            val rangeEnd = if (buffer.hasComposition()) buffer.compositionEnd else buffer.cursor
+
+            controller.replaceRange(lineId, rangeStart until rangeEnd, text)
+
+            // Mark the inserted text as the new composition. The buffer
+            // sync (in applyCommand → syncBufferFromController) will
+            // preserve this if it's still in bounds.
+            buffer.setComposition(rangeStart, rangeStart + text.length)
+
+            if (newCursorPosition != 1) {
+                val finalCursor = if (newCursorPosition > 0) {
+                    rangeStart + text.length + newCursorPosition - 1
+                } else {
+                    rangeStart + newCursorPosition
+                }
+                controller.setCursorByLineId(lineId, finalCursor.coerceAtLeast(0))
+            }
         }
     }
 
@@ -418,31 +444,14 @@ class LineImeState(
             return
         }
 
-        // Handle edge cases that need controller involvement
-        if (beforeLength > 0 && buffer.cursor == 0) {
-            controller.deleteBackward(lineIndex)
-            syncFromController()
-            sendImeNotification()
-            return
-        }
-        if (afterLength > 0 && buffer.cursor >= buffer.length) {
-            controller.deleteForward(lineIndex)
-            syncFromController()
-            sendImeNotification()
-            return
-        }
+        if (beforeLength == 0 && afterLength == 0) return
 
         applyCommand {
-            if (beforeLength == 0 && afterLength == 0) return@applyCommand
-
-            val cursor = buffer.cursor
-            val deleteStart = (cursor - beforeLength).coerceAtLeast(0)
-            val deleteEnd = (cursor + afterLength).coerceAtMost(buffer.length)
-            if (deleteStart < deleteEnd) {
-                buffer.delete(deleteStart, deleteEnd)
-                buffer.cursor = deleteStart
-            }
             buffer.commitComposition()
+            // deleteAroundCursor handles cross-boundary merges
+            // (cursor at start of line, delete back into previous;
+            // cursor at end of line, delete forward into next).
+            controller.deleteAroundCursor(lineId, beforeLength, afterLength)
         }
     }
 
@@ -507,7 +516,7 @@ class LineImeState(
         // Finish any active composition before pasting
         if (buffer.hasComposition()) {
             buffer.commitComposition()
-            syncBufferToController()
+            syncBufferFromController()
         }
 
         // Route through EditorController.paste() for structured handling
