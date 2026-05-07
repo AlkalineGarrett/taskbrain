@@ -1,20 +1,78 @@
-.viewWrapper {
+/* Container for one embedded note's content. A subgrid that spans all
+ * editor columns so the note's rows place into the same [note-id]/
+ * [gutter]/[content]/[right-margin] tracks as the main editor — they
+ * align by being IN the same grid, not by negative-margin tricks. The
+ * container is a real DOM box (not display:contents) because the
+ * cross-editor drop registry needs its bounding rect. */
+.noteSection {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  grid-auto-rows: min-content;
   position: relative;
-  flex: 1 1 100%;
-  min-width: 0;
-  margin: 4px 0;
+  /* Embedded rows nudge their content text right of the vertical
+   * indicator bar (set on `.noteSection::before` below). EditorLine
+   * and CompletedPlaceholderRow add this to their content paddingLeft
+   * via `var(--embedded-content-inset, 0px)`. Main-editor rows aren't
+   * descendants of `.noteSection`, so the var is undefined for them
+   * and the fallback `0px` leaves their layout unchanged. The 11px
+   * total (7px inset + 4px own padding) matches the OLD viewContainer
+   * gap between the bar and the text. */
+  --embedded-content-inset: 7px;
 }
 
-.viewContainer {
-  display: block;
-  border-left: 3px solid var(--color-view-border);
-  padding-left: 4px;
+/* Dashed purple divider between two consecutive embedded notes within
+ * the same view directive — fires only on the second-and-subsequent
+ * `.noteSection`s. Drawn as a positioned pseudo-element starting at
+ * the [content] column (right of the gutter), so it doesn't extend
+ * leftward into the noteId/gutter region. */
+.noteSection + .noteSection::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: calc(var(--note-id-col) + var(--gutter-col));
+  right: 0;
+  border-top: 1px dashed var(--color-view-divider);
+  pointer-events: none;
 }
 
+/* Vertical bar marking one embedded note's content. One per
+ * `.noteSection`, so when a view matches multiple notes the bars
+ * stack as separate segments with gaps between (the top/bottom
+ * insets create the visible break). The bar sits a few px right of
+ * the gutter so the [content] column has a small left padding before
+ * the text begins, mirroring the OLD `.viewContainer` look.
+ *
+ * Uses `::after` (not `::before`) so that the inter-note dashed
+ * divider — which targets the OTHER pseudo-element on subsequent
+ * sections — doesn't collide with this rule. */
+.noteSection::after {
+  content: '';
+  position: absolute;
+  /* note-id + gutter places the bar at [content] start; +4px gives the
+   * gap from the gutter. */
+  left: calc(var(--note-id-col) + var(--gutter-col) + 4px);
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  background: var(--color-view-border);
+  pointer-events: none;
+}
+
+/* Gear icon at the top-right of the embedded section's [content]
+ * column. Rendered only on the first ViewNoteSection of a directive's
+ * matched notes. Click focuses the parent line so the directive
+ * source is editable. */
 .editButton {
   position: absolute;
   top: 4px;
-  right: 4px;
+  /* Anchor at the right edge of [content], minus button width and a
+   * small inset. `.noteSection`'s left is at the editor's [note-id]
+   * start, so [content]'s right is at noteId+gutter+content from that
+   * left edge. The variable [right-margin] column makes a `right:`-
+   * based positioning awkward — using `left:` keeps the math in
+   * known fixed-width column vars. */
+  left: calc(var(--note-id-col) + var(--gutter-col) + var(--content-col) - 28px);
   width: 24px;
   height: 24px;
   padding: 0;
@@ -33,68 +91,37 @@
   opacity: 1;
 }
 
-.emptyView {
-  color: var(--color-text-disabled);
-  font-style: italic;
-  padding: 4px 0;
-}
-
-/* Static text shown while inline-edit sessions are being awaited. */
-.placeholderContent {
-  white-space: pre-wrap;
-  padding: 4px 0;
-  color: var(--color-text);
-}
-
-.separator {
-  border: none;
-  border-top: 1px solid var(--color-view-divider);
-  margin: 4px 0;
-}
-
-.noteSection {
-  padding: 4px 0;
-  position: relative;
-}
-
-/* Pull the entire row left so the embedded gutter aligns with the
- * parent's gutter column. The 2 * --view-gutter-offset term: one for
- * the parent EditorLine's inner-wrapper indent (which pushed the view
- * right when entering it), one for `.viewLineContent`'s padding-left
- * (which pushes the embedded EditorLine right inside the viewLineRow).
- * Inlined here rather than via `--embedded-row-pull` because the
- * latter's calc captures `--view-gutter-offset` at substitution time
- * and may not see the per-line value set on the parent EditorLine's
- * inner wrapper. */
-.viewLineRow {
-  display: flex;
-  align-items: stretch;
-  margin-left: calc(-1 * (var(--note-id-col) + var(--gutter-col) + 2 * var(--view-gutter-offset, 7px)));
-}
-
-.viewNoteIdCell {
-  flex-shrink: 0;
-  width: var(--note-id-col);
+/* Marker for the parent directive line's noteId, shown only when the
+ * directive line itself isn't rendered (pure-view-host case). Floats
+ * to the LEFT of [note-id] (right-aligned, ending right before the
+ * column boundary) so the noteId remains visible without taking up
+ * its own row in the editor. */
+.parentNoteIdMarker {
+  position: absolute;
+  top: 0;
+  /* Marker's right edge sits at the noteSection's left edge =
+   * editor's [note-id] start. With width auto + nowrap, the marker's
+   * text extends LEFT into the editor's left padding area. */
+  right: 100%;
   font-family: monospace;
   font-size: 0.6875rem;
   line-height: 1.5rem;
   color: #bbb;
   text-align: right;
+  padding-right: 0.5rem;
   white-space: nowrap;
+  pointer-events: none;
   user-select: text;
-  cursor: text;
-  padding: 0 0.375rem 0 0;
-  overflow: hidden;
 }
 
-.viewLineContent {
-  flex: 1;
-  min-width: 0;
-  /* Push content right past the view border that the negative margin pulled us past. */
-  padding-left: calc(var(--view-gutter-offset, 7px));
-  /* EditorLine's indent div reads this to shift text past the viewContainer border+padding
-     without moving the gutter (which is a sibling of the indent div). */
-  --view-border-inset: 7px; /* viewContainer border-left (3px) + padding-left (4px) */
+/* Wrapper around each embedded EditorLine. Same pattern as `.editorRow`
+ * in NoteEditorScreen: subgrids one more level so EditorLine's `.line`
+ * places its noteIdCell/selectionGutter/content cells into the right
+ * named columns. */
+.editorRow {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
 }
 
 .dropCursor {
@@ -104,7 +131,6 @@
   pointer-events: none;
   z-index: 10;
 }
-
 
 .inlineSaveError {
   display: flex;
@@ -116,6 +142,8 @@
   border-radius: 4px;
   font-size: 0.75rem;
   margin-bottom: 4px;
+  /* Span all columns so the banner lays out across the whole row. */
+  grid-column: 1 / -1;
 }
 
 .inlineSaveErrorDismiss {

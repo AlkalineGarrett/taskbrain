@@ -14,36 +14,44 @@ import { ParentShowCompletedContext } from '@/editor/ParentShowCompletedContext'
 import { computeDisplayItemsFromHidden } from '@/editor/CompletedLineUtils'
 import { EditorLine } from './EditorLine'
 import { CompletedPlaceholderRow } from './CompletedPlaceholderRow'
-import { EMPTY_VIEW, SAVE_ERROR_BANNER, SAVE_ERROR_DISMISS } from '@/strings'
+import { SAVE_ERROR_BANNER, SAVE_ERROR_DISMISS } from '@/strings'
 import styles from './ViewDirectiveRenderer.module.css'
 
 const noteRepo = new NoteRepository(db, auth)
 
 interface ViewDirectiveRendererProps {
   viewVal: ViewVal
-  /** Called when the gear icon is clicked to switch to directive editing mode */
+  /** Click handler for the gear icon overlaid at the top-right of the
+   *  embedded view. Used to navigate the user to where they can edit
+   *  the directive that produced this view (typically focuses the
+   *  parent line). Omit to suppress the gear. */
   onEditDirective?: () => void
+  /** Floated to the left of the first embedded note section as a small
+   *  marker. Used when the parent directive line is hidden (pure
+   *  view-host) so its noteId still has a visible home. Omit when the
+   *  directive line is rendered normally. */
+  parentNoteIdText?: string
 }
 
 /**
- * Renders viewed notes inline with separators.
- * Each note section uses a per-line editor (EditorLine) with its own
- * InlineEditSession for full editing parity with the main editor.
+ * Renders the embedded notes from a `[view find(...)]` directive as flat
+ * siblings of the parent's directive line — direct grid items of the
+ * editor's column grid (via `ViewNoteSection`'s subgrid). The container
+ * `<div display: contents>` exists only to group sessions for ensureSessions
+ * and the per-note directive-results memo; it adds nothing to layout.
  */
-export function ViewDirectiveRenderer({
-  viewVal,
-  onEditDirective,
-}: ViewDirectiveRendererProps) {
+export function ViewDirectiveRenderer({ viewVal, onEditDirective, parentNoteIdText }: ViewDirectiveRendererProps) {
   const { notes } = viewVal
   const { sessionManager } = useActiveEditor()
 
-  // Eagerly create sessions for all notes in this view directive. The setter
-  // triggers a re-render once sessions are populated; the value is unused.
-  // We fire it unconditionally rather than gating on "created" because in
-  // StrictMode the first mount's effect creates the sessions but its cleanup
-  // sets cancelled=true, and the second mount's effect sees `created=false`
-  // (sessions already exist) — the original gate left setReadyTick never
-  // firing, so the first render's placeholders stuck.
+  // Eagerly create sessions for all notes in this view directive. The
+  // setter triggers a re-render once sessions are populated; the value
+  // is unused. We fire it unconditionally rather than gating on
+  // "created" because in StrictMode the first mount's effect creates
+  // the sessions but its cleanup sets cancelled=true, and the second
+  // mount's effect sees `created=false` (sessions already exist) — the
+  // original gate left setReadyTick never firing, so the first render's
+  // placeholders stuck.
   const [, setReadyTick] = useState(0)
   useEffect(() => {
     let cancelled = false
@@ -56,7 +64,7 @@ export function ViewDirectiveRenderer({
     return () => { cancelled = true }
   }, [notes, sessionManager])
 
-  // Compute directive results for each viewed note's content
+  // Per-viewed-note directive results.
   const viewedNoteDirectiveResults = useMemo(() => {
     const allNotes = noteStore.getSnapshot()
     const resultsByNoteId = new Map<string, Map<string, DirectiveResult>>()
@@ -80,48 +88,29 @@ export function ViewDirectiveRenderer({
     return resultsByNoteId
   }, [notes])
 
-  const gearButton = onEditDirective ? (
-    <button
-      className={styles.editButton}
-      onClick={(e) => { e.stopPropagation(); onEditDirective() }}
-      title="Edit directive"
-      aria-label="Edit directive"
-    >
-      ⚙
-    </button>
-  ) : null
+  if (notes.length === 0) return null
 
-  if (notes.length === 0) {
-    return (
-      <div className={styles.viewWrapper}>
-        {gearButton}
-        <div className={styles.emptyView}>{EMPTY_VIEW}</div>
-      </div>
-    )
-  }
-
+  // `display: contents` so each ViewNoteSection becomes a direct child
+  // of the editor grid (where this whole tree is rendered as a sibling
+  // of the directive line in NoteEditorScreen). The first note
+  // section gets the `onEditDirective` callback so its gear button
+  // renders at the top-right of the (combined) embedded view area.
   return (
-    <div className={styles.viewWrapper}>
-      {gearButton}
-      <div className={styles.viewContainer}>
-      {notes.map((note, noteIndex) => {
+    <div style={{ display: 'contents' }}>
+      {notes.map((note, idx) => {
         const session = sessionManager.getSession(note.id)
+        if (!session) return null
         return (
-          <div key={note.id}>
-            {noteIndex > 0 && <hr className={styles.separator} />}
-            {session ? (
-              <ViewNoteSection
-                note={note}
-                session={session}
-                directiveResults={viewedNoteDirectiveResults.get(note.id)}
-              />
-            ) : (
-              <div className={styles.placeholderContent}>{note.content}</div>
-            )}
-          </div>
+          <ViewNoteSection
+            key={note.id}
+            note={note}
+            session={session}
+            directiveResults={viewedNoteDirectiveResults.get(note.id)}
+            onEditDirective={idx === 0 ? onEditDirective : undefined}
+            parentNoteIdText={idx === 0 ? parentNoteIdText : undefined}
+          />
         )
       })}
-      </div>
     </div>
   )
 }
@@ -130,6 +119,13 @@ interface ViewNoteSectionProps {
   note: Note
   session: InlineEditSession
   directiveResults?: Map<string, DirectiveResult>
+  /** When provided, this section renders the gear icon (set on only
+   *  one section per ViewDirectiveRenderer — typically the first). */
+  onEditDirective?: () => void
+  /** When provided, this section renders the parent directive line's
+   *  noteId as a small marker floated to the left of the section.
+   *  Used when the directive line itself isn't rendered. */
+  parentNoteIdText?: string
 }
 
 const PENDING_VIEW_SAVE_ERROR_KEY = 'pendingViewSaveError'
@@ -138,6 +134,8 @@ function ViewNoteSection({
   note,
   session: preCreatedSession,
   directiveResults: viewDirectiveResults,
+  onEditDirective,
+  parentNoteIdText,
 }: ViewNoteSectionProps) {
   const { activateSession, deactivateSession, activeSession, notifyActiveChange, sessionManager, unifiedUndoManager } = useActiveEditor()
   const parentShowCompleted = useContext(ParentShowCompletedContext)
@@ -150,16 +148,17 @@ function ViewNoteSection({
   const isActiveHereRef = useRef(isActiveHere)
   isActiveHereRef.current = isActiveHere
 
-  // The parent editor's showCompleted overrides the embedded note's own setting.
-  // Pass it to updateHiddenIndices so checked subtrees collapse into placeholders
-  // when the parent says hide.
   const parentShowCompletedArg = parentShowCompleted ?? undefined
 
-  // Connect change handlers to the session
   useEffect(() => {
     preCreatedSession.editorState.onTextChange = () => {
       preCreatedSession.updateHiddenIndices(parentShowCompletedArg)
       setRenderVersion(v => v + 1)
+      // Bump the parent's active-session version too, so `NoteEditorScreen`
+      // re-renders and `useSaveCoordinator` re-evaluates `anyDirty` —
+      // otherwise typing into an embedded line doesn't flip the Save
+      // button until focus moves elsewhere.
+      notifyActiveChange()
     }
     preCreatedSession.editorState.onSelectionChange = () => {
       setRenderVersion(v => v + 1)
@@ -167,19 +166,16 @@ function ViewNoteSection({
     }
   }, [preCreatedSession, notifyActiveChange, parentShowCompletedArg])
 
-  // Recompute hidden indices when the parent's showCompleted toggles.
   useEffect(() => {
     preCreatedSession.updateHiddenIndices(parentShowCompletedArg)
     setRenderVersion(v => v + 1)
   }, [parentShowCompletedArg, preCreatedSession])
 
-  // Sync external content changes via the centralized session manager
   useEffect(() => {
     sessionManager.syncExternalChanges(note.id, note.content)
     setRenderVersion(v => v + 1)
   }, [note.content, note.id, sessionManager])
 
-  // Check for save errors persisted from a previous unmount
   useEffect(() => {
     try {
       const raw = sessionStorage.getItem(PENDING_VIEW_SAVE_ERROR_KEY)
@@ -207,21 +203,13 @@ function ViewNoteSection({
     null, unifiedUndoManager,
   )
 
-  // Focus management: activate session on mouseDown (capture phase fires before
-  // EditorLine's mouseDown, ensuring the session is active when setCursorFromGlobalOffset
-  // runs), on focus (fallback for keyboard/Tab navigation), save+deactivate on blur.
   const handleActivate = useCallback(() => {
     activateSession(preCreatedSession)
   }, [preCreatedSession, activateSession])
 
   const handleContainerBlur = useCallback((e: React.FocusEvent) => {
-    // relatedTarget is null/undefined when focus is lost transiently (e.g., during
-    // React re-render or when no element receives focus). Don't deactivate in that
-    // case — only deactivate when focus explicitly moved to an element outside.
     if (!e.relatedTarget) return
     if (containerRef.current?.contains(e.relatedTarget as Node)) return
-    // On blur: push optimistic update to NoteStore (no Firestore write).
-    // This lets other view directives referencing the same note see edits.
     if (preCreatedSession.isDirty) {
       const existing = noteStore.getNoteById(preCreatedSession.noteId)
       if (existing) {
@@ -231,8 +219,6 @@ function ViewNoteSection({
         })
       }
     }
-    // Only deactivate if this section's session is still the active one —
-    // a sibling ViewNoteSection may have already activated its own session.
     deactivateSession(preCreatedSession)
   }, [deactivateSession, preCreatedSession])
 
@@ -244,6 +230,11 @@ function ViewNoteSection({
     displayController.hiddenIndices,
   )
 
+  // The container is a subgrid that spans the editor's column tracks,
+  // so its rows place into [note-id]/[gutter]/[content]/[right-margin]
+  // exactly like main-editor rows, while still being a real DOM box —
+  // the dropTargetRegistry uses its bounding rect to decide which
+  // editor a cross-editor drop lands in.
   return (
     <div
       ref={containerRef}
@@ -253,6 +244,20 @@ function ViewNoteSection({
       onBlur={handleContainerBlur}
     >
       <div ref={dropCursorRef} className={styles.dropCursor} style={{ display: 'none' }} />
+      {parentNoteIdText !== undefined && (
+        <div className={styles.parentNoteIdMarker}>{parentNoteIdText || ' '}</div>
+      )}
+      {onEditDirective && (
+        <button
+          type="button"
+          className={styles.editButton}
+          onClick={(e) => { e.stopPropagation(); onEditDirective() }}
+          title="Edit directive"
+          aria-label="Edit directive"
+        >
+          ⚙
+        </button>
+      )}
       {saveError && (
         <div className={styles.inlineSaveError}>
           <span>{SAVE_ERROR_BANNER}</span>
@@ -263,7 +268,6 @@ function ViewNoteSection({
         item.type === 'placeholder' ? (
           <CompletedPlaceholderRow
             key={`ph-${i}`}
-            variant="view"
             count={item.count}
             indentLevel={item.indentLevel}
             noteIdText={Array.from({ length: item.count }, (_, j) => displayLines[item.startIndex + j]?.noteIds ?? []).flat().join(', ')}
@@ -282,22 +286,23 @@ function ViewNoteSection({
             }}
           />
         ) : (
-          <div key={item.realIndex} data-view-line-index={item.realIndex} data-view-note-id={note.id} className={styles.viewLineRow}>
-            <div className={styles.viewNoteIdCell}>{displayLines[item.realIndex]?.noteIds.join(', ') || '\u00A0'}</div>
-            <div className={styles.viewLineContent}>
-              <EditorLine
-                lineIndex={item.realIndex}
-                controller={displayController}
-                editorState={displayState}
-                directiveResults={viewDirectiveResults}
-                onDragStart={handleDragStart}
-                onGutterDragStart={handleGutterDragStart}
-                onGutterDragUpdate={handleGutterDragUpdate}
-                onMoveStart={handleMoveStart}
-                hideNoteId
-                allowAutoFocus={isActiveHere}
-              />
-            </div>
+          <div
+            key={item.realIndex}
+            data-view-line-index={item.realIndex}
+            data-view-note-id={note.id}
+            className={styles.editorRow}
+          >
+            <EditorLine
+              lineIndex={item.realIndex}
+              controller={displayController}
+              editorState={displayState}
+              directiveResults={viewDirectiveResults}
+              onDragStart={handleDragStart}
+              onGutterDragStart={handleGutterDragStart}
+              onGutterDragUpdate={handleGutterDragUpdate}
+              onMoveStart={handleMoveStart}
+              allowAutoFocus={isActiveHere}
+            />
           </div>
         ),
       )}

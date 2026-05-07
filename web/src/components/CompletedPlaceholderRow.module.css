@@ -1,6 +1,7 @@
-/* Main-editor placeholder: a subgrid row of the editor's column template
- * (defined on `.editor` in NoteEditorScreen.module.css). Same column
- * model as `.line` in EditorLine.module.css. */
+/* Subgrid row that aligns with the editor's column template (defined on
+ * `.editor` in NoteEditorScreen.module.css). Same column model as `.line`
+ * in EditorLine.module.css — placeholder, main-editor lines, and
+ * embedded-view rows all participate in the same grid. */
 .placeholder {
   display: grid;
   grid-template-columns: subgrid;
@@ -12,32 +13,13 @@
   padding: 0.125rem 0;
 }
 
-/* Embedded-view placeholder: lives inside the directive line's content
- * cell, so it can't subgrid the editor's columns directly. Falls back
- * to flex + a negative-margin escape that mirrors `.viewLineRow` in
- * ViewDirectiveRenderer. Same `2 * --view-gutter-offset` so the
- * placeholder's noteIdCell lines up with the embedded line's
- * viewNoteIdCell; the gutter's own margin (`.placeholderGutterView`
- * below) re-creates the spacing that viewLineRow's `viewLineContent`
- * padding provides between noteId and gutter. */
-.placeholderView {
-  display: flex;
-  align-items: stretch;
-  min-height: 1.5rem;
-  color: var(--color-text-tertiary);
-  font-size: 0.875rem;
-  padding: 0.125rem 0;
-  margin-left: calc(-1 * (var(--note-id-col) + var(--gutter-col) + 2 * var(--view-gutter-offset, 7px)));
-  /* Mirror `.viewLineContent`'s var so embedded EditorLines and the
-   * embedded placeholder both pick up the same 7px inset when reading
-   * `var(--view-border-inset)` from their content paddingLeft formula.
-   * The placeholder is a sibling of `.viewLineRow` (not a descendant of
-   * `.viewLineContent`), so it doesn't inherit the var without this. */
-  --view-border-inset: 7px;
-}
-
 .noteIdCell {
   grid-column: note-id;
+  /* Visually extend left of the [note-id] column to the screen edge so
+   * the long noteId hex text has room to right-align. The cell box
+   * stays in [note-id] (alignment-wise); only the visible paint
+   * extends left, via this width override + negative margin. Mirrors
+   * the same trick in EditorLine.module.css. */
   width: calc(50vw - 400px + var(--note-id-col));
   min-width: 0;
   margin-left: calc(-50vw + 400px);
@@ -54,19 +36,8 @@
   overflow: hidden;
 }
 
-/* In view mode, the placeholderView's negative margin pulled the whole
- * row left into screen-edge space; the noteId cell only needs the
- * embedded fixed width and no margin override. */
-.noteIdCellView {
-  width: var(--note-id-col);
-  flex-shrink: 0;
-  margin-left: 0;
-}
-
 .placeholderGutter {
   grid-column: gutter;
-  width: var(--gutter-col);
-  flex-shrink: 0;
   background: var(--color-gutter-bg);
   border-bottom: 1px solid var(--color-gutter-border);
   cursor: pointer;
@@ -77,18 +48,8 @@
   background: var(--color-gutter-selected);
 }
 
-/* Embedded-view variant only: re-create the gap between noteIdCell and
- * gutter that viewLineRow's `viewLineContent` padding-left produces.
- * Without this, noteIds align across embedded rows but gutters don't. */
-.placeholderGutterView {
-  margin-left: var(--view-gutter-offset, 7px);
-}
-
 .content {
   grid-column: content;
-  /* In view mode (flex parent), take remaining width after noteId+gutter. */
-  flex: 1;
-  min-width: 0;
   padding: 0.125rem 0.25rem;
 }
 

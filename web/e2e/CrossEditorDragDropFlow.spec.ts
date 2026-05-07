@@ -93,15 +93,17 @@ test.describe('CrossEditorDragDropFlow', () => {
 
     // The id-cell shows the noteIds of each line. The moved line in B should
     // display the original Firestore id, not a paste sentinel (which starts
-    // with '@').
+    // with '@'). After the flat-tree refactor, the wrapper's structure is:
+    //   <div data-view-note-id> → <div class="line" subgrid>
+    //                              ↳ <div class="noteIdCell"> ← what we want
+    //                              ↳ <div class="selectionGutter">
+    //                              ↳ <div> (inner content wrapper)
     const movedLineIdCell = await page.evaluate(async ({ bIdArg, content }) => {
       const rows = Array.from(document.querySelectorAll<HTMLElement>(`[data-view-note-id="${bIdArg}"]`))
       for (const row of rows) {
         const ta = row.querySelector('textarea') as HTMLTextAreaElement | null
         if (ta?.value === content) {
-          // The id cell is rendered as the first child div in the row.
-          const cells = Array.from(row.children) as HTMLElement[]
-          return cells[0]?.textContent ?? null
+          return row.querySelector('[class*="noteIdCell"]')?.textContent ?? null
         }
       }
       return null

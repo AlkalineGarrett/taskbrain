@@ -1,5 +1,7 @@
 import { useParams } from 'react-router-dom'
-import { useEffect, useState, useMemo } from 'react'
+import { Fragment, useEffect, useState, useMemo } from 'react'
+import type { EditorState } from '@/editor/EditorState'
+import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
 import { noteStore } from '@/data/NoteStore'
 import { isLive, NoteState } from '@/data/NoteState'
 import { useAllNotes, useNoteStoreError } from '@/hooks/useNoteStore'
@@ -24,9 +26,14 @@ import { extractDisplayText } from '@/data/TabState'
 import { LOADING_NOTE, DELETE_NOTE, DELETE_NOTE_CONFIRM_TITLE, DELETE_NOTE_CONFIRM_MESSAGE, SAVE_ERROR_BANNER, SAVE_ERROR_DISMISS, SYNC_ERROR_BANNER } from '@/strings'
 import { db, auth } from '@/firebase/config'
 import { findDirectives } from '@/dsl/directives/DirectiveFinder'
+import { segmentLine, isViewSegment } from '@/dsl/directives/DirectiveSegmenter'
+import { directiveResultToValue } from '@/dsl/directives/DirectiveResult'
+import type { ViewVal } from '@/dsl/runtime/DslValue'
+import { ViewDirectiveRenderer } from '@/components/ViewDirectiveRenderer'
 import { ActiveEditorContext } from '@/editor/ActiveEditorContext'
 import { UndoActionsContext } from '@/editor/UndoActionsContext'
 import { ParentShowCompletedContext } from '@/editor/ParentShowCompletedContext'
+import { DirectiveEditingContext } from '@/editor/DirectiveEditingContext'
 import { InlineSessionManager } from '@/editor/InlineSessionManager'
 import { UnifiedUndoManager } from '@/editor/UnifiedUndoManager'
 import styles from './NoteEditorScreen.module.css'
@@ -35,6 +42,55 @@ import styles from './NoteEditorScreen.module.css'
  *  layout has settled and stop fighting any further scrollTop changes,
  *  even if the user hasn't yet signalled scroll intent. */
 const SCROLL_RESET_RELEASE_MS = 5000
+
+interface LineViewState {
+  /** The resolved ViewVals (paired with segment keys) for view directives
+   *  on this line that have at least one matched note — used both to
+   *  render flat sibling content rows and to wire the gear's onClick
+   *  through to `DirectiveEditingContext`. */
+  viewEntries: Array<{ viewVal: ViewVal; segmentKey: string }>
+  /** True when the line's only meaningful segments are non-empty view
+   *  directives. Such lines hide their own editor row — the view
+   *  content occupies the slot and the line's noteId floats off to
+   *  the left as a marker. Lines that mix a view directive with other
+   *  content (text, prefix, another directive) render normally. */
+  isPureViewHost: boolean
+}
+
+/** Single pass over `segmentLine` that yields everything the render
+ *  loop needs to decide whether to draw the directive line as a row
+ *  or hide it in favor of the embedded view's first row. */
+function lineViewState(
+  lineIndex: number,
+  editorState: EditorState,
+  directiveResults: Map<string, DirectiveResult>,
+): LineViewState {
+  const line = editorState.lines[lineIndex]
+  if (!line) return { viewEntries: [], isPureViewHost: false }
+  const segments = segmentLine(line.text, line.effectiveId, directiveResults, line.noteIds[0])
+  const viewEntries: Array<{ viewVal: ViewVal; segmentKey: string }> = []
+  let pure = true
+  let sawViewDirective = false
+  for (const s of segments) {
+    if (s.kind === 'Text') {
+      if (s.content.trim() !== '') pure = false
+      continue
+    }
+    // Directive segment.
+    if (!isViewSegment(s) || !s.result) {
+      pure = false
+      continue
+    }
+    const value = directiveResultToValue(s.result)
+    if (value?.kind === 'ViewVal' && value.notes.length > 0) {
+      viewEntries.push({ viewVal: value, segmentKey: s.key })
+      sawViewDirective = true
+    } else {
+      pure = false
+    }
+  }
+  return { viewEntries, isPureViewHost: pure && sawViewDirective }
+}
 
 export function NoteEditorScreen() {
   const { noteId: urlNoteId } = useParams<{ noteId: string }>()
@@ -49,6 +105,11 @@ export function NoteEditorScreen() {
   const allNotes = useAllNotes()
   const syncError = useNoteStoreError()
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [directiveEditingKey, setDirectiveEditingKey] = useState<string | null>(null)
+  const directiveEditingCtx = useMemo(
+    () => ({ editingKey: directiveEditingKey, setEditingKey: setDirectiveEditingKey }),
+    [directiveEditingKey],
+  )
 
   // Start Firestore collection listener for real-time note sync
   useEffect(() => { noteStore.start(db, auth) }, [])
@@ -267,6 +328,7 @@ export function NoteEditorScreen() {
       <UndoActionsContext.Provider value={undoActionsValue}>
       <ActiveEditorContext.Provider value={activeEditorCtx}>
       <ParentShowCompletedContext.Provider value={showCompleted}>
+      <DirectiveEditingContext.Provider value={directiveEditingCtx}>
       <div className={styles.editorArea}>
         <div
           ref={editorRef}
@@ -294,26 +356,58 @@ export function NoteEditorScreen() {
                 selectLineRange(Math.min(anchorStart, item.startIndex), Math.max(anchorEnd, item.endIndex))
               }}
             />
-          ) : (
-            <div key={item.realIndex} data-line-index={item.realIndex} className={styles.editorRow} style={fadedIndices.has(item.realIndex) ? { opacity: 0.4 } : undefined}>
-              <EditorLine
-                lineIndex={item.realIndex}
-                controller={controller}
-                editorState={editorState}
-                directiveResults={directiveResults}
-                onDirectiveEdit={handleDirectiveEdit}
-                onDirectiveRefresh={refreshDirective}
-                onDragStart={handleDragStart}
-                onGutterDragStart={handleGutterDragStart}
-                onGutterDragUpdate={handleGutterDragUpdate}
-                onMoveStart={handleMoveStart}
-                showFocusHighlight={!activeSession}
-              />
-            </div>
-          ),
+          ) : (() => {
+            const { viewEntries, isPureViewHost } = lineViewState(item.realIndex, editorState, directiveResults)
+            const isEditingThisLine = isPureViewHost
+              && directiveEditingKey != null
+              && viewEntries.some((v) => v.segmentKey === directiveEditingKey)
+            // Pure-view-host lines hide their own row to give the slot to
+            // the embedded view content — except when the user has the
+            // directive open for inline editing (clicked the gear): then
+            // we re-render the row so `DirectiveLineContent` can mount
+            // its `DirectiveEditRow`. The row pushes the view content
+            // down, exactly mirroring how non-host directive lines
+            // behave when their chip is clicked.
+            const hideRow = isPureViewHost && !isEditingThisLine
+            const parentNoteIdText = editorState.lines[item.realIndex]?.noteIds.join(', ') ?? ''
+            return (
+              <Fragment key={item.realIndex}>
+                {!hideRow && (
+                  <div data-line-index={item.realIndex} className={styles.editorRow} style={fadedIndices.has(item.realIndex) ? { opacity: 0.4 } : undefined}>
+                    <EditorLine
+                      lineIndex={item.realIndex}
+                      controller={controller}
+                      editorState={editorState}
+                      directiveResults={directiveResults}
+                      onDirectiveEdit={handleDirectiveEdit}
+                      onDirectiveRefresh={refreshDirective}
+                      onDragStart={handleDragStart}
+                      onGutterDragStart={handleGutterDragStart}
+                      onGutterDragUpdate={handleGutterDragUpdate}
+                      onMoveStart={handleMoveStart}
+                      showFocusHighlight={!activeSession}
+                    />
+                  </div>
+                )}
+                {viewEntries.map(({ viewVal, segmentKey }, idx) => (
+                  <ViewDirectiveRenderer
+                    key={`view-${item.realIndex}-${segmentKey}`}
+                    viewVal={viewVal}
+                    /* The parent's noteId floats to the left of the first
+                     * embedded note section, but only when the directive
+                     * line itself isn't rendered (pure-view-host case
+                     * AND not currently being edited). */
+                    parentNoteIdText={hideRow && idx === 0 ? parentNoteIdText : undefined}
+                    onEditDirective={() => setDirectiveEditingKey(segmentKey)}
+                  />
+                ))}
+              </Fragment>
+            )
+          })(),
         )}
       </div>
       </div>
+      </DirectiveEditingContext.Provider>
       </ParentShowCompletedContext.Provider>
       </ActiveEditorContext.Provider>
       </UndoActionsContext.Provider>

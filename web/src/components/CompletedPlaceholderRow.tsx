@@ -9,12 +9,9 @@ interface CompletedPlaceholderRowProps {
   noteIdText: string
   onGutterDragStart: () => void
   onGutterDragUpdate: () => void
-  /** `view` renders inside a `[view find(...)]` directive's embedded note,
-   *  matching the alignment of `.viewLineRow`. Default `main`. */
-  variant?: 'main' | 'view'
 }
 
-export function CompletedPlaceholderRow({ count, indentLevel, isSelected, noteIdText, onGutterDragStart, onGutterDragUpdate, variant = 'main' }: CompletedPlaceholderRowProps) {
+export function CompletedPlaceholderRow({ count, indentLevel, isSelected, noteIdText, onGutterDragStart, onGutterDragUpdate }: CompletedPlaceholderRowProps) {
   const handleMouseDown = (e: MouseEvent) => {
     e.preventDefault()
     onGutterDragStart()
@@ -26,30 +23,18 @@ export function CompletedPlaceholderRow({ count, indentLevel, isSelected, noteId
     }
   }
 
-  const placeholderClass = variant === 'view' ? styles.placeholderView : styles.placeholder
-  const noteIdClass = variant === 'view'
-    ? `${styles.noteIdCell} ${styles.noteIdCellView}`
-    : styles.noteIdCell
-  const gutterClass = variant === 'view'
-    ? `${styles.placeholderGutter} ${styles.placeholderGutterView}${isSelected ? ` ${styles.selected}` : ''}`
-    : `${styles.placeholderGutter}${isSelected ? ` ${styles.selected}` : ''}`
-
   // Match EditorLine's inner-wrapper paddingLeft so the placeholder's
-  // text starts where the collapsed lines would have started:
-  //   `0.25rem + indentLevel * 0.6rem`  matches EditorLine's per-indent unit
-  //   `var(--view-border-inset, 0px)`   picks up the 7px embedded-view
-  //                                      inset (set by `.viewLineContent`)
-  //                                      so the embedded placeholder's text
-  //                                      doesn't sit 7px LEFT of where the
-  //                                      embedded lines render.
-  const contentPaddingLeft =
-    `calc(${0.25 + indentLevel * 0.6}rem + var(--view-border-inset, 0px))`
+  // text starts where the lines it collapses would have started. The
+  // `--embedded-content-inset` var is set by `.noteSection` for
+  // embedded placeholders; main-editor placeholders see the fallback
+  // `0px`.
+  const contentPaddingLeft = `calc(${0.25 + indentLevel * 0.6}rem + var(--embedded-content-inset, 0px))`
 
   return (
-    <div className={placeholderClass}>
-      <div className={noteIdClass}>{noteIdText || '\u00A0'}</div>
+    <div className={styles.placeholder}>
+      <div className={styles.noteIdCell}>{noteIdText || ' '}</div>
       <div
-        className={gutterClass}
+        className={`${styles.placeholderGutter}${isSelected ? ` ${styles.selected}` : ''}`}
         onMouseDown={handleMouseDown}
         onMouseEnter={handleMouseEnter}
       />

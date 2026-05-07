@@ -1,6 +1,7 @@
-import { useState, useCallback } from 'react'
+import { useCallback } from 'react'
 import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
 import { segmentLine, isViewSegment } from '@/dsl/directives/DirectiveSegmenter'
+import { useDirectiveEditing } from '@/editor/DirectiveEditingContext'
 import { DirectiveChip } from './DirectiveChip'
 import { DirectiveEditRow } from './DirectiveEditRow'
 import styles from './DirectiveLineContent.module.css'
@@ -28,20 +29,20 @@ export function DirectiveLineContent({
   onDirectiveRefresh,
   onButtonClick,
 }: DirectiveLineContentProps) {
-  const [editingKey, setEditingKey] = useState<string | null>(null)
+  const { editingKey, setEditingKey } = useDirectiveEditing()
 
   const segments = segmentLine(content, lineId, results, lineNoteId)
 
   const handleChipClick = useCallback((key: string) => {
-    setEditingKey((prev) => (prev === key ? null : key))
-  }, [])
+    setEditingKey(editingKey === key ? null : key)
+  }, [editingKey, setEditingKey])
 
   const handleConfirm = useCallback(
     (oldSourceText: string, newSourceText: string) => {
       onDirectiveEdit?.(oldSourceText, newSourceText)
       setEditingKey(null)
     },
-    [onDirectiveEdit],
+    [onDirectiveEdit, setEditingKey],
   )
 
   const handleRefresh = useCallback(
@@ -53,7 +54,7 @@ export function DirectiveLineContent({
 
   const handleCancel = useCallback(() => {
     setEditingKey(null)
-  }, [])
+  }, [setEditingKey])
 
   // Build the edit row (if editing) and determine whether it's a view directive
   const editSegment = editingKey
@@ -90,7 +91,6 @@ export function DirectiveLineContent({
               result={segment.result}
               onClick={() => handleChipClick(segment.key)}
               onButtonClick={onButtonClick ? () => onButtonClick(segment.key) : undefined}
-              onEditDirective={() => handleChipClick(segment.key)}
             />
           )
         })}

@@ -75,7 +75,11 @@
 
   /* Directive view */
   --color-view-border: #B0BEC5;
-  --color-view-divider: #E0E0E0;
+  /* Dashed line drawn between consecutive embedded notes inside a single
+   * `[view find(...)]` directive — purple to visually separate them
+   * from the surrounding non-view content. Mirrors Android's
+   * `purple_200`. */
+  --color-view-divider: #BB86FC;
 
   /* Disabled surface */
   --color-disabled-bg: #E0E0E0;

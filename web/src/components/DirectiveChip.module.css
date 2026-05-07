@@ -21,6 +21,17 @@
   color: var(--color-success-text);
 }
 
+/* View directives — the resolved notes render as flat sibling rows
+ * below the chip, so the chip itself doesn't claim a "computed value"
+ * green background. The visible cue is the matching color on the chip
+ * border and on `.noteSection`'s left bar (set in
+ * ViewDirectiveRenderer.module.css). */
+.view {
+  background-color: transparent;
+  border-color: var(--color-view-border);
+  color: var(--color-view-border);
+}
+
 .error {
   background-color: var(--color-error-bg);
   border-color: var(--color-error);

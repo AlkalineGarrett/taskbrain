@@ -2,37 +2,32 @@ import { test, expect } from '@playwright/test'
 import { clearFirestore, gotoApp, seedMultiLineNote, unique, waitForNoteInStore } from './support'
 
 /**
- * Pin: in the main editor, the gutter column lands at the same horizontal
- * position regardless of which row type renders it. Renders all four row
- * types in a single editor view and asserts their gutter `left` is the
- * same pixel-for-pixel:
- *
- *   1. Top-level normal line          (`EditorLine` → `selectionGutter`)
- *   2. Top-level "(N completed)"      (`CompletedPlaceholderRow` → `placeholderGutter`)
- *   3. Embedded note normal line      (`EditorLine` inside `ViewNoteSection`)
- *   4. Embedded note "(N completed)"  (`CompletedPlaceholderRow` `view` variant)
- *
- * The four gutters are produced by three different code paths
- * (EditorLine main, EditorLine embedded, CompletedPlaceholderRow main,
- * CompletedPlaceholderRow embedded view variant), each with its own
- * column-positioning math. This test fails if any one drifts.
+ * Pin: every row in the editor — main lines, main placeholders, embedded
+ * view lines, embedded view placeholders — places its noteId, gutter,
+ * and content into the SAME column tracks of the editor's CSS Grid.
+ * After the flat-tree refactor that turned the embedded view from a
+ * negative-margin escape into flat siblings of the directive line in
+ * the editor grid, alignment is no longer "within each context" but
+ * "across all rows uniformly". The test fails if any of the three
+ * positioning paths (EditorLine subgrid placement, CompletedPlaceholder
+ * subgrid placement, ViewNoteSection's subgrid wrapper) drifts.
  */
 test.describe('RowAlignmentFlow', () => {
   test.beforeEach(async () => { await clearFirestore() })
 
-  test('all four row types share the same gutter column', async ({ page }) => {
+  test('all four row types share the editor grid column tracks', async ({ page }) => {
     await gotoApp(page)
 
     // Embedded note: one visible line + one checked line. The visible line
-    // gives us row type #3; the checked line collapses to row type #4 once
-    // the parent's "Show completed" is toggled off (parent's setting
-    // cascades to embedded notes via ParentShowCompletedContext).
+    // gives us a view-line; the checked line collapses to a view-
+    // placeholder once the parent's "Show completed" is off (the parent's
+    // setting cascades to embedded notes via ParentShowCompletedContext).
     const embeddedTag = unique('embedded-target')
     const embeddedChecked = unique('embedded-checked')
     await seedMultiLineNote(page, `${embeddedTag}\n☑ ${embeddedChecked}`)
 
-    // Parent note: title (#1), checked (becomes #2 placeholder), then a
-    // view directive that pulls in the embedded note inline.
+    // Parent note: title (main-line), checked (becomes main-placeholder),
+    // then a view directive that pulls in the embedded note inline.
     const parentTitle = unique('parent-title')
     const parentChecked = unique('parent-checked')
     const parentId = await seedMultiLineNote(
@@ -43,7 +38,6 @@ test.describe('RowAlignmentFlow', () => {
 
     await page.getByRole('button', { name: 'All notes' }).click()
     await page.getByRole('button', { name: parentTitle }).click()
-    // Wait for the embedded note to render inline before toggling.
     await expect(page.getByText(embeddedTag).first()).toBeVisible({ timeout: 10_000 })
 
     // Toggle "Show completed" off → both checked lines collapse to placeholders.
@@ -51,159 +45,118 @@ test.describe('RowAlignmentFlow', () => {
     await page.getByRole('button', { name: 'Show completed' }).click()
     await expect(page.getByText('(1 completed)').nth(1)).toBeVisible()
 
-    // Collect bounding rects for the four cell types of each row, tagged
-    // with whether the row lives at the top level of the editor or inside
-    // an embedded view, so we can assert intra-context alignment.
-    //
-    // CSS module class roots used here:
-    //   `selectionGutter`   / `selectionGutterHidden` — EditorLine
-    //   `placeholderGutter` / `placeholderGutterView` — CompletedPlaceholderRow
-    //   `noteIdCell`        / `noteIdCellView`        — both EditorLine and
-    //                                                    CompletedPlaceholderRow
-    //   `viewNoteIdCell`                              — ViewDirectiveRenderer
-    //                                                    (the embedded line's
-    //                                                    noteId column)
+    // Locate the four rows and measure where their gutter, noteId, and
+    // content cells land. CSS module classes used:
+    //   `selectionGutter`   — EditorLine's gutter cell
+    //   `placeholderGutter` — CompletedPlaceholderRow's gutter cell
+    //   `noteIdCell`        — both EditorLine + CompletedPlaceholderRow
+    //   `placeholder`       — CompletedPlaceholderRow's outer row
+    //                         (excluded sub-classes: `placeholderGutter`,
+    //                         `placeholderContent` legacy, etc.)
+    //   `[data-view-note-id]` ancestor — embedded vs. top-level
     const measurements = await page.evaluate(() => {
-      type Row = {
-        kind: 'main-line' | 'main-placeholder' | 'view-line' | 'view-placeholder'
-        gutterLeft: number
-        noteIdRight: number
-        contentLeft: number
-      }
+      type Kind = 'main-line' | 'main-placeholder' | 'view-line' | 'view-placeholder'
+      type Row = { kind: Kind; gutterLeft: number; noteIdRight: number; contentLeft: number }
       const rows: Row[] = []
-      const rect = (el: Element | null) =>
-        el ? (el as HTMLElement).getBoundingClientRect() : null
-      // Where the text actually begins inside a content cell. For
-      // EditorLine the inputWrapper / directiveContent is itself inside
-      // an inline-padded inner wrapper, so its rect.left is post-padding.
-      // For the placeholder, content holds the text directly with its
-      // own paddingLeft applied; compute the post-padding X so both
-      // measurements describe the same logical "text start".
+
+      const rect = (el: Element) => (el as HTMLElement).getBoundingClientRect()
+      // Where text actually starts inside a content cell, accounting for
+      // the cell's own paddingLeft (matters for the placeholder, whose
+      // text is a direct child rather than a nested wrapper).
       const textLeft = (el: Element) => {
-        const r = (el as HTMLElement).getBoundingClientRect()
+        const r = rect(el)
         const padLeft = parseFloat(getComputedStyle(el as HTMLElement).paddingLeft) || 0
         return r.left + padLeft
       }
+      // The noteSection wrapper is unique to ViewDirectiveRenderer's
+      // per-note container; any row inside one belongs to an embedded view.
+      const isInsideEmbeddedView = (el: Element) =>
+        el.closest('[class*="noteSection"]') != null
 
-      // Top-level main lines (EditorLine wrapped in `.editorRow`) — skip
-      // the directive row whose own gutter is `selectionGutterHidden`.
-      // Scope each lookup to direct children of `.line` so we don't reach
-      // into embedded-view descendants of the directive row.
-      for (const row of document.querySelectorAll('[data-line-index]')) {
-        const line = row.firstElementChild
+      // Main-editor lines and embedded view lines — both have an EditorLine
+      // `.line` whose direct children are noteIdCell, selectionGutter, and
+      // an inline-styled inner wrapper containing the content.
+      for (const wrapper of document.querySelectorAll('[data-line-index], [data-view-line-index]')) {
+        const line = wrapper.firstElementChild
         if (!line) continue
         const gutter = Array.from(line.children).find(
-          (c) => /selectionGutter/.test(c.className) && !/selectionGutterHidden/.test(c.className),
+          (c) => /selectionGutter/.test(c.className),
         )
-        if (!gutter) continue
         const noteId = Array.from(line.children).find((c) => /noteIdCell/.test(c.className))
-        // The content cell is the inline-styled inner wrapper (no class), which
-        // contains either an inputWrapper or a directiveContent.
+        // The inner wrapper is the only child without one of those classes.
         const inner = Array.from(line.children).find(
           (c) => !/noteIdCell/.test(c.className) && !/selectionGutter/.test(c.className),
         )
         const content = inner?.querySelector('[class*="inputWrapper"], [class*="directiveContent"]')
+        if (!gutter || !noteId || !content) continue
+        const embedded = isInsideEmbeddedView(wrapper)
+        rows.push({
+          kind: embedded ? 'view-line' : 'main-line',
+          gutterLeft: rect(gutter).left,
+          noteIdRight: rect(noteId).right,
+          contentLeft: textLeft(content),
+        })
+      }
+
+      // Placeholders. `.placeholder` matches every CompletedPlaceholderRow,
+      // including its descendant cells (`.placeholderGutter` etc.) — narrow
+      // to the outer row by also requiring `[class*="grid"]` is too brittle;
+      // instead find children with the gutter class and bubble up.
+      for (const ph of document.querySelectorAll('[class*="placeholderGutter"]')) {
+        const row = ph.parentElement
+        if (!row) continue
+        const noteId = row.querySelector(':scope > [class*="noteIdCell"]')
+        const content = row.querySelector(':scope > [class*="content"]')
         if (!noteId || !content) continue
+        const embedded = isInsideEmbeddedView(row)
         rows.push({
-          kind: 'main-line',
-          gutterLeft: rect(gutter)!.left,
-          noteIdRight: rect(noteId)!.right,
+          kind: embedded ? 'view-placeholder' : 'main-placeholder',
+          gutterLeft: rect(ph).left,
+          noteIdRight: rect(noteId).right,
           contentLeft: textLeft(content),
         })
       }
 
-      // Top-level placeholders (`.placeholder`, not `.placeholderView`).
-      for (const row of document.querySelectorAll(
-        '[class*="placeholder"]:not([class*="placeholderView"]):not([class*="placeholderGutter"]):not([class*="placeholderContent"])',
-      )) {
-        const gutter = row.querySelector('[class*="placeholderGutter"]')
-        const noteId = row.querySelector('[class*="noteIdCell"]')
-        const content = row.querySelector(`[class*="content"]:not([class*="placeholderContent"])`)
-        if (!gutter || !noteId || !content) continue
-        rows.push({
-          kind: 'main-placeholder',
-          gutterLeft: rect(gutter)!.left,
-          noteIdRight: rect(noteId)!.right,
-          contentLeft: textLeft(content),
-        })
-      }
-
-      // Embedded view lines (`viewLineRow`).
-      for (const row of document.querySelectorAll('[data-view-line-index]')) {
-        const gutter = row.querySelector(
-          '[class*="selectionGutter"]:not([class*="selectionGutterHidden"])',
-        )
-        const noteId = row.querySelector('[class*="viewNoteIdCell"]')
-        const content = row.querySelector('[class*="inputWrapper"], [class*="directiveContent"]')
-        if (!gutter || !noteId || !content) continue
-        rows.push({
-          kind: 'view-line',
-          gutterLeft: rect(gutter)!.left,
-          noteIdRight: rect(noteId)!.right,
-          contentLeft: textLeft(content),
-        })
-      }
-
-      // Embedded view placeholders (`.placeholderView`).
-      for (const row of document.querySelectorAll('[class*="placeholderView"]')) {
-        const gutter = row.querySelector('[class*="placeholderGutter"]')
-        const noteId = row.querySelector('[class*="noteIdCell"]')
-        const content = row.querySelector(`[class*="content"]:not([class*="placeholderContent"])`)
-        if (!gutter || !noteId || !content) continue
-        rows.push({
-          kind: 'view-placeholder',
-          gutterLeft: rect(gutter)!.left,
-          noteIdRight: rect(noteId)!.right,
-          contentLeft: textLeft(content),
-        })
-      }
       return rows
     })
 
-    // One row of each kind is expected.
-    expect(measurements.map((m) => m.kind).sort(), JSON.stringify(measurements, null, 2))
-      .toEqual(['main-line', 'main-placeholder', 'view-line', 'view-placeholder'])
-
-    // ── 1. Gutters: all four rows must align horizontally. ─────────────
-    const gutterRef = measurements[0].gutterLeft
-    for (const m of measurements) {
-      expect(
-        Math.abs(m.gutterLeft - gutterRef),
-        `${m.kind} gutter drifted ${m.gutterLeft - gutterRef}px (all=${JSON.stringify(measurements)})`,
-      ).toBeLessThan(1)
+    // The seeded note produces the directive line as a second main-line
+    // (its selectionGutter is just a normal gutter now — there's no
+    // longer a "hide the gutter when an embedded view shadows it" trick).
+    // Expect all four kinds present, and at least one of each.
+    const kinds = new Set(measurements.map((m) => m.kind))
+    for (const k of ['main-line', 'main-placeholder', 'view-line', 'view-placeholder'] as const) {
+      expect(kinds.has(k), `missing ${k} (got ${JSON.stringify(measurements, null, 2)})`).toBe(true)
     }
 
-    // ── 2. NoteId right-edges: align within each context. ──────────────
-    // (Top-level vs embedded differ by `--view-border-inset` because the
-    // embedded view sits inside `viewContainer`'s 7px border+padding;
-    // that's a designed offset, not a bug. We only assert intra-context.)
-    const mainNoteIdRight = measurements.find((m) => m.kind === 'main-line')!.noteIdRight
-    const mainPhNoteIdRight = measurements.find((m) => m.kind === 'main-placeholder')!.noteIdRight
-    expect(
-      Math.abs(mainPhNoteIdRight - mainNoteIdRight),
-      `main-placeholder noteId drifted ${mainPhNoteIdRight - mainNoteIdRight}px from main-line noteId`,
-    ).toBeLessThan(1)
+    // After the flat-tree refactor, all rows are direct grid items
+    // (or subgrid descendants) of the editor's column template:
+    // gutters and noteIds align across all four kinds. Content
+    // alignment differs by `--embedded-content-inset` (the gap that
+    // makes room for the embedded view's vertical bar inside the
+    // [content] column), so we only assert intra-context content
+    // alignment — top-level pair vs. embedded pair.
+    const checkAlignedAll = (key: 'gutterLeft' | 'noteIdRight', label: string) => {
+      const ref = measurements[0][key]
+      for (const m of measurements) {
+        expect(
+          Math.abs(m[key] - ref),
+          `${m.kind} ${label} drifted ${m[key] - ref}px (all=${JSON.stringify(measurements)})`,
+        ).toBeLessThan(1)
+      }
+    }
+    checkAlignedAll('gutterLeft', 'gutter')
+    checkAlignedAll('noteIdRight', 'noteId right edge')
 
-    const viewNoteIdRight = measurements.find((m) => m.kind === 'view-line')!.noteIdRight
-    const viewPhNoteIdRight = measurements.find((m) => m.kind === 'view-placeholder')!.noteIdRight
-    expect(
-      Math.abs(viewPhNoteIdRight - viewNoteIdRight),
-      `view-placeholder noteId drifted ${viewPhNoteIdRight - viewNoteIdRight}px from view-line noteId`,
-    ).toBeLessThan(1)
-
-    // ── 3. Content left-edges: align within each context. ──────────────
-    const mainContent = measurements.find((m) => m.kind === 'main-line')!.contentLeft
-    const mainPhContent = measurements.find((m) => m.kind === 'main-placeholder')!.contentLeft
-    expect(
-      Math.abs(mainPhContent - mainContent),
-      `main-placeholder content drifted ${mainPhContent - mainContent}px from main-line content`,
-    ).toBeLessThan(1)
-
-    const viewContent = measurements.find((m) => m.kind === 'view-line')!.contentLeft
-    const viewPhContent = measurements.find((m) => m.kind === 'view-placeholder')!.contentLeft
-    expect(
-      Math.abs(viewPhContent - viewContent),
-      `view-placeholder content drifted ${viewPhContent - viewContent}px from view-line content`,
-    ).toBeLessThan(1)
+    const checkContentPair = (a: typeof measurements[number]['kind'], b: typeof measurements[number]['kind']) => {
+      const x = measurements.find((m) => m.kind === a)!.contentLeft
+      const y = measurements.find((m) => m.kind === b)!.contentLeft
+      expect(
+        Math.abs(x - y),
+        `${a} content drifted ${y - x}px from ${b} content (all=${JSON.stringify(measurements)})`,
+      ).toBeLessThan(1)
+    }
+    checkContentPair('main-line', 'main-placeholder')
+    checkContentPair('view-line', 'view-placeholder')
   })
 })

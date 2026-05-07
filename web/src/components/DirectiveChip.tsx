@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react'
 import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
 import { directiveResultToDisplayString, directiveResultToValue, isComputed } from '@/dsl/directives/DirectiveResult'
-import { ViewDirectiveRenderer } from './ViewDirectiveRenderer'
+import { EMPTY_VIEW } from '@/strings'
 import styles from './DirectiveChip.module.css'
 
 interface DirectiveChipProps {
@@ -9,8 +9,6 @@ interface DirectiveChipProps {
   result: DirectiveResult | null
   onClick?: () => void
   onButtonClick?: () => void
-  /** Called when the gear icon on a view directive is clicked */
-  onEditDirective?: () => void
 }
 
 export function DirectiveChip({
@@ -18,7 +16,6 @@ export function DirectiveChip({
   result,
   onClick,
   onButtonClick,
-  onEditDirective,
 }: DirectiveChipProps) {
   const [buttonState, setButtonState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
 
@@ -26,9 +23,13 @@ export function DirectiveChip({
   const isButton = value?.kind === 'ButtonVal'
   const isView = value?.kind === 'ViewVal'
 
-  const displayText = result
-    ? directiveResultToDisplayString(result)
-    : sourceText
+  // View directives render their resolved notes as flat sibling rows
+  // BELOW the directive line, so the chip itself shouldn't duplicate
+  // that content — show just the directive source text. Other
+  // directives still show their computed display value.
+  const displayText = isView
+    ? sourceText
+    : result ? directiveResultToDisplayString(result) : sourceText
 
   const chipClass = (() => {
     if (isButton) {
@@ -39,6 +40,7 @@ export function DirectiveChip({
     }
     if (result?.error) return `${styles.chip} ${styles.error}`
     if (result?.warning) return `${styles.chip} ${styles.warning}`
+    if (isView) return `${styles.chip} ${styles.view}`
     if (result && isComputed(result)) return `${styles.chip} ${styles.computed}`
     return `${styles.chip} ${styles.pending}`
   })()
@@ -63,13 +65,20 @@ export function DirectiveChip({
     return <span>⏰</span>
   }
 
-  if (isView && value?.kind === 'ViewVal') {
-    return (
-      <ViewDirectiveRenderer
-        viewVal={value}
-        onEditDirective={onEditDirective}
-      />
-    )
+  // View directives — when there are matched notes, the chip shows
+  // nothing on the directive line because the resolved notes render
+  // as flat sibling rows below. When the view is empty, fall back to
+  // a small "(Empty view)" chip so the line isn't completely silent
+  // and the user has something to click to open the edit row.
+  if (isView && value.kind === 'ViewVal') {
+    if (value.notes.length === 0) {
+      return (
+        <span className={chipClass} onClick={handleClick} title={sourceText}>
+          {EMPTY_VIEW}
+        </span>
+      )
+    }
+    return null
   }
 
   return (

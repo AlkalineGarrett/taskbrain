@@ -3,8 +3,7 @@ import type { EditorController } from '@/editor/EditorController'
 import type { EditorState } from '@/editor/EditorState'
 import type { DirectiveResult } from '@/dsl/directives/DirectiveResult'
 import { hasCheckbox } from '@/editor/LinePrefixes'
-import { hasDirectives, segmentLine, isViewSegment } from '@/dsl/directives/DirectiveSegmenter'
-import { directiveResultToValue } from '@/dsl/directives/DirectiveResult'
+import { hasDirectives } from '@/dsl/directives/DirectiveSegmenter'
 import { DirectiveLineContent } from './DirectiveLineContent'
 import { computeFocusHighlight } from '@/editor/FocusHighlight'
 import { useSelectionRects } from '@/hooks/useSelectionRects'
@@ -25,10 +24,6 @@ interface EditorLineProps {
   onGutterDragStart?: (lineIndex: number, clientY?: number) => void
   onGutterDragUpdate?: (lineIndex: number, clientY?: number) => void
   onMoveStart?: () => void
-  /** Hide noteIdCell (used for lines inside view directives that render their own noteId column). */
-  hideNoteId?: boolean
-  /** Hide selectionGutter (used for lines inside view directives that render their own gutter). */
-  hideGutter?: boolean
   /** When false, the focus effect won't call focus() on the textarea. Used by embedded
    *  editors (views) to prevent stealing focus when the view session isn't active. */
   allowAutoFocus?: boolean
@@ -50,8 +45,6 @@ export function EditorLine({
   onGutterDragStart,
   onGutterDragUpdate,
   onMoveStart,
-  hideNoteId,
-  hideGutter,
   allowAutoFocus,
   showFocusHighlight: showFocusHighlightProp,
 }: EditorLineProps) {
@@ -164,41 +157,26 @@ export function EditorLine({
   )
 
   const lineHasDirectives = directiveResults && hasDirectives(content)
-  const viewSegment = lineHasDirectives ? segmentLine(content, line.effectiveId, directiveResults, line.noteIds[0]).find(
-    (s) => s.kind === 'Directive' && isViewSegment(s),
-  ) : undefined
-  const hasViewDirective = viewSegment != null
-  // Only hide the parent gutter when the view has content (its own gutter replaces it).
-  const viewNotes = hasViewDirective && viewSegment.kind === 'Directive' && viewSegment.result
-    ? (directiveResultToValue(viewSegment.result) as { notes: unknown[] } | null)?.notes : undefined
-  const hasNonEmptyView = (viewNotes?.length ?? 0) > 0
-
-  const showDirectiveChips = lineHasDirectives && (!isFocused || hasViewDirective)
+  const showDirectiveChips = lineHasDirectives && !isFocused
 
   const noteIdText = line.noteIds.join(', ')
 
-  // Embedded EditorLines (inside a view directive's `.viewLineContent`)
-  // are flex items, not grid items; use the flex variant so subgrid
-  // doesn't fall back unpredictably without a grid parent.
-  const isEmbedded = hideNoteId === true
-  const lineClass = isEmbedded ? styles.lineEmbedded : styles.line
-
   return (
-    <div className={`${lineClass} ${isFocused ? styles.focused : ''}`}>
-      {!hideNoteId && !hideGutter && <div className={`${styles.noteIdCell}${hasNonEmptyView ? ` ${styles.noteIdCellNarrow}` : ''}`}>{noteIdText || '\u00A0'}</div>}
-      {!hideGutter && <div
-        className={`${styles.selectionGutter}${isLineSelected ? ` ${styles.selected}` : ''}${hasNonEmptyView ? ` ${styles.selectionGutterHidden}` : ''}`}
+    <div className={`${styles.line} ${isFocused ? styles.focused : ''}`}>
+      <div className={styles.noteIdCell}>{noteIdText || '\u00A0'}</div>
+      <div
+        className={`${styles.selectionGutter}${isLineSelected ? ` ${styles.selected}` : ''}`}
         onMouseDown={handleGutterMouseDown}
         onMouseEnter={handleGutterMouseEnter}
-      />}
-      <div style={{ gridColumn: 'content', paddingLeft: `calc(${0.25 + indentLevel * 0.6}rem + var(--view-border-inset, 0px))`, display: 'flex', flex: 1, minWidth: 0, ['--view-gutter-offset' as string]: `calc(${0.25 + indentLevel * 0.6}rem + 7px)` }}>
+      />
+      <div style={{ gridColumn: 'content', paddingLeft: `calc(${0.25 + indentLevel * 0.6}rem + var(--embedded-content-inset, 0px))`, display: 'flex', flex: 1, minWidth: 0 }}>
       {displayPrefix ? (
         <div className={styles.gutter} onClick={handleGutterClick}>
           <span className={styles.prefix}>{displayPrefix}</span>
         </div>
       ) : null}
       {showDirectiveChips ? (
-        <div ref={directiveContentRef} className={`${styles.directiveContent}${hasContentSelection ? ` ${styles.grabbable}` : ''}`} data-directive-content onMouseDown={hasNonEmptyView ? undefined : handleMouseDown} onContextMenu={hasNonEmptyView ? undefined : handleContextMenu}>
+        <div ref={directiveContentRef} className={`${styles.directiveContent}${hasContentSelection ? ` ${styles.grabbable}` : ''}`} data-directive-content onMouseDown={handleMouseDown} onContextMenu={handleContextMenu}>
           {selectionRects.length > 0 && (
             <div className={styles.highlightLayer} aria-hidden>
               {selectionRects.map((r, i) => (

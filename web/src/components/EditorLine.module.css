@@ -1,23 +1,13 @@
-/* Each main-editor EditorLine is a subgrid row of the editor's column
- * template (defined on `.editor` in NoteEditorScreen.module.css). The
- * cells — noteIdCell, selectionGutter, contentWrapper — place themselves
- * into the [note-id], [gutter], [content] columns by name. No widths or
- * negative margins live here. */
+/* Subgrid row that aligns with the editor's column template (defined on
+ * `.editor` in NoteEditorScreen.module.css). Same column model used by
+ * `.placeholder` in CompletedPlaceholderRow and the embedded-view rows
+ * (which sit inside `.noteSection` from ViewDirectiveRenderer, also a
+ * subgrid). All rows snap to the same [note-id]/[gutter]/[content]/
+ * [right-margin] tracks. */
 .line {
   display: grid;
   grid-template-columns: subgrid;
   grid-column: 1 / -1;
-  align-items: stretch;
-  min-height: 1.5rem;
-}
-
-/* Embedded EditorLine (rendered inside `.viewLineContent`, which is a
- * flex item, not a grid item). Subgrid would have no parent grid to
- * inherit from, so fall back to flex; the embedded line has no
- * noteIdCell/selectionGutter (hidden via `hideNoteId`/`hideGutter`),
- * so the only child is the inner wrapper, which fills the flex row. */
-.lineEmbedded {
-  display: flex;
   align-items: stretch;
   min-height: 1.5rem;
 }
@@ -31,7 +21,6 @@
   width: calc(50vw - 400px + var(--note-id-col));
   min-width: 0;
   margin-left: calc(-50vw + 400px);
-  flex-shrink: 0;
   font-family: monospace;
   font-size: 0.6875rem;
   line-height: 1.5rem;
@@ -45,20 +34,8 @@
   overflow: hidden;
 }
 
-/* On view directive lines, pad the noteId text right so it ends before
-   the embedded noteId column. */
-.noteIdCellNarrow {
-  padding-right: calc(var(--note-id-col) + 0.375rem);
-}
-
 .selectionGutter {
   grid-column: gutter;
-  /* Width + flex-shrink for the embedded case where `.line`'s parent is
-   * `.viewLineContent` (flex item, no grid context). In the main editor
-   * the [gutter] grid track sizes this; the explicit values are belt
-   * and suspenders that match the track. */
-  width: var(--gutter-col);
-  flex-shrink: 0;
   background: var(--color-gutter-bg);
   border-bottom: 1px solid var(--color-gutter-border);
   border-right: 1px solid var(--color-border);
@@ -68,12 +45,6 @@
 
 .selectionGutter.selected {
   background: var(--color-gutter-selected);
-}
-
-/* Hide the single gutter block for lines with view directives —
-   per-line gutter cells are rendered by the view instead. */
-.selectionGutterHidden {
-  visibility: hidden;
 }
 
 .gutter {
