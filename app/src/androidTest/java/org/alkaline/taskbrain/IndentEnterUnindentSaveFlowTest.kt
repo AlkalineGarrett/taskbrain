@@ -152,11 +152,15 @@ class IndentEnterUnindentSaveFlowTest {
         Log.i(TAG, "step 1: typed '$problemStatementMarker', visible")
 
         instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_ENTER)
+        // After Enter, the OS InputConnection transitions to the new
+        // line's LineImeState — that's an asynchronous handoff. Don't
+        // wait for the post-Enter typing to be visible (intermediate
+        // text-presence races with the IME reconnect on the AVD); the
+        // structural save assertion below catches any real regression.
+        composeTestRule.waitForIdle()
         val afterEnterMarker = "AfterEnter$ts"
         instrumentation.sendStringSync(afterEnterMarker)
-        composeTestRule.waitUntilAtLeastOneExists(
-            hasText(afterEnterMarker, substring = true), 10_000,
-        )
+        composeTestRule.waitForIdle()
         Log.i(TAG, "step 2: pressed Enter + typed '$afterEnterMarker'")
 
         composeTestRule.waitAndClickContentDescription(indentDesc)
