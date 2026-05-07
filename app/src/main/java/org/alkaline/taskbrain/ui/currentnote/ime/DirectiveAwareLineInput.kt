@@ -61,6 +61,7 @@ import org.alkaline.taskbrain.ui.currentnote.util.hasVisibleBadges
 @Composable
 internal fun DirectiveAwareLineInput(
     lineIndex: Int,
+    lineId: String,
     content: String,
     contentCursor: Int,
     controller: EditorController,
@@ -91,8 +92,11 @@ internal fun DirectiveAwareLineInput(
     val buttonErrors = buttonCallbacks.errors
 
     val hostView = LocalView.current
-    val imeState = remember(lineIndex, controller) {
-        LineImeState(lineIndex, controller)
+    // Key on lineId so the LineImeState survives structural mutations
+    // that shift line indices but preserve the underlying LineState
+    // (split, merge, indent, reorder).
+    val imeState = remember(lineId, controller) {
+        LineImeState(lineId, controller)
     }
 
     LaunchedEffect(content, contentCursor) {

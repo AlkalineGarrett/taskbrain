@@ -51,7 +51,7 @@ import kotlinx.coroutines.launch
  */
 @Composable
 internal fun LineTextInput(
-    lineIndex: Int,
+    lineId: String,
     content: String,
     contentCursor: Int,
     controller: EditorController,
@@ -64,8 +64,14 @@ internal fun LineTextInput(
     modifier: Modifier = Modifier
 ) {
     val hostView = LocalView.current
-    val imeState = remember(lineIndex, controller) {
-        LineImeState(lineIndex, controller)
+    // Keying remember on lineId (not lineIndex) gives the same
+    // LineImeState instance across structural mutations that shift
+    // line indices but preserve the underlying LineState — split,
+    // merge, indent, reorder. Without this, re-keying on lineIndex
+    // would tear down and recreate IME state on every neighbor edit
+    // (which orphans the OS InputConnection).
+    val imeState = remember(lineId, controller) {
+        LineImeState(lineId, controller)
     }
 
     LaunchedEffect(content, contentCursor) {

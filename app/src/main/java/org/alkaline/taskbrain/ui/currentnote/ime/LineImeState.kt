@@ -119,10 +119,25 @@ internal data class BufferSnapshot(
  * 3. After syncBufferToController: buffer matches controller
  * 4. After sendImeNotification: lastNotified* values match buffer
  */
+/**
+ * Per-line IME state. Bound to a stable [lineId] (the line's
+ * [LineState.tempId]) rather than a `lineIndex`, because structural
+ * mutations — split, merge, reorder, paste, indent — shift line indices
+ * around, while the LineState instance (and its tempId) survives them.
+ *
+ * If the line is removed entirely (e.g., merged into a sibling), every
+ * IME operation becomes a no-op: [resolvedIndex] returns null and the
+ * controller is never called. The OS-level InputConnection is torn down
+ * separately by Compose's focus tracking.
+ */
 class LineImeState(
-    private val lineIndex: Int,
+    private val lineId: String,
     private val controller: EditorController
 ) {
+    /** Resolve [lineId] to its current line index, or null if removed. */
+    private val lineIndex: Int get() = controller.indexOf(lineId) ?: -1
+
+    private val isLineAlive: Boolean get() = controller.indexOf(lineId) != null
     // Composing region - exposed for external access
     var composingStart by mutableIntStateOf(-1)
         private set

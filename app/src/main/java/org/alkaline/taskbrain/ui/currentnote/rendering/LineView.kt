@@ -198,6 +198,7 @@ internal fun ControlledLineView(
 
             DirectiveAwareLineInput(
                 lineIndex = lineIndex,
+                lineId = lineState.tempId,
                 content = content,
                 contentCursor = contentCursorPosition,
                 controller = controller,

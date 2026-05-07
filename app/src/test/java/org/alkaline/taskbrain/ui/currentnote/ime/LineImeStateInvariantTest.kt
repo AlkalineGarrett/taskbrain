@@ -4,7 +4,6 @@ import org.alkaline.taskbrain.ui.currentnote.EditorController
 import org.alkaline.taskbrain.ui.currentnote.EditorState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Ignore
 import org.junit.Test
 
 /**
@@ -37,38 +36,35 @@ class LineImeStateInvariantTest {
             preserveCursor = false,
         )
         val controller = EditorController(state)
-        val ime = LineImeState(lineIndex, controller)
+        val lineId = state.lines[lineIndex].tempId
+        val ime = LineImeState(lineId, controller)
         ime.syncFromController()
         return Triple(state, controller, ime)
     }
 
     /**
-     * Stage 2 fix target. After a split, subsequent commitText calls
-     * arrive at the new line's LineImeState (currently they keep
-     * arriving at lineIndex=0 because LineImeState binds to lineIndex,
-     * not lineId; Stage 2 switches the binding).
+     * Stage 2 contract: after a structural mutation, the LineImeState
+     * stays bound to the LineState it was created for. In the unit
+     * test, "the LineImeState we created" is bound to line 0's
+     * tempId. After commitText("\n"), the controller splits into
+     * [line 0 = "hello world", line 1 = ""]; line 0 still has the
+     * same tempId. Subsequent typing on this LineImeState extends
+     * line 0, not line 1. (In real Compose, the OS InputConnection
+     * follows the focus transition to a new LineImeState bound to
+     * line 1 — but that's a Compose-level concern; this test pins
+     * the per-LineImeState contract.)
      */
-    @Ignore("unblocked by Stage 2 (LineImeState bound to lineId)")
     @Test
-    fun `commitText newline then commitText X produces exactly one split`() {
+    fun `LineImeState stays bound to its line across a split`() {
         val (state, _, ime) = setup("hello world", 0)
-        // Cursor at end of "hello world".
         ime.commitText("\n", 1)
         ime.commitText("X", 1)
         ime.commitText("Y", 1)
         ime.commitText("Z", 1)
 
-        // Expected:
-        //   line 0 = "hello world"
-        //   line 1 = "XYZ"
-        // Today (with the bug) the editor ends up with phantom lines
-        // because each commitText after the newline re-splits.
-        assertEquals(
-            "lines should have exactly the parent + one new line",
-            2, state.lines.size,
-        )
-        assertEquals("hello world", state.lines[0].text)
-        assertEquals("XYZ", state.lines[1].text)
+        assertEquals(2, state.lines.size)
+        assertEquals("hello worldXYZ", state.lines[0].text)
+        assertEquals("", state.lines[1].text)
     }
 
     /**

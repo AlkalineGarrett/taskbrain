@@ -1268,6 +1268,21 @@ class EditorController(
      * Check if a line index is valid.
      */
     fun isValidLine(lineIndex: Int): Boolean = lineIndex in state.lines.indices
+
+    /**
+     * Resolve a line's stable identity to its current lineIndex.
+     *
+     * Used by IME state ([LineImeState]) which binds to a stable id —
+     * not a lineIndex — because structural mutations (split / merge /
+     * reorder / paste) shift indices around. The id is the line's
+     * [LineState.tempId] (stable for the lifetime of the LineState
+     * instance). Returns null when the line has been removed; callers
+     * should treat this as a no-op rather than an error.
+     */
+    fun indexOf(lineId: String): Int? {
+        val idx = state.lines.indexOfFirst { it.tempId == lineId }
+        return if (idx >= 0) idx else null
+    }
 }
 
 /**
