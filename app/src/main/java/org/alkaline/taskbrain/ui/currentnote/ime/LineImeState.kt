@@ -261,8 +261,29 @@ class LineImeState(
         }
     }
 
+    /**
+     * Sync the buffer's edits down to the controller, then pull the
+     * controller's line content back up into the buffer. The pull-back
+     * is required because [EditorController.updateLineContent] may
+     * split, merge, or rewrite the line at [lineIndex] — without it,
+     * the buffer can hold stale text (e.g., a `\n` the controller
+     * already consumed via splitLineOnNewline). On the next IME call
+     * that stale content gets resent, triggering the same controller
+     * mutation again — phantom lines per character.
+     *
+     * **Invariant:** after this returns, `buffer.text ==
+     * controller.getLineContent(lineIndex)` and `buffer.cursor` is
+     * within the buffer's range. The composing region is preserved
+     * when the controller's content is unchanged; otherwise it's
+     * cleared (a structural mutation invalidates positions anyway).
+     */
     private fun syncBufferToController() {
         controller.updateLineContent(lineIndex, buffer.text, buffer.cursor)
+        val freshContent = controller.getLineContent(lineIndex)
+        val freshCursor = controller.getContentCursor(lineIndex)
+        if (buffer.text != freshContent || buffer.cursor != freshCursor) {
+            buffer.reset(freshContent, freshCursor)
+        }
         updateExposedComposition()
     }
 
