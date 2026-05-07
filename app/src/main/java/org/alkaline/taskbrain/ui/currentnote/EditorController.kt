@@ -1283,6 +1283,154 @@ class EditorController(
         val idx = state.lines.indexOfFirst { it.tempId == lineId }
         return if (idx >= 0) idx else null
     }
+
+    // =========================================================================
+    // Operation-based mutation API (Stage 3)
+    //
+    // Earlier IME wiring sent the controller a full new content string per
+    // keystroke; the controller had to *infer* the user's intent from a diff
+    // (e.g., "this string contains a \n, must be a split"). That inference
+    // was the sentinel-storm bug surface — a stale buffer reused a `\n` the
+    // controller had already consumed.
+    //
+    // The new API takes operations directly. Intent is explicit:
+    //   - replaceRange — replace a range within a content string. If the
+    //     replacement contains \n, split across the lines.
+    //   - deleteAroundCursor — delete N chars before / M chars after the
+    //     cursor on a line; may merge with neighbors when crossing edges.
+    //   - setCursorByLineId / setComposingRange — cursor / IME composition
+    //     on a stable line identity.
+    //
+    // All ops take a lineId (the line's tempId). They no-op when the line
+    // is gone (the LineImeState may outlive its line through a frame; this
+    // keeps the API safe to call without external guarding). Cursor return
+    // values use [CursorPos] — lineId + offset — so the caller can react
+    // to splits that move the cursor onto a freshly-allocated line.
+    // =========================================================================
+
+    /**
+     * Cursor position pinned to a stable line identity. Returned by ops
+     * that may move the cursor onto a different line (e.g., a split or a
+     * cross-boundary delete).
+     */
+    data class CursorPos(val lineId: String, val contentOffset: Int)
+
+    /**
+     * Replace [range] within the content (post-prefix) of the line
+     * identified by [lineId] with [text].
+     *
+     * If [text] contains `\n`s, the line is split — each `\n` produces a
+     * new line. The cursor lands at the end of the inserted text, which
+     * is on the post-final-newline line when newlines were inserted.
+     * Returns [CursorPos] for the cursor's home; null if [lineId] is gone.
+     */
+    fun replaceRange(lineId: String, range: IntRange, text: String): CursorPos? {
+        val lineIndex = indexOf(lineId) ?: return null
+        val line = state.lines.getOrNull(lineIndex) ?: return null
+        val content = line.content
+        val start = range.first.coerceIn(0, content.length)
+        val end = (range.last + 1).coerceIn(start, content.length)
+        if (!text.contains('\n')) {
+            val newContent = content.substring(0, start) + text + content.substring(end)
+            val cursorOffsetInNewContent = start + text.length
+            updateLineContent(lineIndex, newContent, cursorOffsetInNewContent)
+            return CursorPos(lineId, cursorOffsetInNewContent)
+        }
+        // Multi-line replacement: split the line at [start..end], then
+        // insert each `\n`-separated chunk as its own line, with the
+        // first chunk merged onto the original line's prefix portion
+        // and the last chunk prepended to the original line's suffix.
+        val replacementLines = text.split('\n')
+        val prefixHalf = content.substring(0, start)
+        val suffixHalf = content.substring(end)
+        // First newline split: prefixHalf + first chunk on the original
+        // line, last chunk + suffixHalf on the new line. Subsequent
+        // newlines fold into the (now-focused) new line iteratively.
+        val firstChunkContent = prefixHalf + replacementLines.first()
+        val tailContent = replacementLines.drop(1).joinToString("\n") + suffixHalf
+        updateLineContent(lineIndex, firstChunkContent + "\n" + tailContent, firstChunkContent.length + 1)
+        // After the first split, the focused line holds tailContent.
+        // If tailContent still contains `\n`, recurse on the focused line
+        // until no newlines remain.
+        var currentIdx = state.focusedLineIndex
+        while (true) {
+            val l = state.lines.getOrNull(currentIdx) ?: break
+            if (!l.content.contains('\n')) break
+            val nl = l.content.indexOf('\n')
+            updateLineContent(currentIdx, l.content, nl + 1)
+            currentIdx = state.focusedLineIndex
+        }
+        val focusedLine = state.lines.getOrNull(state.focusedLineIndex) ?: return null
+        return CursorPos(
+            lineId = focusedLine.tempId,
+            contentOffset = focusedLine.contentCursorPosition,
+        )
+    }
+
+    /**
+     * Delete [before] characters left of the cursor and [after]
+     * characters right of the cursor on the line identified by [lineId].
+     * Crossing a line boundary triggers a merge with the previous /
+     * next line, in which case the cursor lands on the surviving line.
+     * Returns [CursorPos] for the cursor's new home; null if [lineId]
+     * is gone.
+     */
+    fun deleteAroundCursor(lineId: String, before: Int, after: Int): CursorPos? {
+        val lineIndex = indexOf(lineId) ?: return null
+        val line = state.lines.getOrNull(lineIndex) ?: return null
+        val cursor = line.contentCursorPosition
+
+        if (before > 0 && cursor == 0) {
+            // Cross-boundary backspace: merge with previous line.
+            deleteBackward(lineIndex)
+            val newIdx = state.focusedLineIndex
+            val newLine = state.lines.getOrNull(newIdx) ?: return null
+            return CursorPos(newLine.tempId, newLine.contentCursorPosition)
+        }
+        if (after > 0 && cursor >= line.content.length) {
+            deleteForward(lineIndex)
+            val newIdx = state.focusedLineIndex
+            val newLine = state.lines.getOrNull(newIdx) ?: return null
+            return CursorPos(newLine.tempId, newLine.contentCursorPosition)
+        }
+
+        val deleteStart = (cursor - before).coerceAtLeast(0)
+        val deleteEnd = (cursor + after).coerceAtMost(line.content.length)
+        if (deleteStart >= deleteEnd) {
+            return CursorPos(lineId, cursor)
+        }
+        val newContent = line.content.substring(0, deleteStart) +
+            line.content.substring(deleteEnd)
+        updateLineContent(lineIndex, newContent, deleteStart)
+        return CursorPos(lineId, deleteStart)
+    }
+
+    /**
+     * Set the cursor on the line identified by [lineId] to
+     * [contentOffset] (offset within the line's content, post-prefix).
+     * No-op if the line is gone.
+     */
+    fun setCursorByLineId(lineId: String, contentOffset: Int): CursorPos? {
+        val lineIndex = indexOf(lineId) ?: return null
+        setContentCursor(lineIndex, contentOffset)
+        return CursorPos(lineId, contentOffset)
+    }
+
+    /**
+     * Set or clear the IME composing range on the line identified by
+     * [lineId]. The range is in content (post-prefix) offsets. Pass
+     * null to clear. No-op on a missing line.
+     *
+     * Composing state is metadata for the IME's underlining; it has no
+     * effect on the line's text. Currently a stub — composing state
+     * still lives on [EditingBuffer] in [LineImeState]. Stage 5 lifts
+     * it onto [LineState] so this method becomes the canonical setter.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun setComposingRange(lineId: String, range: IntRange?) {
+        // Intentional no-op until Stage 5. Buffer-side composing state
+        // remains the source of truth for now.
+    }
 }
 
 /**
