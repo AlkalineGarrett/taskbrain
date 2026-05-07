@@ -57,19 +57,24 @@
   position: relative;
 }
 
-/* Pull the entire row left so the embedded gutter aligns with the main gutter.
-   Offset = noteId cell (10rem) + main gutter width (1.25rem) + 2x --view-gutter-offset.
-   The second --view-gutter-offset compensates for viewLineContent's padding-left
-   which pushes the gutter right. */
+/* Pull the entire row left so the embedded gutter aligns with the
+ * parent's gutter column. The 2 * --view-gutter-offset term: one for
+ * the parent EditorLine's inner-wrapper indent (which pushed the view
+ * right when entering it), one for `.viewLineContent`'s padding-left
+ * (which pushes the embedded EditorLine right inside the viewLineRow).
+ * Inlined here rather than via `--embedded-row-pull` because the
+ * latter's calc captures `--view-gutter-offset` at substitution time
+ * and may not see the per-line value set on the parent EditorLine's
+ * inner wrapper. */
 .viewLineRow {
   display: flex;
   align-items: stretch;
-  margin-left: calc(-10rem - 1.25rem - 2 * var(--view-gutter-offset, 7px));
+  margin-left: calc(-1 * (var(--note-id-col) + var(--gutter-col) + 2 * var(--view-gutter-offset, 7px)));
 }
 
 .viewNoteIdCell {
   flex-shrink: 0;
-  width: 10rem;
+  width: var(--note-id-col);
   font-family: monospace;
   font-size: 0.6875rem;
   line-height: 1.5rem;

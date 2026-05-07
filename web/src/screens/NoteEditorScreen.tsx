@@ -295,7 +295,7 @@ export function NoteEditorScreen() {
               }}
             />
           ) : (
-            <div key={item.realIndex} data-line-index={item.realIndex} style={fadedIndices.has(item.realIndex) ? { opacity: 0.4 } : undefined}>
+            <div key={item.realIndex} data-line-index={item.realIndex} className={styles.editorRow} style={fadedIndices.has(item.realIndex) ? { opacity: 0.4 } : undefined}>
               <EditorLine
                 lineIndex={item.realIndex}
                 controller={controller}

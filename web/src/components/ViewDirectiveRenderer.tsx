@@ -263,6 +263,7 @@ function ViewNoteSection({
         item.type === 'placeholder' ? (
           <CompletedPlaceholderRow
             key={`ph-${i}`}
+            variant="view"
             count={item.count}
             indentLevel={item.indentLevel}
             noteIdText={Array.from({ length: item.count }, (_, j) => displayLines[item.startIndex + j]?.noteIds ?? []).flat().join(', ')}

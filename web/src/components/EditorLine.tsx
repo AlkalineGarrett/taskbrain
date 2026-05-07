@@ -177,15 +177,21 @@ export function EditorLine({
 
   const noteIdText = line.noteIds.join(', ')
 
+  // Embedded EditorLines (inside a view directive's `.viewLineContent`)
+  // are flex items, not grid items; use the flex variant so subgrid
+  // doesn't fall back unpredictably without a grid parent.
+  const isEmbedded = hideNoteId === true
+  const lineClass = isEmbedded ? styles.lineEmbedded : styles.line
+
   return (
-    <div className={`${styles.line} ${isFocused ? styles.focused : ''}`}>
+    <div className={`${lineClass} ${isFocused ? styles.focused : ''}`}>
       {!hideNoteId && !hideGutter && <div className={`${styles.noteIdCell}${hasNonEmptyView ? ` ${styles.noteIdCellNarrow}` : ''}`}>{noteIdText || '\u00A0'}</div>}
       {!hideGutter && <div
         className={`${styles.selectionGutter}${isLineSelected ? ` ${styles.selected}` : ''}${hasNonEmptyView ? ` ${styles.selectionGutterHidden}` : ''}`}
         onMouseDown={handleGutterMouseDown}
         onMouseEnter={handleGutterMouseEnter}
       />}
-      <div style={{ paddingLeft: `calc(${0.25 + indentLevel * 0.6}rem + var(--view-border-inset, 0px))`, display: 'flex', flex: 1, minWidth: 0, ['--view-gutter-offset' as string]: `calc(${0.25 + indentLevel * 0.6}rem + 7px)` }}>
+      <div style={{ gridColumn: 'content', paddingLeft: `calc(${0.25 + indentLevel * 0.6}rem + var(--view-border-inset, 0px))`, display: 'flex', flex: 1, minWidth: 0, ['--view-gutter-offset' as string]: `calc(${0.25 + indentLevel * 0.6}rem + 7px)` }}>
       {displayPrefix ? (
         <div className={styles.gutter} onClick={handleGutterClick}>
           <span className={styles.prefix}>{displayPrefix}</span>
