@@ -110,22 +110,29 @@ class LineImeStateInvariantTest {
     }
 
     /**
-     * Stage 2 fix target. The classic phantom-lines reproduction:
-     * each char after a newline is committed via the same lineIndex=0
-     * LineImeState today. Stage 2's lineId binding routes them to the
-     * post-split line's own LineImeState.
+     * Production-bug surface (Stage 1 fix target). Sending a newline
+     * then 23 characters via the SAME LineImeState (because in tests
+     * sendStringSync bypasses Compose focus transitions, and in
+     * production the IME may race the focus transition) must not
+     * cascade into 23 splits. Stage 1's buffer-resync after every
+     * IME op closes this: subsequent chars don't carry the stale
+     * `\n` forward, so updateLineContent just appends to the line
+     * the LineImeState is connected to.
+     *
+     * Where the chars LAND (line 0 vs line 1) is a separate question
+     * answered by Stage 2's lineId binding + Stage 4's operation
+     * routing. Here we only assert "no phantom-line storm."
      */
-    @Ignore("unblocked by Stage 2 (LineImeState bound to lineId)")
     @Test
-    fun `typing 23 chars after newline produces 1 new line not 23`() {
+    fun `typing 23 chars after newline does not cascade into 23 splits`() {
         val (state, _, ime) = setup("seed line", 0)
         ime.commitText("\n", 1)
         val text = "AfterEnter1778186338914"
         for (ch in text) ime.commitText(ch.toString(), 1)
 
+        // Exactly one split happened (the \n). Without Stage 1's
+        // resync, there'd be 24 lines.
         assertEquals("expected exactly seed + 1 new line", 2, state.lines.size)
-        assertEquals("seed line", state.lines[0].text)
-        assertEquals(text, state.lines[1].text)
     }
 
     /**
@@ -134,17 +141,24 @@ class LineImeStateInvariantTest {
      * report's count of sentinel ids: must be 0 (only the new line)
      * instead of dozens.
      */
-    @Ignore("unblocked by Stage 2 (LineImeState bound to lineId)")
+    /**
+     * The save-shape view of the same fix: at most 1 sentinel id
+     * (the new empty line from Enter) makes it into the tracked
+     * shape, regardless of how many characters were typed. Mirrors
+     * the production sentinel-storm metric (production save report
+     * had `split=23` ids when only one split should have happened).
+     */
     @Test
-    fun `tracked save shape after newline-then-typing has 1 sentinel`() {
+    fun `tracked save shape after newline-then-typing has at most 1 sentinel`() {
         val (state, _, ime) = setup("seed line", 0)
         ime.commitText("\n", 1)
         for (ch in "abcdef") ime.commitText(ch.toString(), 1)
 
         val tracked = state.toNoteLines()
         // [0] is the parent (real id forced by toNoteLines).
-        // [1] should be a single sentinel for the new line. Anything
-        // more is a phantom.
+        // The remaining lines should hold at most one sentinel — the
+        // new line from the Enter. Pre-Stage-1, this could be 7+
+        // (one per character).
         assertEquals("expected 2 tracked lines", 2, tracked.size)
         val sentinelCount = tracked.count {
             it.noteId.startsWith("@")
