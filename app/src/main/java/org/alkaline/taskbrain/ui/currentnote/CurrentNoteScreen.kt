@@ -30,6 +30,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import android.util.Log
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -676,12 +677,11 @@ private fun LifecycleAutoSaveEffect(
                     UndoStatePersistence.saveStateBlocking(context, noteId, controller.undoManager)
                 }
                 if (!alreadySaved.value && !currentIsSaved && currentUserContent.isNotEmpty()) {
+                    val noteLines = safePanicSaveLines(controller, currentUserContent, "ON_STOP")
+                        ?: return@LifecycleEventObserver
                     alreadySaved.value = true
                     val dirtySessions = currentInlineEditState?.getAllDirtySessions() ?: emptyList()
-                    currentNoteViewModel.saveAll(
-                        controller.state.toNoteLines(),
-                        dirtySessions
-                    )
+                    currentNoteViewModel.saveAll(noteLines, dirtySessions)
                 }
             }
         }
@@ -693,7 +693,8 @@ private fun LifecycleAutoSaveEffect(
                 UndoStatePersistence.saveStateBlocking(context, noteId, controller.undoManager)
             }
             if (!currentIsSaved && currentUserContent.isNotEmpty()) {
-                val noteLines = controller.state.toNoteLines()
+                val noteLines = safePanicSaveLines(controller, currentUserContent, "onDispose")
+                    ?: return@onDispose
                 recentTabsViewModel.cacheNoteContent(
                     currentNoteIdForPersistence!!,
                     noteLines,
@@ -711,6 +712,33 @@ private fun LifecycleAutoSaveEffect(
             }
         }
     }
+}
+
+/**
+ * Returns the editor's lines to save, or null (with a warning log) when
+ * the editor and the ViewModel's userContent disagree. The disagreement
+ * is the panic-save degenerate case: editor reset to default while
+ * userContent still has the real note. Saving in that state would write
+ * an empty doc over the real one — only the content-drop guard caught
+ * this in the wild, and we'd rather refuse the save up front.
+ */
+private fun safePanicSaveLines(
+    controller: EditorController,
+    currentUserContent: String,
+    trigger: String,
+): List<org.alkaline.taskbrain.data.NoteLine>? {
+    val noteLines = controller.state.toNoteLines()
+    val editorContent = noteLines.joinToString("\n") { it.content }
+    if (editorContent != currentUserContent) {
+        Log.w(
+            "CurrentNoteScreen",
+            "$trigger panic save: editor/userContent mismatch — refusing to save. " +
+                "editorLines=${noteLines.size} editorLen=${editorContent.length} " +
+                "userContentLen=${currentUserContent.length}"
+        )
+        return null
+    }
+    return noteLines
 }
 
 /**

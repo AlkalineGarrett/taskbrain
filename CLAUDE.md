@@ -156,6 +156,21 @@ Read `docs/firestore-efficiency.md` before adding any Firestore read or write. I
 
 See `ui/currentnote/requirements.md` for full undo/redo specification and implementation details.
 
+### Editor Focus Events (Android)
+
+`EditorController` exposes two focus methods that look similar but mean different things. **Picking the wrong one causes an infinite loop that pumps the IME ~100 Hz and gets the activity killed by the watchdog.**
+
+- **`markLineFocused(index)`** — *Notification:* "the system reports that this line just gained focus." Updates `focusedLineIndex` and the undo boundary; does **not** bump `focusVersion`. Call this from `onFocusChanged` callbacks.
+- **`focusLine(index)`** — *Intent:* "I want focus to move to this line." Calls `markLineFocused` AND bumps `focusVersion`, which fires the focus-grabbing `LaunchedEffect`. Call this when *programmatically* moving focus (e.g., after a paste, after a load).
+
+The trap: `LaunchedEffect(focusVersion)` calls `focusRequester.requestFocus()`, which fires `onFocusChanged(true)`. If `onFocusChanged` calls a method that bumps `focusVersion`, the effect re-fires, calling `requestFocus` again, and the loop pumps until something else stops it. The general rule:
+
+> **A method called from a "system says X happened" callback must not, as a side effect, request that X happen again.**
+
+Applies to focus, selection, scroll, IME composition — any system-driven event. When you write a new mutator on `EditorController` or `EditorState`, decide up front whether it's intent (bump `focusVersion`/`stateVersion`) or notification (don't), and split it if it's both.
+
+The same principle drove the `focusVersion` / `stateVersion` split (passive content bumps shouldn't re-grab IME) — keep that split honored on **both** the read side (`LaunchedEffect` keys) and the write side (which counter a mutator bumps).
+
 ### Error Handling and User Feedback
 
 The app should generally inform users when problems occur rather than silently failing or recovering:

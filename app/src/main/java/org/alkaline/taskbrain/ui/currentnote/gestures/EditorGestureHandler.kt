@@ -297,13 +297,16 @@ internal class GestureStateMachine(
     private val setSelection: (Int, Int) -> Unit,
     private val hasSelection: () -> Boolean,
     private val isOffsetInSelection: (Int) -> Boolean,
-    private val onCursorDragged: (Int) -> Unit
+    private val onCursorDragged: (Int) -> Unit,
+    private val onMoveDragUpdate: ((Int) -> Unit)? = null,
 ) {
     var longPressTriggered = false
         private set
     var isScrollGesture = false
         private set
     var isCursorDragGesture = false
+        private set
+    var isMoveDragGesture = false
         private set
     var consumedByChild = false
         private set
@@ -323,7 +326,7 @@ internal class GestureStateMachine(
      * Selects the word at the down position — but only if not already in cursor drag mode.
      */
     fun onLongPressTriggered() {
-        if (isScrollGesture || isCursorDragGesture) return
+        if (isScrollGesture || isCursorDragGesture || isMoveDragGesture) return
 
         longPressTriggered = true
         val globalOffset = resolveOffset(downPosition)
@@ -348,14 +351,28 @@ internal class GestureStateMachine(
             return true
         }
 
+        // Already in move-drag mode — update drop cursor.
+        if (isMoveDragGesture) {
+            onMoveDragUpdate?.invoke(resolveOffset(position))
+            return true
+        }
+
         // In selection mode — update selection
         if (longPressTriggered && anchorStart >= 0) {
             updateDragSelection(position)
             return true
         }
 
-        // Check if drag exceeds touch slop (before long press)
+        // Check if drag exceeds touch slop (before long press).
+        // Down inside an existing selection is the move-drag entry —
+        // takes priority over cursor-drag (which would clear the
+        // selection on its first cursor update).
         if (!longPressTriggered && !isScrollGesture && totalDragDistance > touchSlop) {
+            if (hasSelection() && isOffsetInSelection(resolveOffset(downPosition))) {
+                isMoveDragGesture = true
+                onMoveDragUpdate?.invoke(resolveOffset(position))
+                return true
+            }
             if (downNearCursor) {
                 isCursorDragGesture = true
                 onCursorDragged(resolveOffset(position))
@@ -377,14 +394,22 @@ internal class GestureStateMachine(
     }
 
     /**
-     * Handles gesture completion when pointer is released.
+     * Handles gesture completion when pointer is released. Returns true
+     * if a move-drag was committed (so the caller can skip its cancel
+     * cleanup). For non-move-drag gestures the return value is unused.
      */
     fun onGestureComplete(
         onCursorPositioned: (Int) -> Unit,
         onTapOnSelection: ((Offset) -> Unit)?,
-        onSelectionCompleted: ((Offset) -> Unit)?
-    ) {
-        if (isScrollGesture || consumedByChild) return
+        onSelectionCompleted: ((Offset) -> Unit)?,
+        onMoveDragCommit: ((Int) -> Unit)? = null,
+    ): Boolean {
+        if (isScrollGesture || consumedByChild) return false
+
+        if (isMoveDragGesture) {
+            onMoveDragCommit?.invoke(resolveOffset(lastPosition))
+            return true
+        }
 
         if (longPressTriggered) {
             if (hasSelection()) {
@@ -395,6 +420,7 @@ internal class GestureStateMachine(
         } else {
             handleTap(onCursorPositioned, onTapOnSelection)
         }
+        return false
     }
 
     private fun handleTap(
@@ -420,7 +446,8 @@ private fun createGestureTracker(
     touchSlop: Float,
     cursorDragRadiusPx: Float,
     directiveResults: Map<String, DirectiveResult>,
-    onCursorDragged: (Int) -> Unit
+    onCursorDragged: (Int) -> Unit,
+    onMoveDragUpdate: ((Int) -> Unit)?,
 ): GestureStateMachine {
     val cursorPos = getCursorScreenPosition(state, lineLayouts, directiveResults)
     val downNearCursor = cursorPos != null &&
@@ -435,7 +462,8 @@ private fun createGestureTracker(
         setSelection = { start, end -> state.setSelection(start, end) },
         hasSelection = { state.hasSelection },
         isOffsetInSelection = { it in state.selection.min..state.selection.max },
-        onCursorDragged = onCursorDragged
+        onCursorDragged = onCursorDragged,
+        onMoveDragUpdate = onMoveDragUpdate,
     )
 }
 
@@ -464,24 +492,44 @@ internal fun Modifier.editorPointerInput(
     inlineEditLineIndices: Set<Int> = emptySet(),
     onCursorPositioned: (Int) -> Unit,
     onTapOnSelection: ((Offset) -> Unit)? = null,
-    onSelectionCompleted: ((Offset) -> Unit)? = null
+    onSelectionCompleted: ((Offset) -> Unit)? = null,
+    /** Called per-move during a selection drag-move with the current drop target's global offset. */
+    onMoveDragUpdate: ((Int) -> Unit)? = null,
+    /** Called on release after a selection drag-move with the final drop offset. */
+    onMoveDragCommit: ((Int) -> Unit)? = null,
+    /** Called if a move-drag is interrupted (cancellation, scroll takeover, key-change-driven restart). */
+    onMoveDragCancel: (() -> Unit)? = null,
 ): Modifier = this.pointerInput(scrollState, directiveResults) {
     val cursorDragRadiusPx = EditorConfig.CursorDragRadiusDp * density
-    coroutineScope {
-        awaitPointerEventScope {
-            while (true) {
-                val gsm = awaitGestureStart(
-                    state, lineLayouts, touchSlop, cursorDragRadiusPx,
-                    directiveResults, inlineEditLineIndices, onCursorPositioned
-                ) ?: continue
+    try {
+        coroutineScope {
+            awaitPointerEventScope {
+                while (true) {
+                    val gsm = awaitGestureStart(
+                        state, lineLayouts, touchSlop, cursorDragRadiusPx,
+                        directiveResults, inlineEditLineIndices, onCursorPositioned,
+                        onMoveDragUpdate,
+                    ) ?: continue
 
-                val longPressJob = launchLongPressDetection(longPressTimeoutMillis, gsm)
+                    val longPressJob = launchLongPressDetection(longPressTimeoutMillis, gsm)
 
-                trackPointerUntilRelease(gsm, longPressJob)
+                    trackPointerUntilRelease(gsm, longPressJob)
 
-                gsm.onGestureComplete(onCursorPositioned, onTapOnSelection, onSelectionCompleted)
+                    val committed = gsm.onGestureComplete(
+                        onCursorPositioned,
+                        onTapOnSelection,
+                        onSelectionCompleted,
+                        onMoveDragCommit,
+                    )
+                    if (gsm.isMoveDragGesture && !committed) onMoveDragCancel?.invoke()
+                }
             }
         }
+    } finally {
+        // The pointerInput restarts when its keys (scrollState,
+        // directiveResults) change. If a drag was in progress, the
+        // dangling drop-cursor would render forever.
+        onMoveDragCancel?.invoke()
     }
 }
 
@@ -496,7 +544,8 @@ private suspend fun AwaitPointerEventScope.awaitGestureStart(
     cursorDragRadiusPx: Float,
     directiveResults: Map<String, DirectiveResult>,
     inlineEditLineIndices: Set<Int>,
-    onCursorDragged: (Int) -> Unit
+    onCursorDragged: (Int) -> Unit,
+    onMoveDragUpdate: ((Int) -> Unit)?,
 ): GestureStateMachine? {
     // Use Main pass so children (like DirectiveEditRow) can consume in Initial pass first
     val down = awaitPointerEvent(PointerEventPass.Main)
@@ -512,7 +561,7 @@ private suspend fun AwaitPointerEventScope.awaitGestureStart(
 
     return createGestureTracker(
         downChange.position, state, lineLayouts, touchSlop, cursorDragRadiusPx,
-        directiveResults, onCursorDragged
+        directiveResults, onCursorDragged, onMoveDragUpdate,
     )
 }
 

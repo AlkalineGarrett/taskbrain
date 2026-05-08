@@ -605,7 +605,10 @@ private fun EditorContent(
                 inlineEditLineIndices = inlineEditLineIndices,
                 onCursorPositioned = onCursorPositioned,
                 onTapOnSelection = onTapOnSelection,
-                onSelectionCompleted = { _ -> onSelectionCompleted() }
+                onSelectionCompleted = { _ -> onSelectionCompleted() },
+                onMoveDragUpdate = controller::onMoveDragUpdate,
+                onMoveDragCommit = controller::onMoveDragCommit,
+                onMoveDragCancel = controller::cancelMoveDrag,
             )
     ) {
         // Observe stateVersion to trigger recomposition when state changes
@@ -767,7 +770,7 @@ private fun ControlledLineViewWrapper(
         onFocusChanged = { isFocused ->
             if (isFocused) {
                 wrapperCoordinator?.activate(EditorId.Parent)
-                controller.focusLine(index)
+                controller.markLineFocused(index)
                 onEditorFocusChanged?.invoke(true)
             }
         },

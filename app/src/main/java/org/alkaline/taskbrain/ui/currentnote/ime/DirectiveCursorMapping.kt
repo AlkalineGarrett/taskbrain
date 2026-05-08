@@ -57,3 +57,32 @@ internal fun Modifier.drawCursor(
         )
     }
 }
+
+/**
+ * Draws a steady (non-blinking) drop cursor at [cursorPosition] when
+ * [shouldDraw] is true. Used during a selection move-drag to show the
+ * user where the moved text will land if they release the touch.
+ * Position is in content (post-prefix) characters.
+ */
+internal fun Modifier.drawDropCursor(
+    shouldDraw: Boolean,
+    cursorPosition: Int,
+    textLength: Int,
+    textLayoutResultProvider: () -> TextLayoutResult?,
+): Modifier = this.drawWithContent {
+    drawContent()
+    if (!shouldDraw) return@drawWithContent
+    val textLayoutResult = textLayoutResultProvider() ?: return@drawWithContent
+    val cursorPos = cursorPosition.coerceIn(0, textLength)
+    val cursorRect = try {
+        textLayoutResult.getCursorRect(cursorPos)
+    } catch (e: Exception) {
+        Rect(0f, 0f, CursorWidth.toPx(), textLayoutResult.size.height.toFloat())
+    }
+    drawLine(
+        color = CursorColor,
+        start = Offset(cursorRect.left, cursorRect.top),
+        end = Offset(cursorRect.left, cursorRect.bottom),
+        strokeWidth = CursorWidth.toPx(),
+    )
+}

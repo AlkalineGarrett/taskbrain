@@ -102,12 +102,13 @@ internal fun InlineNoteEditor(
     // Track which line is expecting focus from a tap (to prevent false focus loss)
     var pendingFocusLineIndex by remember { mutableIntStateOf(-1) }
 
-    // Request focus when the user taps a line (stateVersion changes).
-    // mountVersion lets us distinguish user taps (which increment stateVersion)
-    // from the initial composition (where it's already > 0 from a previous interaction).
-    val mountVersion = remember(session) { editorState.stateVersion }
-    LaunchedEffect(editorState.focusedLineIndex, editorState.stateVersion) {
-        val isUserTap = editorState.stateVersion > mountVersion
+    // Key on focusVersion — passive stateVersion bumps (content sync from
+    // an external snapshot, view-directive resync) shouldn't re-grab IME.
+    // mountVersion lets us distinguish real focus intents (focusVersion >
+    // mount) from the initial composition (already > 0 from prior use).
+    val mountVersion = remember(session) { editorState.focusVersion }
+    LaunchedEffect(editorState.focusedLineIndex, editorState.focusVersion) {
+        val isUserTap = editorState.focusVersion > mountVersion
         val shouldFocus = isUserTap && editorState.focusedLineIndex in lineFocusRequesters.indices
         if (shouldFocus) {
             try {
@@ -204,7 +205,10 @@ internal fun InlineNoteEditor(
                     directiveResults = emptyMap(),
                     onCursorPositioned = controller::setCursorFromGlobalOffset,
                     onTapOnSelection = selectionConfig.contextMenuState::handleTapOnSelection,
-                    onSelectionCompleted = { _ -> selectionConfig.onSelectionCompleted() }
+                    onSelectionCompleted = { _ -> selectionConfig.onSelectionCompleted() },
+                    onMoveDragUpdate = controller::onMoveDragUpdate,
+                    onMoveDragCommit = controller::onMoveDragCommit,
+                    onMoveDragCancel = controller::cancelMoveDrag,
                 )
                 .onFocusChanged { focusState ->
                     val wasFocused = isEditorFocused
@@ -266,7 +270,7 @@ internal fun InlineNoteEditor(
                             onFocusChanged = { isFocused ->
                                 if (isFocused) {
                                     pendingFocusLineIndex = -1
-                                    controller.focusLine(index)
+                                    controller.markLineFocused(index)
                                 }
                             },
                             onTextLayoutResult = { layoutResult ->

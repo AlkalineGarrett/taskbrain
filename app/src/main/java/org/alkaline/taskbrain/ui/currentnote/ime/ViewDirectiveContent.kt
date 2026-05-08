@@ -179,21 +179,27 @@ private fun EditableViewNoteSection(
 
     // Update existing session content in place on external changes (same pattern as
     // main editor's initFromNoteLines). Skipped when the session has unsaved edits.
-    if (editContent != session.originalContent && !session.isDirty) {
-        val storeLines = NoteStore.getNoteLinesById(note.id)
-        if (storeLines != null) {
-            session.editorState.initFromNoteLines(storeLines, preserveCursor = true)
-            session.syncOriginalContent(editContent)
-            session.editorState.requestFocusUpdate()
-        } else {
-            // The note vanished from NoteStore (mid-save echo gap, delete, etc.).
-            // Skip the sync; a subsequent snapshot that restores structured
-            // lines will trigger another sync via recomposition.
-            android.util.Log.w(
-                "DirectiveAwareLineInput",
-                "Skipping external-change sync for ${note.id}: NoteStore has no " +
-                    "structured lines (race with delete or mid-save echo gap).",
-            )
+    //
+    // Must run from a LaunchedEffect, not in composition: initFromNoteLines bumps
+    // stateVersion, which used to feed back into the InlineNoteEditor's
+    // stateVersion-keyed focus LaunchedEffect, pumping the IME show ~100x/sec
+    // until the activity gave up and ON_STOP'd.
+    LaunchedEffect(editContent, session.originalContent, session.isDirty) {
+        if (editContent != session.originalContent && !session.isDirty) {
+            val storeLines = NoteStore.getNoteLinesById(note.id)
+            if (storeLines != null) {
+                session.editorState.initFromNoteLines(storeLines, preserveCursor = true)
+                session.syncOriginalContent(editContent)
+            } else {
+                // The note vanished from NoteStore (mid-save echo gap, delete, etc.).
+                // Skip the sync; a subsequent snapshot that restores structured
+                // lines will trigger another sync via recomposition.
+                android.util.Log.w(
+                    "DirectiveAwareLineInput",
+                    "Skipping external-change sync for ${note.id}: NoteStore has no " +
+                        "structured lines (race with delete or mid-save echo gap).",
+                )
+            }
         }
     }
 

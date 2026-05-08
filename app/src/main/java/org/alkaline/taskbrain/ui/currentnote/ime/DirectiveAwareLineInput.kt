@@ -157,6 +157,18 @@ internal fun DirectiveAwareLineInput(
 
     val onTapInsideSelection = LocalContextMenuTapHandler.current
 
+    // Drop-cursor position during a selection move-drag, resolved per
+    // line. Conditional read: lines that aren't the destination only
+    // subscribe to dropCursorLineIndex (1 recompose when destination
+    // changes); only the destination line subscribes to localOffset.
+    val dropCursorOnThisLine: Int? = if (controller.state.dropCursorLineIndex == lineIndex) {
+        val line = controller.state.lines.getOrNull(lineIndex)
+        if (line != null) {
+            (controller.state.dropCursorLocalOffset - line.prefix.length)
+                .coerceIn(0, line.content.length)
+        } else null
+    } else null
+
     Box(
         modifier = modifier
             .focusRequester(focusRequester)
@@ -206,6 +218,12 @@ internal fun DirectiveAwareLineInput(
                         textLength = content.length,
                         textLayoutResultProvider = { textLayoutResultState },
                         cursorAlpha = cursorAlpha
+                    )
+                    .drawDropCursor(
+                        shouldDraw = dropCursorOnThisLine != null,
+                        cursorPosition = dropCursorOnThisLine ?: 0,
+                        textLength = content.length,
+                        textLayoutResultProvider = { textLayoutResultState },
                     )
                     .then(
                         if (hasOverlays && textMeasurer != null) {

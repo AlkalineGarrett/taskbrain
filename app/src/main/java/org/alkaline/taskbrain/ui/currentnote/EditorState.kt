@@ -30,6 +30,19 @@ class EditorState {
     var selection by mutableStateOf(EditorSelection.None)
         internal set
 
+    /**
+     * Active drop-cursor target during a selection move-drag. Stored as
+     * resolved (lineIndex, localOffset) — not a global offset — so each
+     * line can read [dropCursorLineIndex] first and only subscribe to
+     * [dropCursorLocalOffset] if it's the destination. Without that
+     * split, every drag tick recomposed every line at O(N²).
+     * Null when no move-drag is in progress.
+     */
+    var dropCursorLineIndex: Int? by mutableStateOf<Int?>(null)
+        internal set
+    var dropCursorLocalOffset: Int by mutableIntStateOf(0)
+        internal set
+
     internal var onTextChange: ((String) -> Unit)? = null
 
     /** Timestamp of the last space-triggered indent (for double-space → unindent) */

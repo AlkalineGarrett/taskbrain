@@ -886,6 +886,28 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         trackedLines: List<NoteLine>,
         dirtySessions: List<InlineEditSession>
     ) {
+        // Trigger trace. Saves come from several call sites: the Save
+        // button, tab switches, lifecycle ON_STOP, DisposableEffect
+        // onDispose, etc. When a panic save fires with a degenerate
+        // editor state (1 empty sentinel-id line over a multi-child
+        // note — see content-drop guard logs), the stack trace pinpoints
+        // which path triggered it. Always log so a later content-drop
+        // event can be correlated with its trigger.
+        val origin = Throwable().stackTrace
+            .drop(1)
+            .take(8)
+            .joinToString(" <- ") {
+                "${it.fileName?.substringBeforeLast('.')}:${it.lineNumber}"
+            }
+        val firstLineSummary = trackedLines.firstOrNull()
+            ?.let { "first=[id=${it.noteId} content='${it.content.take(40)}']" }
+            ?: "empty"
+        Log.d(
+            TAG,
+            "saveAll: noteId=$currentNoteId lines=${trackedLines.size} " +
+                "dirtySessions=${dirtySessions.size} $firstLineSummary from=$origin",
+        )
+
         _saveStatus.value = UnifiedSaveStatus.Saving
 
         val savedNoteId = currentNoteId

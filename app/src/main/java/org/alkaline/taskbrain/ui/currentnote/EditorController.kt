@@ -1,6 +1,7 @@
 package org.alkaline.taskbrain.ui.currentnote
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.snapshots.Snapshot
 import org.alkaline.taskbrain.data.NoteIdSentinel
 import org.alkaline.taskbrain.data.NoteStore
 import org.alkaline.taskbrain.ui.currentnote.undo.CommandType
@@ -9,6 +10,7 @@ import org.alkaline.taskbrain.ui.currentnote.undo.AlarmSnapshot
 import org.alkaline.taskbrain.ui.currentnote.undo.UndoSnapshot
 import org.alkaline.taskbrain.ui.currentnote.selection.SelectionCoordinates
 import org.alkaline.taskbrain.ui.currentnote.util.ClipboardParser
+import org.alkaline.taskbrain.ui.currentnote.util.PasteResult
 import org.alkaline.taskbrain.ui.currentnote.util.CompletedLineUtils
 import org.alkaline.taskbrain.ui.currentnote.util.LinePrefixes
 import org.alkaline.taskbrain.ui.currentnote.util.PasteHandler
@@ -349,8 +351,36 @@ class EditorController(
                 if (reclaimed != null) line.noteIds = listOf(reclaimed)
             }
         }
-        state.lines.clear()
-        state.lines.addAll(result.lines)
+        applyPasteResult(result)
+    }
+
+    /**
+     * Replace `state.lines` wholesale without ever passing through an
+     * empty intermediate state. The naive `clear() + addAll(...)` makes
+     * `state.lines` momentarily empty, which Compose may snapshot — and
+     * any observer that fires during that window (a lifecycle save
+     * triggered by a phantom activity-stop, the save button, an external
+     * change handler) sees a degenerate editor. The save planner then
+     * thinks every existing child should be soft-deleted, and only the
+     * content-drop guard prevents data loss.
+     *
+     * Wrapping in [Snapshot.withMutableSnapshot] commits both ops as a
+     * single atomic transaction visible to readers.
+     */
+    private fun replaceAllLinesAtomically(newLines: List<LineState>) {
+        Snapshot.withMutableSnapshot {
+            state.lines.clear()
+            state.lines.addAll(newLines)
+        }
+    }
+
+    /**
+     * Apply a [PasteResult] to the editor state — replace lines, place
+     * the cursor, clear selection, and notify. Shared by [paste] and
+     * [moveSelectionTo] so both apply pastes identically.
+     */
+    private fun applyPasteResult(result: PasteResult) {
+        replaceAllLinesAtomically(result.lines)
         state.focusedLineIndex = result.cursorLineIndex
         state.lines.getOrNull(result.cursorLineIndex)?.updateFull(
             state.lines[result.cursorLineIndex].text,
@@ -359,6 +389,123 @@ class EditorController(
         state.clearSelection()
         state.requestFocusUpdate()
         state.notifyChange()
+    }
+
+    // =========================================================================
+    // Drag-move callbacks (called by the gesture handler)
+    // =========================================================================
+
+    /** Update the drop-cursor position to track the user's finger. */
+    fun onMoveDragUpdate(globalOffset: Int) {
+        val (idx, localOffset) = state.getLineAndLocalOffset(globalOffset)
+        state.dropCursorLineIndex = idx
+        state.dropCursorLocalOffset = localOffset
+    }
+
+    /** Finger released over a valid drop target — clear cursor, perform the move. */
+    fun onMoveDragCommit(globalOffset: Int) {
+        state.dropCursorLineIndex = null
+        moveSelectionTo(globalOffset)
+    }
+
+    /** Gesture interrupted (cancellation, scroll takeover, key change) — clear cursor. */
+    fun cancelMoveDrag() {
+        state.dropCursorLineIndex = null
+    }
+
+    /**
+     * Move the current selection to [targetGlobalOffset] (drop position).
+     * Mirrors `EditorController.moveSelectionTo` on web.
+     *
+     * No-op if there's no selection or the target is inside the selection.
+     * Otherwise: snapshot the selected lines (with noteIds), delete them,
+     * and re-paste at the adjusted target. The snapshots feed into
+     * [PasteHandler.execute]'s `cutLines` so the moved lines retain their
+     * Firestore doc ids.
+     *
+     * Two safety nets:
+     * - The whole op is wrapped in [Snapshot.withMutableSnapshot] so
+     *   Compose observers can't see a half-mutated editor between
+     *   delete-selection and apply-paste.
+     * - A pre/post invariant check logs (does NOT throw) if any real
+     *   Firestore doc id was lost across the op. The save planner's
+     *   content-drop guard is the production backstop;
+     *   `MoveSelectionToTest` enforces the invariant in CI.
+     */
+    fun moveSelectionTo(targetGlobalOffset: Int) {
+        if (!state.hasSelection) return
+        val (selStart, selEnd) = SelectionCoordinates.getEffectiveSelectionRange(
+            state.text, state.selection,
+        )
+        if (targetGlobalOffset in selStart..selEnd) return
+
+        val realIdsBefore = state.lines
+            .flatMap { it.noteIds }
+            .filter { NoteIdSentinel.isRealNoteId(it) }
+            .toSet()
+
+        executeOperation(OperationType.PASTE) {
+            // Without this outer snapshot, an observer that runs between
+            // delete-selection and apply-paste sees a half-modified editor.
+            // A lifecycle ON_STOP save firing in that window would persist
+            // the half-state (e.g., post-delete + pre-paste = 1 surviving
+            // line over a multi-child note → content-drop guard trips).
+            Snapshot.withMutableSnapshot {
+                val range = state.getSelectedLineRange()
+                val cutLines = state.lines.subList(range.first, range.last + 1)
+                    .map { LineState(it.text, noteIds = it.noteIds.toList()) }
+                for (line in cutLines) {
+                    val id = line.noteIds.firstOrNull()
+                    if (id != null && NoteIdSentinel.isRealNoteId(id)) {
+                        NoteStore.recordCut(id, line.text.trimStart('\t'))
+                    }
+                }
+
+                val clipText = getSelectedTextWithPrefix()
+                if (clipText.isEmpty()) return@withMutableSnapshot
+
+                state.deleteSelectionInternal()
+
+                val adjustedTarget = if (targetGlobalOffset > selEnd) {
+                    targetGlobalOffset - (selEnd - selStart)
+                } else {
+                    targetGlobalOffset
+                }
+                val (lineIndex, localOffset) = state.getLineAndLocalOffset(adjustedTarget)
+                state.focusedLineIndex = lineIndex
+                state.lines.getOrNull(lineIndex)?.let { line ->
+                    line.updateFull(line.text, localOffset)
+                }
+
+                val parsed = ClipboardParser.parse(clipText, null)
+                val result = PasteHandler.execute(
+                    state.lines.toList(),
+                    state.focusedLineIndex,
+                    state.selection,
+                    parsed,
+                    cutLines.takeIf { it.isNotEmpty() },
+                )
+                for (cl in cutLines) {
+                    val id = cl.noteIds.firstOrNull()
+                    if (id != null && NoteIdSentinel.isRealNoteId(id)) NoteStore.clearPendingCut(id)
+                }
+                applyPasteResult(result)
+            }
+        }
+
+        val realIdsAfter = state.lines
+            .flatMap { it.noteIds }
+            .filter { NoteIdSentinel.isRealNoteId(it) }
+            .toSet()
+        val lost = realIdsBefore - realIdsAfter
+        if (lost.isNotEmpty()) {
+            android.util.Log.e(
+                "EditorController",
+                "moveSelectionTo lost ${lost.size} real noteId(s): $lost. " +
+                    "Editor's lines now: ${state.lines.size}. " +
+                    "Selection moved [$selStart..$selEnd] to $targetGlobalOffset."
+            )
+        }
     }
 
     /**
@@ -1108,20 +1255,33 @@ class EditorController(
     // =========================================================================
 
     /**
-     * Set focus to a specific line.
-     * Triggers undo boundary when focus changes to a different line.
+     * The system reports that [lineIndex] just gained focus. Update our
+     * model (focused line + undo boundary) but do NOT re-grab focus: the
+     * line already has it. The previous version called
+     * [EditorState.requestFocusUpdate] here, which bumps focusVersion,
+     * which fires the focus-grabbing LaunchedEffect, which calls
+     * requestFocus(), which fires this callback again — a 100Hz IME-show
+     * pump that drove the activity to ON_STOP. Use [focusLine] (below)
+     * when *intentionally* moving focus to a different line.
+     */
+    fun markLineFocused(lineIndex: Int) {
+        if (lineIndex !in state.lines.indices) return
+        if (lineIndex != state.focusedLineIndex) {
+            undoManager.commitPendingUndoState(state)
+            state.focusedLineIndex = lineIndex
+            undoManager.beginEditingLine(state, lineIndex)
+        }
+    }
+
+    /**
+     * Programmatically move focus to [lineIndex]. Bumps focusVersion so
+     * the editor's focus LaunchedEffect picks up the change and calls
+     * requestFocus() on the line's FocusRequester.
      */
     fun focusLine(lineIndex: Int) {
-        if (lineIndex in state.lines.indices) {
-            if (lineIndex != state.focusedLineIndex) {
-                undoManager.commitPendingUndoState(state)
-                state.focusedLineIndex = lineIndex
-                undoManager.beginEditingLine(state, lineIndex)
-            } else {
-                state.focusedLineIndex = lineIndex
-            }
-            state.requestFocusUpdate()
-        }
+        if (lineIndex !in state.lines.indices) return
+        markLineFocused(lineIndex)
+        state.requestFocusUpdate()
     }
 
     // =========================================================================
