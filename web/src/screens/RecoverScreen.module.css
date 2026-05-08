@@ -66,12 +66,34 @@
 }
 
 .noteItem {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
   font-size: 0.9rem;
 }
 
-.noteItem.child {
+.noteItem.child .noteContent {
   padding-left: 1rem;
   border-left: 2px solid var(--color-border);
+}
+
+.noteIdCell {
+  flex-shrink: 0;
+  width: 22ch;
+  font-family: monospace;
+  font-size: 0.6875rem;
+  color: var(--color-text-tertiary);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: text;
+  cursor: text;
+}
+
+.noteContent {
+  flex: 1;
+  min-width: 0;
 }
 
 .createRow {

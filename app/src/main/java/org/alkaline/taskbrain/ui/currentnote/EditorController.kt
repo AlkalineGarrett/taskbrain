@@ -1438,6 +1438,26 @@ class EditorController(
         val lineIndex = indexOf(lineId) ?: return null
         return state.lines.getOrNull(lineIndex)?.composingRange
     }
+
+    /**
+     * After a save, replace sentinel-or-empty noteIds on the editor's
+     * lines with the freshly-allocated real Firestore doc ids returned
+     * by the save (`saveNoteWithChildren`'s `createdIds`, keyed by line
+     * index). Real ids are never overwritten.
+     *
+     * Without this, lines stay stuck on the prior sentinel and every
+     * subsequent save allocates *another* fresh doc, orphaning the
+     * previous one.
+     */
+    fun applyNewlyAssignedNoteIds(newIds: Map<Int, String>) {
+        for ((index, newId) in newIds) {
+            val line = state.lines.getOrNull(index) ?: continue
+            val head = line.noteIds.firstOrNull()
+            if (head == null || NoteIdSentinel.isSentinel(head)) {
+                line.noteIds = listOf(newId)
+            }
+        }
+    }
 }
 
 /**

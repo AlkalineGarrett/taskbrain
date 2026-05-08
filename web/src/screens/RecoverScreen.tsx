@@ -304,7 +304,8 @@ export function RecoverScreen() {
                   key={n.id}
                   className={`${styles.noteItem} ${n.parentNoteId ? styles.child : ''}`}
                 >
-                  {n.content || '(empty)'}
+                  <span className={styles.noteIdCell} title={n.id}>{n.id}</span>
+                  <span className={styles.noteContent}>{n.content || '(empty)'}</span>
                 </div>
               ))}
             </div>

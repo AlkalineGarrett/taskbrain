@@ -814,16 +814,9 @@ private fun DataLoadingEffects(
         }
     }
 
-    // Update EditorState noteIds when save assigns new IDs to lines
     LaunchedEffect(Unit) {
         currentNoteViewModel.newlyAssignedNoteIds.collect { newIds ->
-            for ((index, newId) in newIds) {
-                editorState.lines.getOrNull(index)?.let { line ->
-                    if (line.noteIds.isEmpty()) {
-                        line.noteIds = listOf(newId)
-                    }
-                }
-            }
+            controller.applyNewlyAssignedNoteIds(newIds)
         }
     }
 

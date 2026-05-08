@@ -146,3 +146,67 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
+
+// Guard: instrumentation tests with `-PuseFirebaseEmulator=true` MUST
+// run on an AVD. The Firebase emulator listens on the host's
+// localhost; the AVD reaches it via 10.0.2.2, but a physical device
+// can't — and depending on Firebase config could silently hit
+// production Firestore instead and mutate real user data.
+//
+// This task pre-flights `connectedDebugAndroidTest`: it queries every
+// connected device via `adb` and fails fast if any of them is a real
+// device, so the test launcher never even installs the APK on it.
+val useFirebaseEmulatorFlag = (project.findProperty("useFirebaseEmulator") as String?)
+    ?.toBoolean() ?: false
+
+val checkAllDevicesAreEmulators = tasks.register("checkAllDevicesAreEmulators") {
+    group = "verification"
+    description =
+        "Fails if any connected adb device is a physical device. Required when " +
+            "running connectedDebugAndroidTest with -PuseFirebaseEmulator=true."
+    doLast {
+        val androidHome = System.getenv("ANDROID_HOME")
+            ?: System.getenv("ANDROID_SDK_ROOT")
+            ?: "${System.getProperty("user.home")}/Library/Android/sdk"
+        val adb = file("$androidHome/platform-tools/adb")
+        check(adb.exists()) { "adb not found at $adb" }
+
+        val devicesOutput = providers.exec {
+            commandLine(adb.absolutePath, "devices")
+        }.standardOutput.asText.get()
+        val serials = devicesOutput.lines()
+            .drop(1) // header line "List of devices attached"
+            .mapNotNull { line ->
+                val parts = line.trim().split(Regex("\\s+"))
+                if (parts.size >= 2 && parts[1] == "device") parts[0] else null
+            }
+
+        check(serials.isNotEmpty()) {
+            "No connected adb devices. Start an AVD: scripts/test-env-up.sh --with-avd"
+        }
+
+        val realDevices = mutableListOf<Pair<String, String>>()
+        for (serial in serials) {
+            val hwOutput = providers.exec {
+                commandLine(adb.absolutePath, "-s", serial, "shell", "getprop", "ro.hardware")
+            }.standardOutput.asText.get().trim().lowercase()
+            val isEmulator = hwOutput.contains("ranchu") || hwOutput.contains("goldfish")
+            if (!isEmulator) realDevices += serial to hwOutput
+        }
+
+        check(realDevices.isEmpty()) {
+            "Refusing to run emulator-bound tests on a physical device. " +
+                "Disconnect or 'adb -s <serial> tcpip 0' the following: " +
+                realDevices.joinToString { "${it.first}(ro.hardware=${it.second})" } +
+                "\nUse only an AVD: scripts/test-env-up.sh --with-avd"
+        }
+    }
+}
+
+if (useFirebaseEmulatorFlag) {
+    afterEvaluate {
+        tasks.matching { it.name == "connectedDebugAndroidTest" }.configureEach {
+            dependsOn(checkAllDevicesAreEmulators)
+        }
+    }
+}
