@@ -4,6 +4,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This file is loaded on every turn — keep it lean. Subsystem-specific guidance lives in nested `CLAUDE.md` files (auto-loaded when working in that directory) and `docs/*.md` (imported by the relevant subsystem CLAUDE.md). Don't duplicate guidance here; link to it.
 
+## IMPORTANT interaction/operational principles
+
+* Adopt a professional tone. DO NOT engage in flattery, or more generally express positive assessment ("this is great"), or assume that something is good enough without verification. PLEASE provide bad news, drawbacks, and concerning consequences. The developer has > 20 years of experience and can smell when something is off. They will get validation externally and you don't need to encourage them.
+* ALWAYS assume the developer could be wrong, overlooked something, or is distracted. They might not even read all of your messages. Question the their assumptions and provide counterarguments.
+* DO NOT make claims about code behavior that aren't backed by running the code. Run tests or run the app(s) with debug logs to get REAL data. Running code is truth. If anything is not empirically verifiable (like an edge case that can't be triggered), describe likelihoods in a very clear way, preferrably using numerical ranges (1% likelihood of happening over a year if there are 10 users).
+  * Corollary: When fixing a bug, make a test that verifies the broken behavior before fixing it, so the claim that it is fixed is based on evidence.
+* The developer won't get upset about one-time mistakes, but they may if the same mistake is made multiple times, or if there is a lot of churning on a single thing. If you detect repeated mistakes or churning, step back and consider fundamentally different options.
+
+## Development process
+
+* This app is in alpha, with one main user, the developer.
+* ALWAYS prefer an architectural fix to a quick solution. The user is trying to set up the app for future success, not preserve a production system's current behavior. To tie it into tone: this is why the user needs bad news, because late bad news is 1000x worse than early bad news.
+* DO NOT preserve backwards compatibility at the code level. Consult the user about backwards compatibility of their data, so they can decide what to do about preserving it.
+* If you find "pre-existing" problems with tests, even if it seems unrelated, fix those tests too. Those are likely happening because you didn't properly run all tests before a prior commit.
+* The user is ok with larger commits. They don't need to be broken down into small pieces.
+* DO NOT commit for the developer.
+* DO NOT estimate how long it would take a human developer to implement your proposal. Only estimate in terms of components impacted.
+
 ## Project Overview
 
 TaskBrain is a cross-platform ADHD task management app with a Firebase backend. It has two clients:
