@@ -1,6 +1,6 @@
 # Firestore Efficiency Principles
 
-Distilled from the April 2026 web/Android parity pass that brought web's Firestore read/write volume in line with Android's. Read this before adding new Firestore reads or writes on either platform.
+Distilled from the April 2026 web/Android parity pass that brought web's Firestore read/write volume in line with Android's.
 
 The diagnostic that drives this work is `FirestoreUsage` — every read and write is bucketed by operation name and event type (DOC_GET, GET_DOCS, LISTENER_INITIAL_FRESH/CACHED, LISTENER_UPDATE_FRESH/CACHED, LISTENER_LOCAL_ECHO, SET, UPDATE, DELETE, BATCH_COMMIT, TRANSACTION). The "Billed" section of the report shows what the user actually pays for; the "Local-only" section shows cache hits and echoes. If a new operation isn't instrumented, regressions hide.
 

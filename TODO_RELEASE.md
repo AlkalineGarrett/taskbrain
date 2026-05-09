@@ -12,12 +12,6 @@
 
 ## Build
 - [ ] Run `./gradlew assembleRelease` to build the signed APK.
-- [ ] Verify the APK is located at `app/build/outputs/apk/release/app-release.apk`.
 
 ## Testing
 - [ ] Install the release APK on a physical device: `adb install app/build/outputs/apk/release/app-release.apk`
-- [ ] Verify Google Sign-In works (Release SHA-1 fingerprint must be added to Firebase Console).
-- [ ] Verify Firestore access works.
-
-## Deployment
-- [ ] Upload to Google Play Console (if applicable).

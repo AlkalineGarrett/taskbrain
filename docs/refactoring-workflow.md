@@ -1,10 +1,10 @@
 # Refactoring Workflow
 
-The recipe we followed for backlog item #1 (`NoteEditorScreen.tsx` extraction). Apply it to subsequent items so the pattern stays consistent. Each phase has gotchas inline — read them before you trip over them again.
+The recipe we followed for backlog item #1 (`NoteEditorScreen.tsx` extraction). Apply it to subsequent items so the pattern stays consistent. Each phase has gotchas inline.
 
 ## Phase 1 — Audit
 
-- Spawn an `Explore` agent to scan for quality issues (largest files, deepest nesting, mixed concerns, duplication). Give it the refactoring guidance from `CLAUDE.md` so its severity tiering matches the project's bar.
+- Spawn an `Explore` agent to scan for quality issues (largest files, deepest nesting, mixed concerns, duplication). Give it the refactoring guidance from `docs/refactoring-checklist.md` so its severity tiering matches the project's bar.
 - Output: a prioritized list of items, each with file + line numbers and a concrete suggestion.
 - The list lives in `docs/refactoring-backlog.md`. Keep it as a checklist; mark items off as they ship.
 

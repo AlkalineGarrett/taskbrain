@@ -2,53 +2,29 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+This file is loaded on every turn — keep it lean. Subsystem-specific guidance lives in nested `CLAUDE.md` files (auto-loaded when working in that directory) and `docs/*.md` (imported by the relevant subsystem CLAUDE.md). Don't duplicate guidance here; link to it.
+
 ## Project Overview
 
-TaskBrain is a cross-platform ADHD task management app with a Firebase backend and Gemini AI integration. It has two clients:
-- **Android** (Kotlin, Jetpack Compose) — the primary app in `app/`
-- **Web** (TypeScript, React) — in `web/`
+TaskBrain is a cross-platform ADHD task management app with a Firebase backend. It has two clients:
+- **Android app** (Kotlin, Jetpack Compose) — the primary app in `app/`
+- **Web app** (TypeScript, React) — in `web/`
 
-## Build Commands
+## Build commands
 
-```bash
-./gradlew assembleDebug        # Build debug APK
-./gradlew assembleRelease      # Build release APK
-./gradlew test                 # Run unit tests
-./gradlew connectedAndroidTest # Run instrumentation tests
-./gradlew clean                # Clean build
-```
+Build/test/run commands are platform-specific and live in the appropriate subtree (app/ or web/).
 
-Run a single test class:
-```bash
-./gradlew test --tests "org.alkaline.taskbrain.data.NoteLineTrackerTest"
-```
+## Local test environment
 
-## Firebase Emulator (local dev + tests)
-
-The repo ships with `firebase.json` + `firestore.rules.emulator` so the app
-and tests can run against a local Firebase Emulator Suite (Firestore on 8080,
-Auth on 9099, UI on 4000). The emulator path uses anonymous sign-in instead
-of Google Sign-In, so it works without OAuth setup.
+Use the wrapper scripts; **don't invoke `firebase emulators:start` or `emulator -avd …` directly.**
 
 ```bash
-firebase emulators:start                # Terminal A — leave running
-~/Library/Android/sdk/emulator/emulator -avd Medium_Phone_API_36 &> /tmp/avd.log &   # Boot Android AVD in background
-./gradlew connectedAndroidTest -PuseFirebaseEmulator=true     # Run instrumentation tests (installs app + test APKs)
-./gradlew installDebug -PuseFirebaseEmulator=true             # Or install the app only, for manual interactive testing
-VITE_USE_FIREBASE_EMULATOR=true npm --prefix web run dev      # Web: dev server uses emulator
+scripts/test-env-up.sh             # Firebase emulator only (web tests + manual)
+scripts/test-env-up.sh --with-avd  # Adds the Android AVD for instrumentation tests
+scripts/test-env-down.sh           # Tears it all down
 ```
 
-Replace `Medium_Phone_API_36` with whichever AVD `emulator -list-avds`
-returns. Wait for `adb devices` to show the device as `device` (not
-`offline`) before running the gradle tasks.
-
-`-PuseFirebaseEmulator=true` flips a `BuildConfig.USE_FIREBASE_EMULATOR`
-field; `TaskBrainApplication.onCreate` reads it to wire `useEmulator(...)`
-on Firestore + Auth and kick off `signInAnonymously()`. The smoke test
-`CreateNoteFlowTest` self-skips when the flag is off.
-
-Persist emulator data across restarts with
-`firebase emulators:start --import=./emu-data --export-on-exit=./emu-data`.
+Both scripts are idempotent — re-running is a no-op when things are already up. They handle PID files, log paths, AVD readiness, and emulator data persistence so you don't have to remember the exact incantation each time. Platform-specific gradle / vite / vitest invocations against this environment live in the per-platform `CLAUDE.md`.
 
 **Do not run `firebase deploy --only firestore:rules`.** The repo's
 `firebase.json` points the rules path at the *permissive* emulator file —
@@ -57,29 +33,24 @@ in `firestore.rules` and are deployed manually via the Firebase console.
 
 ## Architecture
 
-**Pattern:** MVVM with Jetpack Compose UI
+**Pattern:** MVVM with Jetpack Compose UI on Android; React + hooks on web.
+
+**Data flow:** Compose Screens / React components → ViewModels / hooks → NoteRepository → Firebase Firestore.
 
 **Key directories:**
-- `app/src/main/java/org/alkaline/taskbrain/data/` - Data layer (models, repository, utilities)
-- `app/src/main/java/org/alkaline/taskbrain/ui/` - UI layer (screens, viewmodels, components)
-- `app/src/test/` - Unit tests using JUnit 4 + MockK
+- `app/src/main/java/org/alkaline/taskbrain/data/` — Android data layer (models, repository, NoteStore)
+- `app/src/main/java/org/alkaline/taskbrain/ui/currentnote/` — Android editor + screens
+- `web/src/data/` — web data layer
+- `web/src/editor/` — web editor
+- `web/src/hooks/` — React hooks bridging editor + components
+- `app/src/test/`, `web/src/__tests__/` — unit tests (JUnit 4 + MockK on Android, Vitest on web)
 
-**Data flow:** Compose Screens → ViewModels → NoteRepository → Firebase Firestore
-
-## Core Components
-
-**NoteRepository** (`data/NoteRepository.kt`): All Firestore operations. Uses transactions for atomic updates and Result<T> for error handling.
-
-**NoteLineTracker** (`data/NoteLineTracker.kt`): Maintains stable note IDs across edits. Two-phase matching: exact content match first, then positional fallback. Critical for preserving parent-child relationships when lines are reordered.
-
-**PrompterAgent** (`data/PrompterAgent.kt`): Wraps Gemini AI (gemini-2.5-flash) for note enhancement.
-
-## Important Patterns
+## Foundational invariants (apply everywhere)
 
 **Every line is a Firestore document:**
-- Each editor line — including empty lines — round-trips as its own Firestore doc
-- No auto-appended trailing-empty UI line; no trailing-empty stripping on save
-- New empty lines get a TYPED/SPLIT sentinel noteId at edit time so save can allocate fresh docs for them
+- Each editor line — including empty lines — round-trips as its own Firestore doc.
+- No auto-appended trailing-empty UI line; no trailing-empty stripping on save.
+- New empty lines get a TYPED/SPLIT sentinel noteId at edit time so save can allocate fresh docs for them.
 
 **Line identity invariant (strict structural):**
 - `NoteLine.noteId` is non-nullable (`String` on Android, `string` on web). Every line carries either a real Firestore doc id or a sentinel ("new line, allocate fresh"). The type system enforces this — null arrival is impossible without an `as any` / unsafe cast. Identity is structural, never recovered by content match.
@@ -87,170 +58,35 @@ in `firestore.rules` and are deployed manually via the Firebase console.
 - Sentinels are never content-matched against existing siblings during save — they always allocate fresh docs. Aliasing a typed line to an existing line because their content matches would silently merge two distinct lines into one Firestore doc.
 
 **Note structure in Firestore:**
-- First line = parent note content
-- Additional lines = contained child notes (via `containedNotes` array, ordered list of real document IDs only)
-- An empty-string entry (`""`) in `containedNotes` is data corruption — `reconstructNoteLines` logs it at error level and drops it
-- Deletion is soft (state = "deleted")
+- First line = parent note content.
+- Additional lines = contained child notes (via `containedNotes` array, ordered list of real document IDs only).
+- An empty-string entry (`""`) in `containedNotes` is data corruption — `reconstructNoteLines` logs it at error level and drops it.
+- Deletion is soft (`state = "deleted"`). Soft-delete preserves `parentNoteId` / `rootNoteId` so the deletion can be inspected and undone. See subsystem docs for the per-line `deletionBatchId` design.
 
 **Whitespace semantics:**
-- Empty content string is a real, persisted, addressable line
-- Whitespace-only content ("   ") is also content — same as any other line
+- Empty content string is a real, persisted, addressable line.
+- Whitespace-only content (`"   "`) is also content — same as any other line.
 
-**EditorState is mutable in place (web):**
-- `editorState.lines` is a stable array reference; individual `LineState` objects mutate in place when the user edits
-- React `useMemo` / `useEffect` deps cannot use `editorState.lines` (or anything keyed by its reference) as a trigger — the reference never changes. Key memos on a derived value, e.g. `lines.map(l => l.text).join('\n')`, with `// eslint-disable-next-line react-hooks/exhaustive-deps`
-- This is intentional, not a bug. Don't "fix" it by wrapping `lines.map(...)` in a `useMemo` keyed on `editorState.lines` — the memo would never invalidate
+## When to read which doc
 
-**Active-editor state and ref both exist on purpose (`useActiveEditorSession`):**
-- The `activeSession` state drives renders and derived values; the `activeSessionRef` gives event handlers (keyboard, gutter) a stale-closure-free read at fire time
-- Don't collapse them — removing the ref forces handlers to re-register on every activation; removing the state breaks downstream re-renders
+These triggers live here (not inside the docs) so the agent knows to load them. Don't skip — most of these guard against bugs that have already shipped at least once.
 
-## Testing
+- **Adding or changing a Firestore read/write** → `docs/firestore-efficiency.md` *before* writing the code. Every new read/write must call `firestoreUsage.recordRead` / `recordWrite` for the usage report to catch regressions.
+- **Catching an error / writing a `try`/`catch` / handling a `Result.onFailure`** → `docs/error-handling.md`. The repo's stance on silent failures is unusual (alpha-stage; surface even implementation details), so check before defaulting to "log and move on."
+- **Landing a non-trivial change on either platform** → `docs/cross-platform-parity.md` *before submission*. The two platforms mirror each other (with one documented exception); a feature or fix on one almost always needs porting to the other in the same PR.
+- **Touching the snapshot listener, NoteStore, editor-reload, or directive-cache code** → `docs/live-cross-platform-sync.md`. Three layers with strict responsibilities — getting them wrong leads to either echo loops or stale views.
+- **Adding a method to `EditorController` / `EditorState`, or wiring an `onFocusChanged` / `onSelectionChanged` / `onScroll` callback** → `docs/editor-callback-intent-vs-notification.md`. There's a known IME-storm trap; the rule prevents it.
+- **Adding or changing a mutation that has undo/redo semantics** → `docs/undo-redo-architecture.md`, plus `app/src/main/java/org/alkaline/taskbrain/ui/currentnote/requirements.md` for the full spec.
+- **Starting a refactor** → `docs/refactoring-workflow.md` (process), `docs/refactoring-checklist.md` (what to look for), `docs/refactoring-backlog.md` (tracked items).
+- **Working on alarms / a feature listed in a `requirements.md`** → that requirements file, plus the relevant `docs/*.md` (e.g., `alarm-requirements.md`, `paste-requirements.md`).
 
-Tests use MockK for mocking and `runTest` for coroutines. Key test files:
-- `NoteLineTrackerTest.kt` - Line ID preservation logic
-- `NoteRepositoryTest.kt` - Repository operations with mocked Firestore
+## Subsystem-specific guidance
 
-## Dependencies
+These auto-load via nested `CLAUDE.md` when you're working in the subtree:
 
-Versions managed in `gradle/libs.versions.toml`. Key stack:
-- Kotlin 2.1.0, Compose, Material 3
-- Firebase (Auth, Firestore, AI)
-- Google Sign-In with Credential Manager
+- **Editor (Android):** `app/src/main/java/org/alkaline/taskbrain/ui/currentnote/CLAUDE.md`
+- **Editor (web):** `web/src/editor/CLAUDE.md`
+- **Data layer (Android):** `app/src/main/java/org/alkaline/taskbrain/data/CLAUDE.md`
+- **Data layer (web):** `web/src/data/CLAUDE.md`
+- **React hooks (web):** `web/src/hooks/CLAUDE.md`
 
-## Release
-
-See `TODO_RELEASE.md` for signing configuration. Requires environment variables: `RELEASE_STORE_FILE`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`.
-
-## Development guidance
-
-### Project requirements
-
-Consult the following files to understand project requirements:
-
-- .md files under docs/
-- files name requirements.md in the source tree
-
-### Firestore Efficiency
-
-Read `docs/firestore-efficiency.md` before adding any Firestore read or write. It documents the listener-backed-cache pattern, when to wait for the listener vs. fall back to `getDoc`, why dedup checks must read persistent state (not React/Compose state), and the instrumentation requirement. Every new read/write must call `firestoreUsage.recordRead`/`recordWrite` so regressions surface in the usage report.
-
-### Undo/Redo Considerations
-
-**Architecture**: All discrete editing operations must flow through `EditorController`, which handles undo boundary management via an operation-based system:
-
-1. **EditorController** is the single channel for state modifications (mutation methods on `EditorState` are `internal`)
-2. **OperationType enum** classifies operations: `COMMAND_BULLET`, `COMMAND_CHECKBOX`, `COMMAND_INDENT`, `PASTE`, `CUT`, `DELETE_SELECTION`, `CHECKBOX_TOGGLE`, `ALARM_SYMBOL`
-3. **Operation executor** (`executeOperation`) wraps operations with proper pre/post undo handling
-
-**When adding new operations that modify editor content:**
-- Add a new `OperationType` if it has distinct undo semantics
-- Add a method to `EditorController` that wraps the operation with `executeOperation()`
-- Call the controller method from UI code (never call `EditorState` mutation methods directly)
-
-**Key questions to ask the developer:**
-- Should this operation create its own undo boundary, or be grouped with adjacent edits?
-- For command bar buttons: should consecutive presses be grouped (like indent) or separate (like bullet)?
-- If the operation creates side effects (like alarms), should those be undoable?
-- Does the operation need special handling for redo (e.g., recreating external resources)?
-
-See `ui/currentnote/requirements.md` for full undo/redo specification and implementation details.
-
-### Editor Focus Events (Android)
-
-`EditorController` exposes two focus methods that look similar but mean different things. **Picking the wrong one causes an infinite loop that pumps the IME ~100 Hz and gets the activity killed by the watchdog.**
-
-- **`markLineFocused(index)`** — *Notification:* "the system reports that this line just gained focus." Updates `focusedLineIndex` and the undo boundary; does **not** bump `focusVersion`. Call this from `onFocusChanged` callbacks.
-- **`focusLine(index)`** — *Intent:* "I want focus to move to this line." Calls `markLineFocused` AND bumps `focusVersion`, which fires the focus-grabbing `LaunchedEffect`. Call this when *programmatically* moving focus (e.g., after a paste, after a load).
-
-The trap: `LaunchedEffect(focusVersion)` calls `focusRequester.requestFocus()`, which fires `onFocusChanged(true)`. If `onFocusChanged` calls a method that bumps `focusVersion`, the effect re-fires, calling `requestFocus` again, and the loop pumps until something else stops it. The general rule:
-
-> **A method called from a "system says X happened" callback must not, as a side effect, request that X happen again.**
-
-Applies to focus, selection, scroll, IME composition — any system-driven event. When you write a new mutator on `EditorController` or `EditorState`, decide up front whether it's intent (bump `focusVersion`/`stateVersion`) or notification (don't), and split it if it's both.
-
-The same principle drove the `focusVersion` / `stateVersion` split (passive content bumps shouldn't re-grab IME) — keep that split honored on **both** the read side (`LaunchedEffect` keys) and the write side (which counter a mutator bumps).
-
-### Error Handling and User Feedback
-
-The app should generally inform users when problems occur rather than silently failing or recovering:
-- **Show warning dialogs** when operations fail or produce unexpected results, even if the app can recover automatically
-- **Explain what happened** in user-friendly terms, including what automatic recovery was attempted
-- **Indicate potential inconsistency** if recovery may have left things in a partial state (e.g., "Consider saving and reloading")
-- Use `AlertDialog` for warnings; see existing patterns in `CurrentNoteScreen.kt` (e.g., `redoRollbackWarning`, `schedulingWarning`)
-
-This principle applies especially to:
-- Failed async operations (Firebase, alarms, etc.)
-- Automatic rollbacks or cleanup after failures
-- Permission issues that affect functionality
-
-**Never silently swallow errors:**
-- Do not use empty `catch` blocks, `/* ignore */` comments, or `.getOrNull()` without handling the failure case
-- Every `.onFailure` / `catch` must either propagate the error to a caller that surfaces it, or surface it directly
-- In ViewModels: set error state (e.g., `_alarmError.value`) that the UI observes
-- In BroadcastReceivers / background services: use `AlarmErrorActivity.show(context, title, message)` to display errors
-- Logging (`Log.e`) alone is not sufficient — errors must be user-visible
-
-### Cross-Platform Consistency (Android ↔ Web)
-
-The Android and web apps share the same Firebase backend and should present a consistent UI. Two pairs of files are the source of truth for keeping them in sync:
-
-**Colors:**
-- Android: `app/src/main/res/values/colors.xml` (defines titlebar, action, and theme colors)
-- Web: `web/src/index.css` `:root` block (CSS custom properties with comments mapping to Android names)
-- All web CSS modules use `var(--color-*)` — never hardcode hex colors in `.module.css` files
-
-**Strings:**
-- Android: `app/src/main/res/values/strings.xml` (all user-facing text)
-- Web: `web/src/strings.ts` (all user-facing text, with comments mapping to Android resource names)
-- Android composables use `stringResource(R.string.*)` — never hardcode user-facing text in Kotlin UI code
-- Web components import from `@/strings` — never hardcode user-facing text in TSX files
-
-**When adding new UI text or colors:**
-1. Add the string/color to the Android resource file first (it's the canonical source)
-2. Add the corresponding entry to the web file (`strings.ts` or `index.css`)
-3. Reference via `stringResource()` / `var(--color-*)` / imported constant — never inline
-
-**When modifying existing text or colors:**
-1. Update both the Android resource file and the web counterpart
-2. Search for any remaining hardcoded instances on both platforms
-
-### Live Cross-Platform Sync
-
-Both platforms sync note changes in real time via Firestore snapshot listeners. The architecture has three layers with distinct responsibilities:
-
-**NoteStore (data layer):** Always reflects Firestore truth. No filtering — `rawNotes` updated, `_notes` rebuilt, `changedNoteIds` emitted for every incremental snapshot. The NoteStore does NOT suppress or delay any changes. There is no hot/cool mechanism.
-
-**Editor (UI layer):** Decides whether to reload based on guards:
-- `dirty` flag (Android) / `dirtyRef` (web): skip reload while user has unsaved edits
-- `savingRef` (web): skip during save-in-progress
-- Content equality: skip when Firestore echo matches current content (natural echo suppression)
-
-**Directive cache (view directives):** Two invalidation mechanisms work together when notes change:
-1. `invalidateForChangedNotes(changedIds)`: eagerly clears cache entries for the changed notes themselves (per-note)
-2. `bumpDirectiveCacheGeneration()`: forces `computeDirectiveResults` to re-run, where the `StalenessChecker` detects cross-note staleness (e.g., note A's `[view B]` directive is stale because B changed)
-
-**Critical invariant:** The generation bump MUST be unconditional. Do not gate it on whether `invalidateForChangedNotes` found entries to clear. Per-note clearing only handles direct entries; cross-note dependencies (view directives referencing other notes) rely on staleness checks at lookup time, which only run when `computeDirectiveResults` re-executes via the generation bump.
-
-**Embedded note editors (view directives):** Must update content in place on the same `EditorState` instance — never recreate the session on external changes. Session recreation orphans the Android IME connection, causing the focused line to render empty text. Use `initFromNoteLines(preserveCursor=true)` on the existing session, matching the main editor's pattern.
-
-**Edit session lifecycle:** The `EditSessionManager` suppresses staleness checking for the originating note during inline editing. The inline save success path MUST call `endInlineEditSession()` to lift this suppression — otherwise subsequent external changes are permanently blocked from reaching the directive cache.
-
-### Refactoring
-
-- The end-to-end workflow (audit → plan → extract → test → simplify → document) lives in `docs/refactoring-workflow.md`. Read it before starting a backlog item.
-- The backlog of identified items lives in `docs/refactoring-backlog.md`.
-- Do the following when refactoring:
-  - Look to make the code and design "elegant"
-  - Consolidate repetition of code
-  - Consolidate repetition of patterns based on the same concept
-    - If the same groupings of parameters are passed around in multiple places, encapsulate them
-  - Break apart long functions (anything longer than 50 lines is suspicious; the more indented, the more it needs to be broken apart)
-  - Break apart long files
-  - Avoid deeply nested code (anything 4 or more levels deep is suspicious, especially the more lines of code it is)
-  - Make sure each unit (file, function, class) has a clear responsibility and not multiple, and at a single level of granularity (think: don't combine paragraph work with character work)
-  - Define constants or config instead of hard-coded numbers
-  - Move logic out of display classes
-  - Look for ways that different use cases have slightly different logic, when there is no inherent reason for them to be different, and merge them
-  - Decouple units by using callbacks, etc so that classes refer to each other directly less often
-  - Look for places with too many edge cases and come up with more robust, general logic instead
