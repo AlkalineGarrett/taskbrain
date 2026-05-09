@@ -28,6 +28,7 @@ function makeNote(id: string, overrides: Partial<Note> = {}): Note {
     showCompleted: true,
     onceCache: {},
     containedNotesBase: null,
+    deletionBatchId: null,
     ...overrides,
   }
 }

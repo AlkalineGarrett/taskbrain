@@ -461,7 +461,11 @@ export class NoteStore {
   getNoteLinesById(noteId: string): NoteLine[] | undefined {
     const note = this.rawNotes.get(noteId)
     if (!note) return undefined
-    const childrenByParent = indexChildrenByParent(this.rawNotes)
+    // When the note itself is deleted, the strays loop in reconstruction
+    // needs DELETED children whose deletionBatchId matches the parent's —
+    // they were part of the same delete.
+    const includeBatch = !isLive(note.state) ? note.deletionBatchId : null
+    const childrenByParent = indexChildrenByParent(this.rawNotes, includeBatch)
     const [lines, fixed] = reconstructNoteLines(note, this.rawNotes, childrenByParent)
     // Keep the editor view in sync with rebuildAffected: if the shared walk
     // dropped a declared child (missing from rawNotes — typically a fresh

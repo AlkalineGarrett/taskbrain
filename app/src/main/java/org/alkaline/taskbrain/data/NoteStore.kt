@@ -2,6 +2,7 @@ package org.alkaline.taskbrain.data
 
 import android.util.Log
 import com.google.firebase.firestore.DocumentChange
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.CompletableDeferred
@@ -172,7 +173,7 @@ object NoteStore {
                     snapshot.documents.size,
                 )
                 handleFirstSnapshot(snapshot.documents.mapNotNull { doc ->
-                    parseNote(doc.id, doc.data)
+                    parseNote(doc)
                 })
             } else {
                 FirestoreUsage.recordRead(
@@ -376,7 +377,11 @@ object NoteStore {
     fun getNoteLinesById(noteId: String): List<NoteLine>? {
         val (lines, fixed) = rawNotesLock.read {
             val rootNote = rawNotes[noteId] ?: return null
-            val childrenByParent = indexChildrenByParent(rawNotes)
+            // When the note itself is deleted, the strays loop in
+            // reconstruction needs DELETED children whose deletionBatchId
+            // matches the parent's — they were part of the same delete.
+            val includeBatch = if (!isLive(rootNote.state)) rootNote.deletionBatchId else null
+            val childrenByParent = indexChildrenByParent(rawNotes, includeBatch)
             reconstructNoteLines(rootNote, rawNotes, childrenByParent)
         }
         // Keep the editor view in sync with rebuildAffected: if the shared walk
@@ -461,7 +466,7 @@ object NoteStore {
             for (change in changes) {
                 if (change.document.metadata.hasPendingWrites()) continue
 
-                val note = parseNote(change.document.id, change.document.data) ?: continue
+                val note = parseNote(change.document) ?: continue
                 val rootId = note.rootNoteId ?: note.id
 
                 if (change.type == DocumentChange.Type.REMOVED) {
@@ -593,28 +598,23 @@ object NoteStore {
     )
 
     @Suppress("UNCHECKED_CAST")
-    private fun parseNote(id: String, data: Map<String, Any>?): Note? {
-        if (data == null) return null
+    /**
+     * Snapshot doc → [Note]. Delegates to Firestore's POJO mapper so new
+     * fields on [Note] are picked up automatically via reflection on the
+     * data class — no parallel hand-rolled parser to keep in sync.
+     *
+     * History: this used to be a manual `Map<String, Any>` extractor. Adding
+     * `deletionBatchId` exposed the maintenance hazard — the manual parser
+     * silently dropped the new field, breaking the deleted-parent
+     * reconstruction path. The mapper here calls the same code that
+     * `NoteRepository.toObject(Note::class.java)` already used elsewhere.
+     */
+    private fun parseNote(doc: DocumentSnapshot): Note? {
         return try {
-            Note(
-                id = id,
-                userId = data["userId"] as? String ?: "",
-                parentNoteId = data["parentNoteId"] as? String,
-                content = data["content"] as? String ?: "",
-                createdAt = data["createdAt"] as? com.google.firebase.Timestamp,
-                updatedAt = data["updatedAt"] as? com.google.firebase.Timestamp,
-                tags = data["tags"] as? List<String> ?: emptyList(),
-                containedNotes = data["containedNotes"] as? List<String> ?: emptyList(),
-                state = data["state"] as? String,
-                path = data["path"] as? String ?: "",
-                rootNoteId = data["rootNoteId"] as? String,
-                showCompleted = data["showCompleted"] as? Boolean ?: true,
-                onceCache = (data["onceCache"] as? Map<String, Map<String, Any>>) ?: emptyMap(),
-                containedNotesBase = data["containedNotesBase"] as? List<String>,
-            )
+            doc.toObject(Note::class.java)?.copy(id = doc.id)
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing note $id", e)
-            _error.value = "Failed to parse note $id: ${e.message}"
+            Log.e(TAG, "Error parsing note ${doc.id}", e)
+            _error.value = "Failed to parse note ${doc.id}: ${e.message}"
             null
         }
     }

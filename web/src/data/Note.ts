@@ -26,6 +26,18 @@ export interface Note {
    * when the writing save didn't stage a merge-eligible change.
    */
   containedNotesBase: string[] | null
+  /**
+   * Source-tagged batch identifier stamped when this note's `state` flips
+   * to a removed state (DELETED). Format: `<source>_<uuid>` — e.g.
+   * `whole-note_<uuid>` for `softDeleteNote`, `selection-delete_<uuid>`
+   * for an editor selection-delete. Notes deleted as part of the same
+   * operation share the same id; later operations get fresh ids. Used by
+   * reconstruction (children with matching id are part of the same delete
+   * batch), by undelete (scope the restore set), and by forensics
+   * (`unknown_*` flags an uninstrumented removal path). Cleared on
+   * undelete so a re-delete starts a fresh batch.
+   */
+  deletionBatchId: string | null
 }
 
 /**
@@ -69,5 +81,6 @@ export function noteFromFirestore(id: string, data: Record<string, unknown>): No
     showCompleted: (data.showCompleted as boolean) ?? true,
     onceCache: (data.onceCache as Record<string, Record<string, unknown>>) ?? {},
     containedNotesBase: (data.containedNotesBase as string[]) ?? null,
+    deletionBatchId: (data.deletionBatchId as string) ?? null,
   }
 }

@@ -15,6 +15,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import org.alkaline.taskbrain.dsl.directives.DirectiveFinder
@@ -363,6 +364,10 @@ internal fun LineGutter(
         modifier = modifier
             .width(EditorConfig.GutterWidth)
             .gutterPointerInputWithLayouts(layoutData, directiveEditHeights, callbacks)
+            // Test-only handle. UI tests address the gutter as a whole and
+            // tap at relative offsets to select specific lines (the gutter
+            // has no per-line semantics or content descriptions to grab).
+            .testTag("editor-gutter")
     ) {
         GutterContent(
             lineCount = state.lines.size,

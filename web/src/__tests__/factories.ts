@@ -19,6 +19,7 @@ export function note(overrides: Partial<Note> & { id: string }): Note {
     showCompleted: true,
     onceCache: {},
     containedNotesBase: null,
+    deletionBatchId: null,
     ...overrides,
   }
 }

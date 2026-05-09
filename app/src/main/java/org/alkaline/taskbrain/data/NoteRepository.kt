@@ -206,14 +206,27 @@ class NoteRepository(
             .whereEqualTo("userId", userId)
             .get().await()
 
-        val descendants = descendantDocs.mapNotNull { doc ->
+        val parsed = descendantDocs.mapNotNull { doc ->
             try {
                 doc.toObject(Note::class.java).copy(id = doc.id)
             } catch (e: Exception) {
                 Log.e(TAG, "Error parsing descendant", e)
                 null
             }
-        }.filter { isLive(it.state) }
+        }
+        // Include same-batch deleted descendants when the note itself is
+        // deleted, mirroring NoteStore.getNoteLinesById. Live notes only
+        // see live descendants.
+        val noteDeleted = !isLive(note.state)
+        val noteBatchId = note.deletionBatchId
+        val descendants = parsed.filter {
+            isLive(it.state) || (
+                noteDeleted &&
+                    it.state == NoteState.DELETED &&
+                    noteBatchId != null &&
+                    it.deletionBatchId == noteBatchId
+            )
+        }
         FirestoreUsage.recordRead("loadNoteLines", FirestoreUsage.ReadType.GET_DOCS, descendants.size)
 
         if (descendants.isEmpty()) {
@@ -378,6 +391,11 @@ class NoteRepository(
         val noteId: String,
         val trackedLines: List<NoteLine>,
         val localBases: Map<String, List<String>>?,
+        /** Per-line deletion source recorded by the editor (noteId → source).
+         *  Used by the save planner to stamp source-tagged deletionBatchIds
+         *  on this item's `toDelete` set. Empty when no source-recording
+         *  removals happened in this session. */
+        val deletionSources: Map<String, DeletionSource> = emptyMap(),
     )
 
     /**
@@ -401,6 +419,11 @@ class NoteRepository(
          *  Empty for single-note saves where cross-session coordination
          *  doesn't apply. */
         val globalSurvivingIds: Set<String>,
+        /** Per-line deletion source contributed by the editor (noteId →
+         *  source). Lines in this save's toDelete look up their source here;
+         *  unmatched ids fall back to UNKNOWN. Empty when the caller didn't
+         *  instrument the editor's removal sites. */
+        val deletionSources: Map<String, DeletionSource> = emptyMap(),
     )
 
     /**
@@ -420,11 +443,12 @@ class NoteRepository(
         trackedLines: List<NoteLine>,
         extraOpsBuilder: ExtraOpsBuilder?,
         localBases: Map<String, List<String>>?,
+        deletionSources: Map<String, DeletionSource> = emptyMap(),
     ): Result<SaveResult> = ioLogged("saveNoteWithChildren") body@{
         if (trackedLines.isEmpty()) return@body SaveResult(emptyMap(), emptyMap())
         val userId = requireUserId()
         // Single-note save: no cross-session reparent coordination needed.
-        val ctx = SaveContext(userId, NoteStore.getPendingCuts(), emptySet())
+        val ctx = SaveContext(userId, NoteStore.getPendingCuts(), emptySet(), deletionSources)
         val plan = planSaveNoteWithChildren(
             noteId, trackedLines, extraOpsBuilder, localBases, ctx,
         )
@@ -455,7 +479,7 @@ class NoteRepository(
             .map { it.noteId }
             .filter { NoteIdSentinel.isRealNoteId(it) }
             .toSet()
-        val ctx = SaveContext(
+        val baseCtx = SaveContext(
             userId,
             NoteStore.getPendingCuts(),
             globalSurvivingIds,
@@ -465,10 +489,11 @@ class NoteRepository(
             .map { item ->
                 planSaveNoteWithChildren(
                     item.noteId, item.trackedLines, extraOpsBuilder = null,
-                    localBases = item.localBases, ctx = ctx,
+                    localBases = item.localBases,
+                    ctx = baseCtx.copy(deletionSources = item.deletionSources),
                 )
             }
-        val cutDelete = buildCutDeleteOps(plans.map { it.survivingIds }, ctx)
+        val cutDelete = buildCutDeleteOps(plans.map { it.survivingIds }, baseCtx)
         val allOps = plans.flatMap { it.ops } + cutDelete.ops
         commitInBatches("saveMultipleNotes", allOps)
         for (id in cutDelete.committedCutIds) NoteStore.clearPendingCut(id)
@@ -745,12 +770,21 @@ class NoteRepository(
 
         // Soft-delete removed notes. Preserve parentNoteId/rootNoteId so the
         // deleted-notes view can distinguish removed child lines (have a parent)
-        // from deleted top-level notes (don't).
+        // from deleted top-level notes (don't). Group by deletion source so
+        // each source within this save gets its own batchId; lines without a
+        // recorded source fall back to UNKNOWN (an `unknown_*` batchId in
+        // the data flags an uninstrumented removal path — drive to zero).
+        val batchIdsBySource = HashMap<DeletionSource, String>()
         for (id in toDelete) {
+            val source = ctx.deletionSources[id] ?: DeletionSource.UNKNOWN
+            val batchId = batchIdsBySource.getOrPut(source) {
+                DeletionSource.newBatchId(source)
+            }
             ops.add(BatchOp(
                 noteRef(id),
                 mapOf(
                     "state" to NoteState.DELETED,
+                    "deletionBatchId" to batchId,
                     "updatedAt" to FieldValue.serverTimestamp(),
                 ),
                 merge = true
@@ -940,19 +974,56 @@ class NoteRepository(
         assertNoteStoreLoaded("softDeleteNote", noteId)
         warnIfDescendantsLikelyStale("softDeleteNote", noteId)
         val idsToDelete = NoteStore.getDescendantIds(noteId) + noteId
-        commitInBatches("softDeleteNote", buildStateChangeOps(idsToDelete, NoteState.DELETED))
+        val batchId = DeletionSource.newBatchId(DeletionSource.WHOLE_NOTE)
+        commitInBatches(
+            "softDeleteNote",
+            buildStateChangeOps(idsToDelete, NoteState.DELETED, batchId),
+        )
     }
 
     /**
      * Restores a deleted note and all its descendants.
      */
     suspend fun undeleteNote(noteId: String): Result<Unit> = ioLogged("undeleteNote") {
-        requireUserId()
+        val userId = requireUserId()
         assertNoteStoreLoaded("undeleteNote", noteId)
         // Skip warnIfDescendantsLikelyStale: a deleted note's containedNotes
         // only lists active children, so it can't detect missing soft-deleted
         // descendants — the heuristic doesn't apply here.
-        val idsToRestore = NoteStore.getAllDescendantIds(noteId) + noteId
+        //
+        // Read root + descendants from Firestore — NOT from NoteStore.
+        // Reason: the Firestore listener that updates NoteStore can lag the
+        // actual Firestore state by a snapshot tick. A user clicking
+        // Restore right after Delete can observe a stale NoteStore where
+        // the just-committed softDelete hasn't propagated; rootBatchId
+        // would read as null, falling into the legacy "restore everything"
+        // path and resurrecting older-deleted descendants. One extra doc
+        // read + one descendant query per restore is a fine cost to pay
+        // for race-free correctness.
+        val rootSnap = noteRef(noteId).get().await()
+        FirestoreUsage.recordRead("undeleteNote", FirestoreUsage.ReadType.DOC_GET)
+        val rootBatchId = rootSnap.getString("deletionBatchId")
+        val idsToRestore: Set<String> = if (rootBatchId != null) {
+            // Scope the restore to descendants from the same delete batch.
+            // Older-deleted children (different batchId) stay deleted —
+            // they weren't part of this delete operation; bringing them
+            // back would resurrect notes the user removed on purpose.
+            val descendantsSnap = notesCollection
+                .whereEqualTo("userId", userId)
+                .whereEqualTo("rootNoteId", noteId)
+                .whereEqualTo("deletionBatchId", rootBatchId)
+                .get().await()
+            FirestoreUsage.recordRead(
+                "undeleteNote", FirestoreUsage.ReadType.GET_DOCS, descendantsSnap.size(),
+            )
+            descendantsSnap.documents.map { it.id }.toSet() + noteId
+        } else {
+            // Legacy deletes pre-batchId have no `deletionBatchId`. Restore
+            // every descendant — preserves pre-feature behavior. NoteStore
+            // is fine here: a legacy deletion is by definition not racing
+            // with a just-fired softDelete.
+            NoteStore.getAllDescendantIds(noteId) + noteId
+        }
         commitInBatches("undeleteNote", buildStateChangeOps(idsToRestore, null))
     }
 
@@ -1259,20 +1330,33 @@ class NoteRepository(
     private fun buildStateChangeOps(
         ids: Iterable<String>,
         newState: String?,
+        deletionBatchId: String? = null,
     ): List<BatchOp> {
+        // Stamp `deletionBatchId` only when entering DELETED; clear it on
+        // any other transition (LIVE on undelete, CUT_DELETE on park) so a
+        // subsequent re-delete starts a fresh batch. Pass-through writes
+        // (newState == DELETED with a null batchId) shouldn't happen but
+        // we tolerate them — the field just stays whatever it was.
+        val data: Map<String, Any?> = when {
+            newState == NoteState.DELETED && deletionBatchId != null -> mapOf(
+                "state" to newState,
+                "deletionBatchId" to deletionBatchId,
+                "updatedAt" to FieldValue.serverTimestamp(),
+            )
+            newState == NoteState.DELETED -> mapOf(
+                "state" to newState,
+                "updatedAt" to FieldValue.serverTimestamp(),
+            )
+            else -> mapOf(
+                "state" to newState,
+                "deletionBatchId" to null,
+                "updatedAt" to FieldValue.serverTimestamp(),
+            )
+        }
         val ops = mutableListOf<BatchOp>()
         for (id in ids) {
             if (NoteStore.getRawNoteById(id) == null) continue
-            ops.add(
-                BatchOp(
-                    noteRef(id),
-                    mapOf(
-                        "state" to newState,
-                        "updatedAt" to FieldValue.serverTimestamp(),
-                    ),
-                    merge = true,
-                ),
-            )
+            ops.add(BatchOp(noteRef(id), data, merge = true))
         }
         return ops
     }

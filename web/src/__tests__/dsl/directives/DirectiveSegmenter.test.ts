@@ -327,6 +327,7 @@ const dummyNote: Note = {
   tags: [], containedNotes: [], state: null, path: '/test',
   rootNoteId: null, showCompleted: true, onceCache: {},
   containedNotesBase: null,
+    deletionBatchId: null,
 }
 
 describe('isViewSegment', () => {

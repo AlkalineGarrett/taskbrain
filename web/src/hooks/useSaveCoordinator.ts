@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { doc, updateDoc } from 'firebase/firestore'
 import type { NoteLine } from '@/data/Note'
 import { NoteRepository, type SaveResult } from '@/data/NoteRepository'
+import { DeletionSource } from '@/data/DeletionSource'
 import { noteStore } from '@/data/NoteStore'
 import { firestoreUsage } from '@/data/FirestoreUsage'
 import type { InlineEditSession } from '@/editor/InlineEditSession'
@@ -16,6 +17,7 @@ interface UseSaveCoordinatorOptions {
   prepareMainSaveItem: (targetNoteId: string) => {
     trackedLines: NoteLine[]
     localBases: Map<string, string[]> | null
+    deletionSources: Map<string, DeletionSource>
     text: string
     applyResult: (result: SaveResult) => void
   }
@@ -35,6 +37,7 @@ interface SaveSlot {
   noteId: string
   trackedLines: NoteLine[]
   localBases: Map<string, string[]> | null
+  deletionSources: Map<string, DeletionSource>
   applyResult: (result: SaveResult) => void
 }
 
@@ -131,6 +134,7 @@ export function useSaveCoordinator({
           noteId,
           trackedLines: main.trackedLines,
           localBases: main.localBases,
+          deletionSources: main.deletionSources,
           applyResult: main.applyResult,
         })
         noteStore.updateContentIfChanged(noteId, main.text)
@@ -150,6 +154,7 @@ export function useSaveCoordinator({
             noteId: session.noteId,
             trackedLines: tracked,
             localBases: session.getLocalBases(),
+            deletionSources: session.controller.consumePendingSoftDeletes(),
             applyResult: (result) => {
               session.applyCreatedIds(result.createdIds)
               session.markSaved(content)
@@ -168,6 +173,7 @@ export function useSaveCoordinator({
         noteId: s.noteId,
         trackedLines: s.trackedLines,
         localBases: s.localBases,
+        deletionSources: s.deletionSources,
       }))
       const savePromise = noteStore.enqueueSave(() => noteRepo.saveMultipleNotes(items))
       // Single-promise fan-out: every dirty noteId sees the batch in

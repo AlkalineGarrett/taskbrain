@@ -19,6 +19,7 @@ function makeNote(id: string, path: string): Note {
     showCompleted: true,
     onceCache: {},
     containedNotesBase: null,
+    deletionBatchId: null,
   }
 }
 

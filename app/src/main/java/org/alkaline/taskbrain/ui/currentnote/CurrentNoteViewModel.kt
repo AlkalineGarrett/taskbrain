@@ -30,6 +30,7 @@ import org.alkaline.taskbrain.service.AlarmStateManager
 import org.alkaline.taskbrain.service.RecurrenceConfigMapper
 import org.alkaline.taskbrain.service.RecurrenceTemplateManager
 import org.alkaline.taskbrain.ui.currentnote.components.RecurrenceConfig
+import org.alkaline.taskbrain.data.DeletionSource
 import org.alkaline.taskbrain.data.NoteLine
 import org.alkaline.taskbrain.data.NoteRepository
 import org.alkaline.taskbrain.data.NoteStatsRepository
@@ -884,7 +885,8 @@ class CurrentNoteViewModel @JvmOverloads constructor(
      */
     fun saveAll(
         trackedLines: List<NoteLine>,
-        dirtySessions: List<InlineEditSession>
+        dirtySessions: List<InlineEditSession>,
+        deletionSources: Map<String, DeletionSource> = emptyMap(),
     ) {
         // Trigger trace. Saves come from several call sites: the Save
         // button, tab switches, lifecycle ON_STOP, DisposableEffect
@@ -934,7 +936,9 @@ class CurrentNoteViewModel @JvmOverloads constructor(
         viewModelScope.launch {
             try {
                 val items = mutableListOf<NoteRepository.SaveItem>()
-                items.add(NoteRepository.SaveItem(savedNoteId, trackedLines, currentLocalBases))
+                items.add(NoteRepository.SaveItem(
+                    savedNoteId, trackedLines, currentLocalBases, deletionSources,
+                ))
 
                 // Pre-build each dirty inline session's tracked lines in
                 // parallel: a NoteStore miss falls through to loadNoteWithChildren
@@ -954,6 +958,7 @@ class CurrentNoteViewModel @JvmOverloads constructor(
                 for ((session, tracked) in inlinePairs) {
                     items.add(NoteRepository.SaveItem(
                         session.noteId, tracked, session.getLocalBases(),
+                        session.controller.consumePendingSoftDeletes(),
                     ))
                 }
 

@@ -44,6 +44,7 @@ function makeNote(overrides: Partial<Note> & { id: string; content: string }): N
     path: '',
     onceCache: {},
     containedNotesBase: null,
+    deletionBatchId: null,
     tags: [],
   } as Note
 }

@@ -2,6 +2,7 @@ package org.alkaline.taskbrain.ui.currentnote
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.snapshots.Snapshot
+import org.alkaline.taskbrain.data.DeletionSource
 import org.alkaline.taskbrain.data.NoteIdSentinel
 import org.alkaline.taskbrain.data.NoteStore
 import org.alkaline.taskbrain.ui.currentnote.undo.CommandType
@@ -325,6 +326,12 @@ class EditorController(
         val parsed = ClipboardParser.parse(plainText, html)
         val cutLines = sharedCutLines
         sharedCutLines = emptyList()
+        // Pre-record selection lines so PasteHandler's "replace the selection"
+        // semantics tag any genuinely-removed ids. Lines that the new paste
+        // re-claims (same id reappears) survive — the stale tag is harmless.
+        if (state.hasSelection) {
+            recordRemovalForRange(state.getSelectedLineRange(), DeletionSource.PASTE_REPLACE)
+        }
         val result = PasteHandler.execute(
             state.lines.toList(),
             state.focusedLineIndex,
@@ -413,6 +420,46 @@ class EditorController(
         state.dropCursorLineIndex = null
     }
 
+    // =========================================================================
+    // Deletion-source tracking
+    // =========================================================================
+
+    /**
+     * Per-line deletion source for the next save. Every line-removal site
+     * in the editor records its source here before mutating state; the
+     * save layer reads this map to stamp source-tagged `deletionBatchId`s
+     * onto the docs in its `toDelete` set.
+     *
+     * Stale entries (a tagged id that ends up surviving — e.g. a moved
+     * selection that re-attaches at the drop target) are harmless: the
+     * save only consults the map for ids it's already decided to delete.
+     */
+    private val pendingSoftDeletes = mutableMapOf<String, DeletionSource>()
+
+    /** Consume and clear the tracker. Called by the ViewModel at save time. */
+    fun consumePendingSoftDeletes(): Map<String, DeletionSource> {
+        val out = pendingSoftDeletes.toMap()
+        pendingSoftDeletes.clear()
+        return out
+    }
+
+    /** Discard any tracked entries — used when the editor is re-initialized for a new note. */
+    fun resetPendingSoftDeletes() {
+        pendingSoftDeletes.clear()
+    }
+
+    private fun recordRemoval(noteIds: Iterable<String>, source: DeletionSource) {
+        for (id in noteIds) {
+            if (NoteIdSentinel.isRealNoteId(id)) pendingSoftDeletes[id] = source
+        }
+    }
+
+    private fun recordRemovalForRange(range: IntRange, source: DeletionSource) {
+        val last = range.last.coerceAtMost(state.lines.lastIndex)
+        if (range.first < 0 || last < range.first) return
+        for (i in range.first..last) recordRemoval(state.lines[i].noteIds, source)
+    }
+
     /**
      * Move the current selection to [targetGlobalOffset] (drop position).
      * Mirrors `EditorController.moveSelectionTo` on web.
@@ -452,6 +499,10 @@ class EditorController(
             // line over a multi-child note → content-drop guard trips).
             Snapshot.withMutableSnapshot {
                 val range = state.getSelectedLineRange()
+                // Most cuts re-attach via PasteHandler.execute's reuse, so they
+                // won't end up in toDelete; tagging them is a safety net for
+                // edge cases where a moved id ends up genuinely removed.
+                recordRemovalForRange(range, DeletionSource.MOVE)
                 val cutLines = state.lines.subList(range.first, range.last + 1)
                     .map { LineState(it.text, noteIds = it.noteIds.toList()) }
                 for (line in cutLines) {
@@ -550,6 +601,7 @@ class EditorController(
     fun deleteSelectionWithUndo() {
         if (!state.hasSelection) return
         executeOperation(OperationType.DELETE_SELECTION) {
+            recordRemovalForRange(state.getSelectedLineRange(), DeletionSource.SELECTION_DELETE)
             state.deleteSelectionInternal()
         }
     }
@@ -770,6 +822,7 @@ class EditorController(
     fun deleteBackward(lineIndex: Int) {
         // If there's a selection, delete it
         if (state.hasSelection) {
+            recordRemovalForRange(state.getSelectedLineRange(), DeletionSource.SELECTION_DELETE)
             state.deleteSelectionInternal()
             undoManager.markContentChanged()
             return
@@ -787,17 +840,26 @@ class EditorController(
 
             when {
                 // Previous has content: merge current's content onto previous
-                previousHasContent -> mergeToPreviousLine(lineIndex, target)
+                previousHasContent -> {
+                    recordRemoval(line.noteIds, DeletionSource.BACKSPACE_MERGE)
+                    mergeToPreviousLine(lineIndex, target)
+                }
                 // Previous empty, current has content: delete the empty previous line
-                currentHasContent -> deleteLineAndMergeIds(
-                    survivor = line, other = previousLine,
-                    removeIndex = target, focusIndex = target
-                )
+                currentHasContent -> {
+                    recordRemoval(previousLine.noteIds, DeletionSource.BACKSPACE_MERGE)
+                    deleteLineAndMergeIds(
+                        survivor = line, other = previousLine,
+                        removeIndex = target, focusIndex = target
+                    )
+                }
                 // Neither has content: keep previous, delete current
-                else -> deleteLineAndMergeIds(
-                    survivor = previousLine, other = line,
-                    removeIndex = lineIndex, focusIndex = target
-                )
+                else -> {
+                    recordRemoval(line.noteIds, DeletionSource.BACKSPACE_MERGE)
+                    deleteLineAndMergeIds(
+                        survivor = previousLine, other = line,
+                        removeIndex = lineIndex, focusIndex = target
+                    )
+                }
             }
             return
         }
@@ -815,6 +877,7 @@ class EditorController(
      */
     fun deleteForward(lineIndex: Int) {
         if (state.hasSelection) {
+            recordRemovalForRange(state.getSelectedLineRange(), DeletionSource.SELECTION_DELETE)
             state.deleteSelectionInternal()
             undoManager.markContentChanged()
             return
@@ -832,15 +895,24 @@ class EditorController(
             val nextHasContent = nextLine.content.isNotEmpty()
 
             when {
-                currentHasContent -> mergeNextLine(lineIndex, target)
-                nextHasContent -> deleteLineAndMergeIds(
-                    survivor = nextLine, other = line,
-                    removeIndex = lineIndex, focusIndex = lineIndex
-                )
-                else -> deleteLineAndMergeIds(
-                    survivor = line, other = nextLine,
-                    removeIndex = target, focusIndex = lineIndex
-                )
+                currentHasContent -> {
+                    recordRemoval(nextLine.noteIds, DeletionSource.DELETE_MERGE)
+                    mergeNextLine(lineIndex, target)
+                }
+                nextHasContent -> {
+                    recordRemoval(line.noteIds, DeletionSource.DELETE_MERGE)
+                    deleteLineAndMergeIds(
+                        survivor = nextLine, other = line,
+                        removeIndex = lineIndex, focusIndex = lineIndex
+                    )
+                }
+                else -> {
+                    recordRemoval(nextLine.noteIds, DeletionSource.DELETE_MERGE)
+                    deleteLineAndMergeIds(
+                        survivor = line, other = nextLine,
+                        removeIndex = target, focusIndex = lineIndex
+                    )
+                }
             }
             return
         }

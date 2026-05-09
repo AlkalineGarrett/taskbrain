@@ -12,7 +12,7 @@
  */
 
 import type { Note, NoteLine } from './Note'
-import { isLive } from './NoteState'
+import { isLive, NoteState } from './NoteState'
 
 /**
  * Result of a rebuild pass.
@@ -148,6 +148,20 @@ function renderChildrenOf(
   const childPrefix = '\t'.repeat(childDepth)
   const placed = new Set<string>()
 
+  // When the parent is itself deleted, accept children that were deleted
+  // in the same batch — they were live at the moment of the delete and
+  // are part of this note's structure-as-it-was. Older-deleted children
+  // (different batchId) are excluded since they weren't in the note when
+  // it was deleted. When the parent is live, only LIVE children render.
+  const parentDeleted = !isLive(parent.state)
+  const parentBatchId = parent.deletionBatchId
+  const acceptable = (child: Note): boolean => {
+    if (isLive(child.state)) return true
+    if (!parentDeleted) return false
+    if (child.state !== NoteState.DELETED) return false
+    return parentBatchId != null && child.deletionBatchId === parentBatchId
+  }
+
   for (const childId of parent.containedNotes) {
     if (childId.length === 0) {
       fixed = true
@@ -159,7 +173,7 @@ function renderChildrenOf(
       continue
     }
     const child = rawNotes.get(childId)
-    if (!child || !isLive(child.state) || child.parentNoteId !== parent.id) {
+    if (!child || !acceptable(child) || child.parentNoteId !== parent.id) {
       fixed = true
       console.warn(
         `reconstructNoteLines: dropping orphan ref ${childId} from parent ${parent.id} ` +
@@ -182,6 +196,7 @@ function renderChildrenOf(
   const direct = childrenByParent.get(parent.id) ?? []
   for (const stray of direct) {
     if (placed.has(stray.id)) continue
+    if (!acceptable(stray)) continue
     if (visited.has(stray.id)) continue
     visited.add(stray.id)
     fixed = true
@@ -198,11 +213,24 @@ function renderChildrenOf(
   return fixed
 }
 
-export function indexChildrenByParent(rawNotes: Map<string, Note>): Map<string, Note[]> {
+/**
+ * Group notes by their parentNoteId. Live children are always included.
+ * If [includeDeletedBatchId] is non-null, also include DELETED children
+ * whose `deletionBatchId` matches — used by reconstruction so deleted
+ * parents can render the children they were deleted with.
+ */
+export function indexChildrenByParent(
+  rawNotes: Map<string, Note>,
+  includeDeletedBatchId: string | null = null,
+): Map<string, Note[]> {
   const result = new Map<string, Note[]>()
   for (const note of rawNotes.values()) {
     if (note.parentNoteId == null) continue
-    if (!isLive(note.state)) continue
+    const include = isLive(note.state) ||
+      (includeDeletedBatchId !== null &&
+        note.state === NoteState.DELETED &&
+        note.deletionBatchId === includeDeletedBatchId)
+    if (!include) continue
     const list = result.get(note.parentNoteId)
     if (list) list.push(note)
     else result.set(note.parentNoteId, [note])

@@ -8,6 +8,7 @@ import { executePaste } from './PasteHandler'
 import { splitNoteIds } from './ContentSimilarity'
 import { isSentinelNoteId, isRealNoteId } from '@/data/NoteIdSentinel'
 import { noteStore } from '@/data/NoteStore'
+import { DeletionSource } from '@/data/DeletionSource'
 
 export enum OperationType {
   COMMAND_BULLET = 'COMMAND_BULLET',
@@ -92,9 +93,53 @@ export class EditorController {
   /** Line indices recently toggled from unchecked to checked. Visible at reduced opacity until save. */
   readonly recentlyCheckedIndices: Set<number> = new Set()
 
+  /**
+   * Per-line deletion source for the next save. Every line-removal site
+   * in the editor records its source here before mutating state; the save
+   * layer (`NoteRepository.saveNoteWithChildren`) reads this map to stamp
+   * source-tagged `deletionBatchId`s onto docs in its `toDelete` set.
+   *
+   * Stale entries (a tagged id that ends up surviving — e.g., a moved
+   * selection that re-attaches at the drop target) are harmless: the
+   * save only consults the map for ids it's already decided to delete.
+   *
+   * Mirrors `EditorController.pendingSoftDeletes` on Android.
+   */
+  private readonly pendingSoftDeletes = new Map<string, DeletionSource>()
+
   constructor(state: EditorState, undoManager?: UndoManager) {
     this.state = state
     this.undoManager = undoManager ?? new UndoManager()
+  }
+
+  /** Consume and clear the tracker. Called by the save layer at save time. */
+  consumePendingSoftDeletes(): Map<string, DeletionSource> {
+    const out = new Map(this.pendingSoftDeletes)
+    this.pendingSoftDeletes.clear()
+    return out
+  }
+
+  /** Discard any tracked entries — used when the editor is re-initialized for a new note. */
+  resetPendingSoftDeletes(): void {
+    this.pendingSoftDeletes.clear()
+  }
+
+  private recordRemoval(noteIds: Iterable<string>, source: DeletionSource): void {
+    for (const id of noteIds) {
+      if (isRealNoteId(id)) this.pendingSoftDeletes.set(id, source)
+    }
+  }
+
+  private recordRemovalForRange(
+    rangeStart: number,
+    rangeEnd: number,
+    source: DeletionSource,
+  ): void {
+    const last = Math.min(rangeEnd, this.state.lines.length - 1)
+    if (rangeStart < 0 || last < rangeStart) return
+    for (let i = rangeStart; i <= last; i++) {
+      this.recordRemoval(this.state.lines[i]!.noteIds, source)
+    }
   }
 
   /**
@@ -278,6 +323,13 @@ export class EditorController {
       const parsed = parseClipboardContent(plainText, html ?? null)
       const cutLines = sharedCutLines
       sharedCutLines = []
+      // Pre-record selection lines so executePaste's "replace the selection"
+      // semantics tag any genuinely-removed ids. Lines that the new paste
+      // re-claims (same id reappears) survive — the stale tag is harmless.
+      if (this.state.hasSelection) {
+        const [first, last] = this.state.getSelectedLineRange()
+        this.recordRemovalForRange(first, last, DeletionSource.PASTE_REPLACE)
+      }
       const result = executePaste(
         this.state.lines,
         this.state.focusedLineIndex,
@@ -340,6 +392,8 @@ export class EditorController {
   deleteSelectionWithUndo(): void {
     if (!this.state.hasSelection) return
     this.executeOperation(OperationType.DELETE_SELECTION, () => {
+      const [first, last] = this.state.getSelectedLineRange()
+      this.recordRemovalForRange(first, last, DeletionSource.SELECTION_DELETE)
       this.state.deleteSelectionInternal()
     })
   }
@@ -474,6 +528,12 @@ export class EditorController {
 
     this.undoManager.captureStateBeforeChange(this.state.lines, this.state.focusedLineIndex)
 
+    // Most cuts re-attach via executePaste's reuse, so they won't end up
+    // in toDelete; tagging them is a safety net for edge cases where a
+    // moved id ends up genuinely removed.
+    const [moveFirst, moveLast] = this.state.getSelectedLineRange()
+    this.recordRemovalForRange(moveFirst, moveLast, DeletionSource.MOVE)
+
     const clipText = this.getSelectedTextWithPrefix()
     const movedLines = snapshotSelectedLineStates(this.state)
     this.state.deleteSelectionInternal()
@@ -593,6 +653,8 @@ export class EditorController {
 
   deleteBackward(lineIndex: number): void {
     if (this.state.hasSelection) {
+      const [first, last] = this.state.getSelectedLineRange()
+      this.recordRemovalForRange(first, last, DeletionSource.SELECTION_DELETE)
       this.state.deleteSelectionInternal()
       this.undoManager.markContentChanged()
       return
@@ -614,12 +676,15 @@ export class EditorController {
 
       if (previousHasContent) {
         // Previous line has content: merge current content into it
+        this.recordRemoval(line.noteIds, DeletionSource.BACKSPACE_MERGE)
         this.mergeToPreviousLine(lineIndex, target)
       } else if (currentHasContent) {
         // Current has content, previous is empty: delete previous line, keep current
+        this.recordRemoval(previousLine.noteIds, DeletionSource.BACKSPACE_MERGE)
         this.deleteLineAndMergeIds(line, previousLine, target, target)
       } else {
         // Neither has content: keep previous, delete current
+        this.recordRemoval(line.noteIds, DeletionSource.BACKSPACE_MERGE)
         this.deleteLineAndMergeIds(previousLine, line, lineIndex, target)
       }
       return
@@ -634,6 +699,8 @@ export class EditorController {
 
   deleteForward(lineIndex: number): void {
     if (this.state.hasSelection) {
+      const [first, last] = this.state.getSelectedLineRange()
+      this.recordRemovalForRange(first, last, DeletionSource.SELECTION_DELETE)
       this.state.deleteSelectionInternal()
       this.undoManager.markContentChanged()
       return
@@ -654,12 +721,15 @@ export class EditorController {
 
       if (currentHasContent) {
         // Current line has content: merge next content into it
+        this.recordRemoval(nextLine.noteIds, DeletionSource.DELETE_MERGE)
         this.mergeNextLine(lineIndex, target)
       } else if (nextHasContent) {
         // Next has content, current is empty: delete current, keep next (preserves next's prefix)
+        this.recordRemoval(line.noteIds, DeletionSource.DELETE_MERGE)
         this.deleteLineAndMergeIds(nextLine, line, lineIndex, lineIndex)
       } else {
         // Neither has content: keep current, delete next
+        this.recordRemoval(nextLine.noteIds, DeletionSource.DELETE_MERGE)
         this.deleteLineAndMergeIds(line, nextLine, target, lineIndex)
       }
       return

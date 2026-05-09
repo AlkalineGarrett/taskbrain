@@ -12,6 +12,7 @@ class NoteReconstructionTest {
         rootNoteId: String? = null,
         parentNoteId: String? = null,
         state: String? = null,
+        deletionBatchId: String? = null,
     ) = Note(
         id = id,
         content = content,
@@ -19,6 +20,7 @@ class NoteReconstructionTest {
         rootNoteId = rootNoteId,
         parentNoteId = parentNoteId,
         state = state,
+        deletionBatchId = deletionBatchId,
     )
 
     // --- rebuildAllNotes ---
@@ -518,5 +520,105 @@ class NoteReconstructionTest {
             setOf("c1", "c2"),
             descendantIdsOf("root", rawNotes, includeDeleted = true)
         )
+    }
+
+    // --- deletionBatchId-scoped reconstruction ---
+
+    @Test
+    fun `deleted parent renders same-batch deleted children`() {
+        // After softDeleteNote: root + the 3 children that were live at delete
+        // time all share the same deletionBatchId.
+        val batchId = "whole-note_abc"
+        val root = note(
+            "r", "Root", containedNotes = listOf("c1", "c2", "c3"),
+            state = "deleted", deletionBatchId = batchId,
+        )
+        val c1 = note("c1", "Live A", parentNoteId = "r", state = "deleted", deletionBatchId = batchId)
+        val c2 = note("c2", "Live B", parentNoteId = "r", state = "deleted", deletionBatchId = batchId)
+        val c3 = note("c3", "Live C", parentNoteId = "r", state = "deleted", deletionBatchId = batchId)
+        val raw = mapOf("r" to root, "c1" to c1, "c2" to c2, "c3" to c3)
+
+        val children = indexChildrenByParent(raw, includeDeletedBatchId = batchId)
+        val (lines, _) = reconstructNoteLines(root, raw, children)
+        assertEquals(
+            listOf("Root", "Live A", "Live B", "Live C"),
+            lines.map { it.content },
+        )
+    }
+
+    @Test
+    fun `deleted parent excludes children from earlier delete batches`() {
+        // Children removed during normal editing earlier (different batch);
+        // root deleted later. Earlier-deleted children should NOT appear in
+        // the deleted-note view — they weren't in the note when it was deleted.
+        val rootBatch = "whole-note_root"
+        val earlierBatch = "selection-delete_earlier"
+        val root = note(
+            "r", "Root", containedNotes = listOf("c1", "c2"),
+            state = "deleted", deletionBatchId = rootBatch,
+        )
+        val current = note("c1", "Currently here", parentNoteId = "r",
+            state = "deleted", deletionBatchId = rootBatch)
+        val earlier = note("c2", "Was here, then removed", parentNoteId = "r",
+            state = "deleted", deletionBatchId = earlierBatch)
+        val raw = mapOf("r" to root, "c1" to current, "c2" to earlier)
+
+        val children = indexChildrenByParent(raw, includeDeletedBatchId = rootBatch)
+        val (lines, _) = reconstructNoteLines(root, raw, children)
+        assertEquals(listOf("Root", "Currently here"), lines.map { it.content })
+    }
+
+    @Test
+    fun `live parent still drops deleted children regardless of batchId`() {
+        // The deleted-children-rendering relaxation must NOT apply when the
+        // parent is live: a removed child still belongs in the recycle bin,
+        // not the active note's view.
+        val root = note("r", "Root", containedNotes = listOf("c1"))
+        val c1 = note("c1", "Removed earlier", parentNoteId = "r",
+            state = "deleted", deletionBatchId = "anything_xxx")
+        val raw = mapOf("r" to root, "c1" to c1)
+
+        val children = indexChildrenByParent(raw)
+        val (lines, _) = reconstructNoteLines(root, raw, children)
+        assertEquals(listOf("Root"), lines.map { it.content })
+    }
+
+    @Test
+    fun `legacy deleted parent without batchId drops all deleted children`() {
+        // Pre-batchId deletes have null deletionBatchId. Conservative
+        // fallback: render only live descendants (the old behavior). The
+        // recovery screen still surfaces the orphans via time-clustering,
+        // so nothing is lost — just not auto-rendered in the deleted view.
+        val root = note(
+            "r", "Root", containedNotes = listOf("c1"),
+            state = "deleted", deletionBatchId = null,
+        )
+        val c1 = note("c1", "Legacy deleted", parentNoteId = "r",
+            state = "deleted", deletionBatchId = null)
+        val raw = mapOf("r" to root, "c1" to c1)
+
+        val children = indexChildrenByParent(raw, includeDeletedBatchId = null)
+        val (lines, _) = reconstructNoteLines(root, raw, children)
+        assertEquals(listOf("Root"), lines.map { it.content })
+    }
+
+    @Test
+    fun `deleted parent renders same-batch deleted strays`() {
+        // Strays = children linked via parentNoteId but absent from
+        // containedNotes. Must also be batchId-scoped when parent is deleted.
+        val batchId = "whole-note_xyz"
+        val root = note(
+            "r", "Root", containedNotes = emptyList(),
+            state = "deleted", deletionBatchId = batchId,
+        )
+        val sameBatchStray = note("s1", "Same batch stray", parentNoteId = "r",
+            state = "deleted", deletionBatchId = batchId)
+        val otherBatchStray = note("s2", "Other batch stray", parentNoteId = "r",
+            state = "deleted", deletionBatchId = "other_xxx")
+        val raw = mapOf("r" to root, "s1" to sameBatchStray, "s2" to otherBatchStray)
+
+        val children = indexChildrenByParent(raw, includeDeletedBatchId = batchId)
+        val (lines, _) = reconstructNoteLines(root, raw, children)
+        assertEquals(listOf("Root", "Same batch stray"), lines.map { it.content })
     }
 }

@@ -29,6 +29,23 @@ data class Note(
      * otherwise.
      */
     val containedNotesBase: List<String>? = null,
+    /**
+     * Source-tagged batch identifier stamped when this note's `state` flips
+     * to a removed state (DELETED). Format: `<source>_<uuid>` — e.g.
+     * `whole-note_<uuid>` for `softDeleteNote`, `selection-delete_<uuid>`
+     * for an editor selection-delete. Notes deleted as part of the same
+     * operation share the same id; later operations get fresh ids.
+     *
+     * Used by reconstruction to render the structure of a deleted note
+     * (children with matching id are part of the same delete batch),
+     * by undelete to scope the restore set, and by forensics to attribute
+     * unaccounted-for losses to their originating code path. `unknown_*`
+     * is the fallback for paths that haven't been instrumented.
+     *
+     * Cleared (set to null) on undelete so a subsequent re-delete starts
+     * a fresh batch.
+     */
+    val deletionBatchId: String? = null,
 )
 
 fun Note.firstLine(): String = content.lineSequence().firstOrNull() ?: ""

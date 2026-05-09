@@ -83,7 +83,16 @@ class NoteStoreOwnEchoIncrementalTest {
         val doc = mockk<QueryDocumentSnapshot>()
         every { doc.id } returns noteId
         every { doc.metadata } returns metadata
-        every { doc.data } returns data
+        // NoteStore.parseNote routes through Firestore's POJO mapper; the
+        // mapper isn't reachable in unit tests so we stub the Note that
+        // toObject() would have produced from the raw data map.
+        val note = Note(
+            id = noteId,
+            userId = data["userId"] as? String ?: "",
+            content = data["content"] as? String ?: "",
+            containedNotes = (data["containedNotes"] as? List<String>) ?: emptyList(),
+        )
+        every { doc.toObject(Note::class.java) } returns note
         val change = mockk<DocumentChange>()
         every { change.document } returns doc
         every { change.type } returns DocumentChange.Type.ADDED

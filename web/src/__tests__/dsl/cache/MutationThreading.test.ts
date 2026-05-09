@@ -35,6 +35,7 @@ function makeNote(id: string, content = 'Content', path = `path/${id}`): Note {
     showCompleted: true,
     onceCache: {},
     containedNotesBase: null,
+    deletionBatchId: null,
   }
 }
 

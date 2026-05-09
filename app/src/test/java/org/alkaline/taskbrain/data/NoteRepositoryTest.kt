@@ -66,6 +66,9 @@ class NoteRepositoryTest {
         every { snapshot.exists() } returns (note != null)
         every { snapshot.toObject(Note::class.java) } returns note
         every { snapshot.get("containedNotes") } returns (note?.containedNotes ?: emptyList<String>())
+        // String field accessors used by undeleteNote's authoritative read.
+        every { snapshot.getString("deletionBatchId") } returns note?.deletionBatchId
+        every { snapshot.getString("state") } returns note?.state
         return ref
     }
 
@@ -1518,6 +1521,9 @@ class NoteRepositoryTest {
         every { NoteStore.getRawNoteById("note_1") } returns root
         every { NoteStore.getRawNoteById("child_1") } returns c1
         every { NoteStore.getRawNoteById("child_2") } returns c2
+        // The Firestore-authoritative root read used by undeleteNote.
+        // No batchId here ⇒ legacy/null path: restore all descendants.
+        mockDocument("note_1", root)
         val batch = mockBatch()
         val captured = mutableListOf<Map<String, Any?>>()
         every { batch.set(any(), capture(captured), any<SetOptions>()) } returns batch
@@ -1526,6 +1532,105 @@ class NoteRepositoryTest {
 
         assertEquals(3, captured.size)
         assertTrue(captured.all { it["state"] == null })
+    }
+
+    /**
+     * Mock the descendants query used by the new race-resilient undelete:
+     * `whereEqualTo("userId", X).whereEqualTo("rootNoteId", Y).whereEqualTo("deletionBatchId", Z).get()`
+     * Returns a snapshot containing exactly [matchingIds].
+     */
+    private fun mockBatchedDescendantsQuery(matchingIds: List<String>) {
+        val docs = matchingIds.map { id ->
+            mockk<QueryDocumentSnapshot> { every { this@mockk.id } returns id }
+        }
+        val snap = mockk<QuerySnapshot> {
+            every { documents } returns docs
+            every { size() } returns docs.size
+            every { iterator() } returns docs.toMutableList().iterator()
+        }
+        val byBatch = mockk<Query> { every { get() } returns Tasks.forResult(snap) }
+        val byRoot = mockk<Query> { every { whereEqualTo("deletionBatchId", any()) } returns byBatch }
+        val byUser = mockk<Query> { every { whereEqualTo("rootNoteId", any()) } returns byRoot }
+        every { mockCollection.whereEqualTo("userId", any()) } returns byUser
+    }
+
+    @Test
+    fun `undeleteNote scopes restore by batchId — older-deleted descendants stay deleted`() = runTest {
+        // Per-line `deletionBatchId` design: undelete should only restore
+        // descendants whose batchId matches the root's. A child deleted in
+        // an earlier operation (different batchId) is NOT a member of this
+        // restore batch and must stay deleted.
+        val root = Note(id = "note_1", state = "deleted", deletionBatchId = "whole-note_X")
+        // Firestore-authoritative root read (one extra read per restore;
+        // intentional — see comment in NoteRepository.undeleteNote).
+        mockDocument("note_1", root)
+        // Firestore-authoritative descendant query — returns only same-batch.
+        mockBatchedDescendantsQuery(matchingIds = listOf("same_batch"))
+
+        val rootRef = mockCollection.document("note_1")
+        val olderRef = mockk<DocumentReference>().also { every { mockCollection.document("earlier") } returns it }
+        val sameRef = mockk<DocumentReference>().also { every { mockCollection.document("same_batch") } returns it }
+        // buildStateChangeOps' presence guard reads NoteStore — supply
+        // the same-batch entry so its op isn't silently dropped.
+        every { NoteStore.getRawNoteById("note_1") } returns root
+        every { NoteStore.getRawNoteById("same_batch") } returns Note(
+            id = "same_batch", state = "deleted", deletionBatchId = "whole-note_X",
+        )
+        val batch = mockBatch()
+        val capturedRefs = mutableListOf<DocumentReference>()
+        every { batch.set(capture(capturedRefs), any<Map<String, Any?>>(), any<SetOptions>()) } returns batch
+
+        repository.undeleteNote("note_1").getOrThrow()
+
+        assertEquals("expected exactly 2 writes (root + same-batch); got ${capturedRefs.size}", 2, capturedRefs.size)
+        assertTrue("root should be restored", capturedRefs.contains(rootRef))
+        assertTrue("same-batch descendant should be restored", capturedRefs.contains(sameRef))
+        assertFalse("older-batch descendant must NOT be restored", capturedRefs.contains(olderRef))
+    }
+
+    @Test
+    fun `undeleteNote uses Firestore root state, not stale NoteStore — race resilience`() = runTest {
+        // Pre-fix bug: undeleteNote read rootBatchId from NoteStore. If the
+        // Firestore listener hadn't delivered the softDelete snapshot yet,
+        // NoteStore showed root as still LIVE with batchId=null. undelete
+        // then fell into the legacy "restore everything" fallback and
+        // resurrected older-deleted descendants. Reading the root from
+        // Firestore directly closes the race.
+        //
+        // Setup: NoteStore is STALE (root LIVE, same_batch LIVE).
+        // Firestore has the just-committed truth (root + same_batch
+        // DELETED with `whole-note_X`). `earlier` was deleted earlier with
+        // a different batch.
+        val staleRoot = Note(id = "note_1", state = null, deletionBatchId = null)
+        val firestoreRoot = Note(id = "note_1", state = "deleted", deletionBatchId = "whole-note_X")
+        every { NoteStore.getRawNoteById("note_1") } returns staleRoot
+        every { NoteStore.getRawNoteById("earlier") } returns Note(
+            id = "earlier", state = "deleted", deletionBatchId = "selection-delete_Y",
+        )
+        every { NoteStore.getRawNoteById("same_batch") } returns Note(
+            id = "same_batch", state = null, deletionBatchId = null, // stale
+        )
+        // The Firestore reads return the AUTHORITATIVE post-softDelete state.
+        mockDocument("note_1", firestoreRoot)
+        mockBatchedDescendantsQuery(matchingIds = listOf("same_batch"))
+        val rootRef = mockCollection.document("note_1")
+        val olderRef = mockk<DocumentReference>().also { every { mockCollection.document("earlier") } returns it }
+        val sameRef = mockk<DocumentReference>().also { every { mockCollection.document("same_batch") } returns it }
+        val batch = mockBatch()
+        val capturedRefs = mutableListOf<DocumentReference>()
+        every { batch.set(capture(capturedRefs), any<Map<String, Any?>>(), any<SetOptions>()) } returns batch
+
+        repository.undeleteNote("note_1").getOrThrow()
+
+        // With the fix, the older-batch descendant stays deleted even
+        // though NoteStore's view of root looked LIVE. The Firestore-truth
+        // of root.batchId scopes the restore correctly.
+        assertTrue("root must be restored", capturedRefs.contains(rootRef))
+        assertTrue("same-batch descendant should be restored", capturedRefs.contains(sameRef))
+        assertFalse(
+            "older-batch descendant must NOT be restored even when NoteStore is stale",
+            capturedRefs.contains(olderRef),
+        )
     }
 
     // endregion

@@ -33,7 +33,8 @@ Path: `/notes/{noteId}`
   },
   "version": "Number: monotonic per-note write counter. Bumped on every successful save. Defaults to 0 on legacy docs.",
   "lastWriterOpId": "String [optional]: UUID identity stamp from the save batch. Listeners drop echoes whose lastWriterOpId is in the local in-flight set.",
-  "containedNotesBase": "Array<String> [optional]: Snapshot of containedNotes the saving client read before applying its diff. Receivers use this for 3-way merge of the children list."
+  "containedNotesBase": "Array<String> [optional]: Snapshot of containedNotes the saving client read before applying its diff. Receivers use this for 3-way merge of the children list.",
+  "deletionBatchId": "String [optional, format <source>_<uuid>]: Source-tagged batch identifier stamped when state flips to `deleted`. Notes deleted in the same operation share an id. Used by reconstruction (same-batch children render with their deleted parent), undelete (scope the restore set), and forensics (`unknown_*` flags an uninstrumented removal path). Cleared on undelete."
 }
 ```
 
@@ -53,6 +54,7 @@ Path: `/notes/{noteId}`
 - **version**: Advisory monotonic counter. Each save reads the current value from NoteStore and writes `version + 1`. Listeners maintain `lastAppliedVersion[noteId]` per session and drop incoming echoes whose `version <= lastAppliedVersion`. Not enforced via Firestore transactions — concurrent writes from two clients can both produce the same version, in which case Firestore's last-write-wins applies. The version is purely a *receiver-side* gate against stale or out-of-order arrivals.
 - **lastWriterOpId**: Identity stamp set by the save batch. The save adds `opId` to its in-flight set before committing; the listener checks each echo's `lastWriterOpId` against that set. Match → our own echo (raw cache update only, no editor reload). No match → external change. Replaces the earlier heuristic stack of `dirty`/`saving`/content-equality guards.
 - **containedNotesBase**: Snapshot of `containedNotes` as the saving client read it before applying its diff. Used for 3-way merge of cross-device concurrent edits to the children list (different positions, different inserts, etc.). Only present on writes that staged a 3-way-merge-eligible change.
+- **deletionBatchId**: Format `<source>_<uuid>`. Stamped only when `state` flips to `"deleted"` (not on `"cut-delete"`). The `<source>` prefix is one of a fixed vocabulary (`whole-note`, `selection-delete`, `backspace-merge`, `delete-merge`, `paste-replace`, `move`, `external`, `unknown`); see `DeletionSource` in code. Notes deleted in the same operation share the same id. **Reconstruction:** when the parent itself is deleted, children whose `deletionBatchId` matches the parent's are rendered as part of the structure. **Undelete:** restore set is descendants whose `deletionBatchId` matches; the field is cleared on the restored docs. **Forensics:** `unknown_*` flags a removal path that hasn't been instrumented to record its source — drive these to zero.
 
 ## Potential future fields
 

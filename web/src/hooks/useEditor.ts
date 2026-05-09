@@ -4,6 +4,7 @@ import { EditorController } from '@/editor/EditorController'
 import { UndoManager, type UndoManagerState } from '@/editor/UndoManager'
 import { toEditorLines, type EditorLineInput, type NoteLine } from '@/data/Note'
 import { NoteRepository, type SaveResult } from '@/data/NoteRepository'
+import { DeletionSource } from '@/data/DeletionSource'
 import { noteStatsRepo } from '@/data/NoteStatsRepository'
 import { noteStore } from '@/data/NoteStore'
 import { resolveNoteIds } from '@/editor/resolveNoteIds'
@@ -282,6 +283,11 @@ export function useEditor(noteId: string | undefined) {
       const storeLines = noteStore.getNoteLinesById(noteId)
       if (!storeLines) return
 
+      // External reload supersedes any local removals: their noteIds are
+      // about to be replaced by whatever Firestore says lives on this
+      // note. Drop the tracker so we don't carry stale source tags
+      // forward into the next save.
+      controller.resetPendingSoftDeletes()
       editorState.initFromNoteLines(toEditorLines(storeLines), true)
       editorState.requestFocusUpdate()
       setShowCompleted(storeNote.showCompleted ?? true)
@@ -289,7 +295,7 @@ export function useEditor(noteId: string | undefined) {
       setDirty(false)
       setRenderVersion((v) => v + 1)
     })
-  }, [noteId, editorState, captureLocalBase])
+  }, [noteId, editorState, controller, captureLocalBase])
 
   /**
    * Builds the main editor's tracked lines for inclusion in a multi-note
@@ -300,6 +306,10 @@ export function useEditor(noteId: string | undefined) {
   const prepareMainSaveItem = useCallback((targetNoteId: string): {
     trackedLines: NoteLine[]
     localBases: Map<string, string[]> | null
+    /** Per-line deletion sources recorded by editor removal sites; passed
+     *  through to `saveNoteWithChildren` so it can stamp source-tagged
+     *  deletionBatchIds. */
+    deletionSources: Map<string, DeletionSource>
     /** Joined text of the editor's current lines — used by the save
      *  coordinator for optimistic NoteStore updates. */
     text: string
@@ -316,6 +326,7 @@ export function useEditor(noteId: string | undefined) {
     }
 
     const localBases = localBasesRef.current
+    const deletionSources = controller.consumePendingSoftDeletes()
     const text = editorState.text
 
     const applyResult = (result: SaveResult) => {
@@ -329,7 +340,7 @@ export function useEditor(noteId: string | undefined) {
       setDirty(false)
     }
 
-    return { trackedLines: newTracked, localBases, text, applyResult }
+    return { trackedLines: newTracked, localBases, deletionSources, text, applyResult }
   }, [editorState, controller])
 
   // Core save logic — accepts noteId to avoid stale closure bugs. Used by
@@ -339,9 +350,9 @@ export function useEditor(noteId: string | undefined) {
       setSaving(true)
       savingRef.current = true
 
-      const { trackedLines, localBases, applyResult } = prepareMainSaveItem(targetNoteId)
+      const { trackedLines, localBases, deletionSources, applyResult } = prepareMainSaveItem(targetNoteId)
       const result = await noteStore.enqueueSave(() =>
-        repo.saveNoteWithChildren(targetNoteId, trackedLines, localBases),
+        repo.saveNoteWithChildren(targetNoteId, trackedLines, localBases, deletionSources),
       )
       applyResult(result)
     } catch (e) {

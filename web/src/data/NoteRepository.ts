@@ -19,6 +19,7 @@ import { noteStore, NoteStoreNotLoadedError } from './NoteStore'
 import { firestoreUsage } from './FirestoreUsage'
 import { isRealNoteId, newSentinelNoteId } from './NoteIdSentinel'
 import { isLive, NoteState } from './NoteState'
+import { DeletionSource, newDeletionBatchId } from './DeletionSource'
 import { performSimilarityMatching } from '@/editor/ContentSimilarity'
 
 export interface NoteLoadResult {
@@ -81,6 +82,11 @@ interface SaveContext {
    *  the destination's reparent write in the same batch. Empty for
    *  single-note saves where cross-session coordination doesn't apply. */
   globalSurvivingIds: Set<string>
+  /** Per-line deletion source contributed by the editor (noteId → source).
+   *  Lines in this save's toDelete look up their source here; unmatched
+   *  ids fall back to UNKNOWN. Empty when the caller didn't instrument
+   *  the editor's removal sites. */
+  deletionSources: Map<string, DeletionSource>
 }
 
 /**
@@ -95,6 +101,11 @@ export interface SaveItem {
   noteId: string
   trackedLines: NoteLine[]
   localBases: Map<string, string[]> | null
+  /** Per-line deletion source recorded by the editor (noteId → source).
+   *  Used by the save planner to stamp source-tagged deletionBatchIds on
+   *  this item's `toDelete` set. Empty when no source-recording removals
+   *  happened in this session. */
+  deletionSources?: Map<string, DeletionSource>
 }
 
 /** Cap for waiting on the listener to surface a specific note. */
@@ -341,9 +352,20 @@ export class NoteRepository {
     const descendantSnap = await getDocs(descendantQuery)
     firestoreUsage.recordRead('loadNoteLines', 'GET_DOCS', descendantSnap.size)
 
-    const descendants = descendantSnap.docs
-      .map((d) => noteFromFirestore(d.id, d.data()))
-      .filter((n) => isLive(n.state))
+    const parsed = descendantSnap.docs.map((d) => noteFromFirestore(d.id, d.data()))
+    // Include same-batch deleted descendants when the note itself is
+    // deleted, mirroring NoteStore.getNoteLinesById. Live notes only see
+    // live descendants.
+    const noteDeleted = !isLive(note.state)
+    const noteBatchId = note.deletionBatchId
+    const descendants = parsed.filter(
+      (n) =>
+        isLive(n.state) ||
+        (noteDeleted &&
+          n.state === NoteState.DELETED &&
+          noteBatchId !== null &&
+          n.deletionBatchId === noteBatchId),
+    )
 
     if (descendants.length === 0) {
       return [{ content: note.content, noteId: note.id }]
@@ -458,6 +480,7 @@ export class NoteRepository {
     noteId: string,
     trackedLines: NoteLine[],
     localBases: Map<string, string[]> | null,
+    deletionSources: Map<string, DeletionSource> = new Map(),
   ): Promise<SaveResult> {
     return this.logged('saveNoteWithChildren', async () => {
       if (trackedLines.length === 0) {
@@ -469,6 +492,7 @@ export class NoteRepository {
         userId,
         pendingCuts: noteStore.getPendingCuts(),
         globalSurvivingIds: new Set(),
+        deletionSources,
       }
       const plan = this.planSave({ noteId, trackedLines, localBases }, ctx)
       const cutDeleteOps = this.buildCutDeleteOps([plan.survivingIds], ctx)
@@ -504,15 +528,21 @@ export class NoteRepository {
           if (isRealNoteId(line.noteId)) globalSurvivingIds.add(line.noteId!)
         }
       }
-      const ctx: SaveContext = {
+      const baseCtx: SaveContext = {
         userId,
         pendingCuts: noteStore.getPendingCuts(),
         globalSurvivingIds,
+        deletionSources: new Map(),
       }
       const plans = items
         .filter((item) => item.trackedLines.length > 0)
-        .map((item) => this.planSave(item, ctx))
-      const cutDeleteOps = this.buildCutDeleteOps(plans.map((p) => p.survivingIds), ctx)
+        .map((item) =>
+          this.planSave(item, {
+            ...baseCtx,
+            deletionSources: item.deletionSources ?? new Map(),
+          }),
+        )
+      const cutDeleteOps = this.buildCutDeleteOps(plans.map((p) => p.survivingIds), baseCtx)
       const allOps = plans.flatMap((p) => p.ops).concat(cutDeleteOps.ops)
       await this.commitInBatches('saveMultipleNotes', allOps)
       for (const id of cutDeleteOps.committedCutIds) noteStore.clearPendingCut(id)
@@ -780,12 +810,23 @@ export class NoteRepository {
 
     // Soft-delete removed notes. Preserve parentNoteId/rootNoteId so the
     // deleted-notes view can distinguish removed child lines (have a parent)
-    // from deleted top-level notes (don't).
+    // from deleted top-level notes (don't). Group by deletion source so each
+    // source within this save gets its own batchId; lines without a recorded
+    // source fall back to UNKNOWN (an `unknown_*` batchId in the data flags
+    // an uninstrumented removal path — drive to zero).
+    const batchIdsBySource = new Map<DeletionSource, string>()
     for (const id of toDelete) {
+      const source = ctx.deletionSources.get(id) ?? DeletionSource.UNKNOWN
+      let batchId = batchIdsBySource.get(source)
+      if (!batchId) {
+        batchId = newDeletionBatchId(source)
+        batchIdsBySource.set(source, batchId)
+      }
       ops.push({
         ref: this.noteRef(id),
         data: {
           state: NoteState.DELETED,
+          deletionBatchId: batchId,
           updatedAt: serverTimestamp(),
         },
         merge: true,
@@ -813,18 +854,32 @@ export class NoteRepository {
   private buildStateChangeOps(
     ids: Iterable<string>,
     newState: string | null,
+    deletionBatchId: string | null = null,
   ): BatchWriteOp[] {
+    // Stamp `deletionBatchId` only when entering DELETED; clear it on any
+    // other transition (LIVE on undelete, CUT_DELETE on park) so a
+    // subsequent re-delete starts a fresh batch.
+    const data: Record<string, unknown> =
+      newState === NoteState.DELETED && deletionBatchId != null
+        ? {
+            state: newState,
+            deletionBatchId,
+            updatedAt: serverTimestamp(),
+          }
+        : newState === NoteState.DELETED
+          ? {
+              state: newState,
+              updatedAt: serverTimestamp(),
+            }
+          : {
+              state: newState,
+              deletionBatchId: null,
+              updatedAt: serverTimestamp(),
+            }
     const ops: BatchWriteOp[] = []
     for (const id of ids) {
       if (!noteStore.getRawNoteById(id)) continue
-      ops.push({
-        ref: this.noteRef(id),
-        data: {
-          state: newState,
-          updatedAt: serverTimestamp(),
-        },
-        merge: true,
-      })
+      ops.push({ ref: this.noteRef(id), data, merge: true })
     }
     return ops
   }
@@ -1112,7 +1167,8 @@ export class NoteRepository {
       this.assertNoteStoreLoaded('softDeleteNote', noteId)
       this.warnIfDescendantsLikelyStale('softDeleteNote', noteId)
       const idsToDelete = new Set([noteId, ...noteStore.getDescendantIds(noteId)])
-      const ops = this.buildStateChangeOps(idsToDelete, NoteState.DELETED)
+      const batchId = newDeletionBatchId(DeletionSource.WHOLE_NOTE)
+      const ops = this.buildStateChangeOps(idsToDelete, NoteState.DELETED, batchId)
       await this.commitInBatches('softDeleteNote', ops)
     })
   }
@@ -1151,17 +1207,51 @@ export class NoteRepository {
   }
 
   /**
-   * Restores a deleted note and all its descendants.
+   * Restores a deleted note and the descendants from the same delete batch.
+   * Older-deleted descendants (different deletionBatchId) stay deleted —
+   * they weren't part of this delete operation, so bringing them back
+   * would resurrect notes the user removed earlier on purpose. Legacy
+   * deleted notes with no batchId fall back to restoring all descendants
+   * so behavior pre-batchId is preserved.
+   *
+   * Reads root + descendants from Firestore — NOT from NoteStore. The
+   * Firestore listener that updates NoteStore can lag the actual Firestore
+   * state by a snapshot tick. A user clicking Restore right after Delete
+   * can observe a stale NoteStore where the just-committed softDelete
+   * hasn't propagated; rootBatchId would read as null, falling into the
+   * legacy "restore everything" path and resurrecting older-deleted
+   * descendants. One extra doc read + one descendant query per restore is
+   * a fine cost for race-free correctness.
    */
   async undeleteNote(noteId: string): Promise<void> {
     return this.logged('undeleteNote', async () => {
-      this.requireUserId()
+      const userId = this.requireUserId()
       this.assertNoteStoreLoaded('undeleteNote', noteId)
-      // Use getAllDescendantIds (includes soft-deleted) since restoring a tree
-      // should bring back its soft-deleted descendants too. Skip the
-      // stale-descendants warning: a deleted note's containedNotes only lists
-      // active children, so it can't detect missing soft-deleted descendants.
-      const idsToRestore = new Set([noteId, ...noteStore.getAllDescendantIds(noteId)])
+      // Skip warnIfDescendantsLikelyStale: a deleted note's containedNotes
+      // only lists active children, so it can't detect missing soft-deleted
+      // descendants — the heuristic doesn't apply here.
+      const rootSnap = await getDoc(this.noteRef(noteId))
+      firestoreUsage.recordRead('undeleteNote', 'DOC_GET')
+      const rootBatchId = (rootSnap.data()?.deletionBatchId as string | undefined) ?? null
+      const idsToRestore = new Set<string>([noteId])
+      if (rootBatchId !== null) {
+        // Scope the restore to descendants from the same delete batch.
+        const descendantQuery = query(
+          this.notesRef,
+          where('userId', '==', userId),
+          where('rootNoteId', '==', noteId),
+          where('deletionBatchId', '==', rootBatchId),
+        )
+        const descendantSnap = await getDocs(descendantQuery)
+        firestoreUsage.recordRead('undeleteNote', 'GET_DOCS', descendantSnap.size)
+        for (const d of descendantSnap.docs) idsToRestore.add(d.id)
+      } else {
+        // Legacy deletes pre-batchId have no `deletionBatchId`. Restore
+        // every descendant — preserves pre-feature behavior. NoteStore is
+        // fine here: a legacy deletion is not racing with a just-fired
+        // softDelete.
+        for (const id of noteStore.getAllDescendantIds(noteId)) idsToRestore.add(id)
+      }
       const ops = this.buildStateChangeOps(idsToRestore, null)
       await this.commitInBatches('undeleteNote', ops)
     })

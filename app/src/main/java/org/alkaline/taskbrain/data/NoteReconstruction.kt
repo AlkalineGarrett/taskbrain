@@ -182,6 +182,20 @@ private fun renderChildrenOf(
     val childPrefix = "\t".repeat(childDepth)
     val placed = mutableSetOf<String>()
 
+    // When the parent is itself deleted, accept children that were deleted
+    // in the same batch — they were live at the moment of the delete and
+    // are part of this note's structure-as-it-was. Older-deleted children
+    // (different batchId) are excluded since they weren't in the note when
+    // it was deleted. When the parent is live, only LIVE children render.
+    val parentDeleted = !isLive(parent.state)
+    val parentBatchId = parent.deletionBatchId
+    fun acceptable(child: Note): Boolean {
+        if (isLive(child.state)) return true
+        if (!parentDeleted) return false
+        if (child.state != NoteState.DELETED) return false
+        return parentBatchId != null && child.deletionBatchId == parentBatchId
+    }
+
     // Declared order from containedNotes.
     for (childId in parent.containedNotes) {
         if (childId.isEmpty()) {
@@ -195,7 +209,7 @@ private fun renderChildrenOf(
             continue
         }
         val child = rawNotes[childId]
-        if (child == null || !isLive(child.state) || child.parentNoteId != parent.id) {
+        if (child == null || !acceptable(child) || child.parentNoteId != parent.id) {
             fixed = true
             Log.w(
                 TAG,
@@ -220,6 +234,7 @@ private fun renderChildrenOf(
     val direct = childrenByParent[parent.id].orEmpty()
     for (stray in direct) {
         if (stray.id in placed) continue
+        if (!acceptable(stray)) continue
         if (!visited.add(stray.id)) continue
         fixed = true
         Log.w(
@@ -236,12 +251,24 @@ private fun renderChildrenOf(
     return fixed
 }
 
-/** Group non-deleted notes by their parentNoteId. */
-fun indexChildrenByParent(rawNotes: Map<String, Note>): Map<String, List<Note>> {
+/**
+ * Group notes by their parentNoteId. Live children are always included.
+ * If [includeDeletedBatchId] is non-null, also include DELETED children
+ * whose `deletionBatchId` matches — used by reconstruction so deleted
+ * parents can render the children they were deleted with.
+ */
+fun indexChildrenByParent(
+    rawNotes: Map<String, Note>,
+    includeDeletedBatchId: String? = null,
+): Map<String, List<Note>> {
     val result = mutableMapOf<String, MutableList<Note>>()
     for (note in rawNotes.values) {
         val parentId = note.parentNoteId ?: continue
-        if (!isLive(note.state)) continue
+        val include = isLive(note.state) ||
+            (includeDeletedBatchId != null &&
+                note.state == NoteState.DELETED &&
+                note.deletionBatchId == includeDeletedBatchId)
+        if (!include) continue
         result.getOrPut(parentId) { mutableListOf() }.add(note)
     }
     return result

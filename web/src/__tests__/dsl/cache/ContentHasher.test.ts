@@ -20,6 +20,7 @@ function makeNote(overrides: Partial<Note> = {}): Note {
     showCompleted: true,
     onceCache: {},
     containedNotesBase: null,
+    deletionBatchId: null,
     ...overrides,
   }
 }

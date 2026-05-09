@@ -425,7 +425,11 @@ fun CurrentNoteScreen(
                             isDirty = true,
                         )
                     }
-                    currentNoteViewModel.saveAll(noteLines, dirtySessions)
+                    currentNoteViewModel.saveAll(
+                        noteLines,
+                        dirtySessions,
+                        controller.consumePendingSoftDeletes(),
+                    )
                 }
                 displayedNoteId = targetNoteId
             },
@@ -681,7 +685,11 @@ private fun LifecycleAutoSaveEffect(
                         ?: return@LifecycleEventObserver
                     alreadySaved.value = true
                     val dirtySessions = currentInlineEditState?.getAllDirtySessions() ?: emptyList()
-                    currentNoteViewModel.saveAll(noteLines, dirtySessions)
+                    currentNoteViewModel.saveAll(
+                        noteLines,
+                        dirtySessions,
+                        controller.consumePendingSoftDeletes(),
+                    )
                 }
             }
         }
@@ -706,7 +714,8 @@ private fun LifecycleAutoSaveEffect(
                     val dirtySessions = currentInlineEditState?.getAllDirtySessions() ?: emptyList()
                     currentNoteViewModel.saveAll(
                         noteLines,
-                        dirtySessions
+                        dirtySessions,
+                        controller.consumePendingSoftDeletes(),
                     )
                 }
             }
@@ -817,6 +826,11 @@ private fun DataLoadingEffects(
             val loadedContent = loadStatus.content
             if (loadedContent != userContent) {
                 onContentLoaded(loadedContent)
+                // External reload supersedes any local removals: their noteIds
+                // are about to be replaced by whatever Firestore says lives on
+                // this note. Drop the tracker so we don't carry stale source
+                // tags forward into the next save.
+                controller.resetPendingSoftDeletes()
                 // CRITICAL: Update editorState BEFORE setBaseline() below!
                 // Without this line, editorState is empty when baseline is captured,
                 // which means undo can restore to empty state and LOSE USER DATA.
@@ -1026,7 +1040,8 @@ private fun NoteStatusBar(
             val dirtySessions = inlineEditState?.getAllDirtySessions() ?: emptyList()
             currentNoteViewModel.saveAll(
                 editorState.toNoteLines(),
-                dirtySessions
+                dirtySessions,
+                controller.consumePendingSoftDeletes(),
             )
         },
         canUndo = canUndo,
