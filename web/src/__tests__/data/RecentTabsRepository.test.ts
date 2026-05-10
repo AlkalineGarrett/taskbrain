@@ -5,7 +5,7 @@ import type { Auth } from 'firebase/auth'
 
 vi.mock('@/firebase/config', () => ({
   // Avoid pulling in real Firebase init at test load time.
-  db: {},
+  getDb: () => ({}),
   auth: { currentUser: { uid: 'user_1' } },
 }))
 
@@ -71,7 +71,8 @@ describe('RecentTabsRepository', () => {
       registeredListener = _args[1] as any
       return (() => {}) as any
     })
-    repo = new RecentTabsRepository(mockDb, mockAuth)
+    repo = new RecentTabsRepository()
+    repo.attach(mockDb, mockAuth)
   })
 
   describe('subscribe + cache updates', () => {
@@ -117,26 +118,30 @@ describe('RecentTabsRepository', () => {
       expect(subscriber).not.toHaveBeenCalled()
     })
 
-    it('clear drops cached tabs and subscribers', async () => {
+    it('detach drops cached tabs and listener but keeps React subscribers', async () => {
       void repo.getOpenTabs()
       await Promise.resolve()
       registeredListener!(fakeSnapshot({ tabIds: ['a', 'b'] }))
       const subscriber = vi.fn()
       repo.subscribe(subscriber)
 
-      repo.clear()
+      repo.detach()
 
       expect(repo.getCachedTabs()).toEqual([])
-      // Re-attach a listener for the next tick — clear() drops the registration.
+      // Subscribers persist across detach so that on the next lifecycle.start
+      // reattach, the existing React components seamlessly receive updates
+      // without re-subscribing — see firebase/lifecycle.ts rationale.
       vi.mocked(mockOnSnapshot).mockImplementation((..._args: any[]) => {
         registeredListener = _args[1] as any
         return (() => {}) as any
       })
+      repo.attach(mockDb, mockAuth)
       void repo.getOpenTabs()
       await Promise.resolve()
       registeredListener!(fakeSnapshot({ tabIds: ['c'] }))
-      // The pre-clear subscriber must NOT receive post-clear updates.
-      expect(subscriber).not.toHaveBeenCalled()
+      // The pre-detach subscriber MUST receive post-reattach updates.
+      expect(subscriber).toHaveBeenCalledTimes(1)
+      expect(repo.getCachedTabs().map((t) => t.noteId)).toEqual(['c'])
     })
   })
 

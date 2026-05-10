@@ -24,7 +24,8 @@ import { CompletedPlaceholderRow } from '@/components/CompletedPlaceholderRow'
 import { RecentTabsBar } from '@/components/RecentTabsBar'
 import { extractDisplayText } from '@/data/TabState'
 import { LOADING_NOTE, DELETE_NOTE, DELETE_NOTE_CONFIRM_TITLE, DELETE_NOTE_CONFIRM_MESSAGE, SAVE_ERROR_BANNER, SAVE_ERROR_DISMISS, SYNC_ERROR_BANNER } from '@/strings'
-import { db, auth } from '@/firebase/config'
+import { getDb, auth } from '@/firebase/config'
+import { useFirestoreLifecycleSnapshot } from '@/firebase/useFirestoreLifecycle'
 import { findDirectives } from '@/dsl/directives/DirectiveFinder'
 import { segmentLine, isViewSegment } from '@/dsl/directives/DirectiveSegmenter'
 import { directiveResultToValue } from '@/dsl/directives/DirectiveResult'
@@ -111,8 +112,9 @@ export function NoteEditorScreen() {
     [directiveEditingKey],
   )
 
-  // Start Firestore collection listener for real-time note sync
-  useEffect(() => { noteStore.start(db, auth) }, [])
+  // NoteStore listener is wired by FirestoreLifecycle; nothing to start here.
+
+  const lifecycle = useFirestoreLifecycleSnapshot()
 
   const currentNote = useMemo(
     () => allNotes.find((n) => n.id === noteId) ?? null,
@@ -120,10 +122,14 @@ export function NoteEditorScreen() {
   )
 
   const noteOperations = useMemo(() => {
+    if (lifecycle.state !== 'started') return undefined
     const userId = auth.currentUser?.uid
     if (!userId) return undefined
-    return new NoteRepositoryOperations(db, userId)
-  }, [])
+    return new NoteRepositoryOperations(getDb(), userId)
+    // Re-create on every lifecycle wake so the captured `notesRef` always
+    // references a live Firestore instance (terminate(db) invalidates the
+    // collection ref from the prior generation).
+  }, [lifecycle.generation, lifecycle.state])
 
   const activeNotes = useMemo(
     () => allNotes.filter((n) => isLive(n.state)),

@@ -114,10 +114,13 @@ export async function seedMultiLineNote(page: Page, content: string): Promise<st
         })
       })
     }
-    const repo = new repoMod.NoteRepository(cfg.db, cfg.auth)
+    const repo = new repoMod.NoteRepository(cfg.getDb(), cfg.auth)
     const id = await repo.createMultiLineNote(c)
-    storeMod.noteStore.clear()
-    storeMod.noteStore.start(cfg.db, cfg.auth)
+    // Force a fresh listener so the next snapshot is treated as initial
+    // (own-echo suppression skips reconstructedNotes rebuild for our writes;
+    // see syncNoteStore for the same dance from save flows).
+    storeMod.noteStore.detach()
+    storeMod.noteStore.attach(cfg.getDb(), cfg.auth)
     await storeMod.noteStore.ensureLoaded()
     return id
   }, content)
@@ -172,8 +175,8 @@ export async function syncNoteStore(page: Page) {
   await page.evaluate(async () => {
     const cfg = await import('/src/firebase/config.ts')
     const storeMod = await import('/src/data/NoteStore.ts')
-    storeMod.noteStore.clear()
-    storeMod.noteStore.start(cfg.db, cfg.auth)
+    storeMod.noteStore.detach()
+    storeMod.noteStore.attach(cfg.getDb(), cfg.auth)
     await storeMod.noteStore.ensureLoaded()
   })
 }

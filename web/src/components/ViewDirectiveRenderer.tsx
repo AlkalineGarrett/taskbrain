@@ -6,7 +6,7 @@ import { findDirectives, directiveHash } from '@/dsl/directives/DirectiveFinder'
 import { executeDirectiveWithMutations } from '@/dsl/directives/DirectiveExecutor'
 import { noteStore } from '@/data/NoteStore'
 import { NoteRepository } from '@/data/NoteRepository'
-import { db, auth } from '@/firebase/config'
+import { getDb, auth } from '@/firebase/config'
 import { InlineEditSession } from '@/editor/InlineEditSession'
 import { useActiveEditor } from '@/editor/ActiveEditorContext'
 import { useEditorInteractions } from '@/editor/useEditorInteractions'
@@ -16,8 +16,6 @@ import { EditorLine } from './EditorLine'
 import { CompletedPlaceholderRow } from './CompletedPlaceholderRow'
 import { SAVE_ERROR_BANNER, SAVE_ERROR_DISMISS } from '@/strings'
 import styles from './ViewDirectiveRenderer.module.css'
-
-const noteRepo = new NoteRepository(db, auth)
 
 interface ViewDirectiveRendererProps {
   viewVal: ViewVal
@@ -56,7 +54,7 @@ export function ViewDirectiveRenderer({ viewVal, onEditDirective, parentNoteIdTe
   useEffect(() => {
     let cancelled = false
     void sessionManager
-      .ensureSessions(notes, (id) => noteRepo.loadNoteLinesAwait(id))
+      .ensureSessions(notes, (id) => new NoteRepository(getDb(), auth).loadNoteLinesAwait(id))
       .then(() => { if (!cancelled) setReadyTick((t) => t + 1) })
       .catch((err) => {
         if (!cancelled) console.error('ensureSessions failed:', err)

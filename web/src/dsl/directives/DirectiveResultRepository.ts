@@ -1,11 +1,11 @@
 import { collection, doc, getDocs, setDoc, updateDoc, serverTimestamp, writeBatch } from 'firebase/firestore'
-import { db, auth } from '@/firebase/config'
+import { getDb, auth } from '@/firebase/config'
 import { firestoreUsage } from '@/data/FirestoreUsage'
 import type { DirectiveResult } from './DirectiveResult'
 import type { DirectiveWarningType } from './DirectiveResult'
 
 function resultsCollection(noteId: string) {
-  return collection(db, 'notes', noteId, 'directiveResults')
+  return collection(getDb(), 'notes', noteId, 'directiveResults')
 }
 
 /**
@@ -73,7 +73,7 @@ export async function deleteAllDirectiveResults(noteId: string): Promise<void> {
   const snapshot = await getDocs(resultsCollection(noteId))
   firestoreUsage.recordRead('deleteAllDirectiveResults', 'GET_DOCS', snapshot.size)
   if (snapshot.empty) return
-  const batch = writeBatch(db)
+  const batch = writeBatch(getDb())
   for (const docSnap of snapshot.docs) {
     batch.delete(docSnap.ref)
   }

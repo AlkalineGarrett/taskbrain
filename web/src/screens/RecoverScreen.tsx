@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { collection, query, where, getDocs } from 'firebase/firestore'
-import { db, auth } from '@/firebase/config'
+import { getDb, auth } from '@/firebase/config'
 import { type Note, noteFromFirestore } from '@/data/Note'
 import { NoteRepository } from '@/data/NoteRepository'
 import { noteStore } from '@/data/NoteStore'
@@ -8,8 +8,6 @@ import { firestoreUsage } from '@/data/FirestoreUsage'
 import { NoteState } from '@/data/NoteState'
 import { newSentinelNoteId } from '@/data/NoteIdSentinel'
 import styles from './RecoverScreen.module.css'
-
-const repo = new NoteRepository(db, auth)
 
 /** Max gap between consecutive timestamps to be considered the same batch. */
 const BATCH_WINDOW_MS = 5000
@@ -189,7 +187,7 @@ export function RecoverScreen() {
     const userId = auth.currentUser?.uid
     if (!userId) return
 
-    const notesRef = collection(db, 'notes')
+    const notesRef = collection(getDb(), 'notes')
     const snapshot = await getDocs(query(notesRef, where('userId', '==', userId)))
     firestoreUsage.recordRead('RecoverScreen.loadNotes', 'GET_DOCS', snapshot.size)
     const allNotes = snapshot.docs.map(d => noteFromFirestore(d.id, d.data()))
@@ -207,6 +205,7 @@ export function RecoverScreen() {
     setErrorMessage(null)
     try {
       const title = titles.get(index) ?? ''
+      const repo = new NoteRepository(getDb(), auth)
       const noteId = await repo.createNote()
       const trackedLines = [
         { content: title, noteId },
@@ -229,7 +228,7 @@ export function RecoverScreen() {
     setBusyIndex(index)
     setErrorMessage(null)
     try {
-      await noteStore.enqueueSave(() => repo.restoreCutDeletedNotes(group.notes.map(n => n.id)))
+      await noteStore.enqueueSave(() => new NoteRepository(getDb(), auth).restoreCutDeletedNotes(group.notes.map(n => n.id)))
       setGroups(prev => prev.filter((_, i) => i !== index))
     } catch (e) {
       console.error('Restore parked cuts failed:', e)

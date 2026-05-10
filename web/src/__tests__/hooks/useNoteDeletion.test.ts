@@ -10,7 +10,7 @@ const { softDeleteSpy, undeleteSpy, getNoteByIdSpy, updateNoteSpy, removeTabSpy,
   navigateSpy: vi.fn(),
 }))
 
-vi.mock('@/firebase/config', () => ({ db: {}, auth: {} }))
+vi.mock('@/firebase/config', () => ({ getDb: () => ({}), auth: {} }))
 
 vi.mock('@/data/NoteRepository', () => {
   class FakeRepo {

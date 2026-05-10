@@ -1,11 +1,11 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useAllNotes } from './useNoteStore'
 import { searchNotes, type NoteSearchResult } from '@/data/NoteSearchUtils'
 import {
   SearchHistoryRepository,
   type SearchHistoryEntry,
 } from '@/data/SearchHistoryRepository'
-import { db, auth } from '@/firebase/config'
+import { getDb, auth } from '@/firebase/config'
 
 export interface SearchState {
   query: string
@@ -28,15 +28,15 @@ export function useSearch() {
   const [deletedResults, setDeletedResults] = useState<NoteSearchResult[]>([])
   const [searchHistory, setSearchHistory] = useState<SearchHistoryEntry[]>([])
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const historyRepo = useMemo(() => new SearchHistoryRepository(db, auth), [])
 
   // Load history on mount and sync from Firebase
   useEffect(() => {
+    const historyRepo = new SearchHistoryRepository(getDb(), auth)
     setSearchHistory(historyRepo.getHistory())
     void historyRepo.syncFromFirebase().then(() => {
       setSearchHistory(historyRepo.getHistory())
     })
-  }, [historyRepo])
+  }, [])
 
   const runSearch = useCallback(
     (state: SearchState) => {
@@ -60,6 +60,7 @@ export function useSearch() {
   const saveToHistory = useCallback(
     (state: SearchState) => {
       if (!state.query) return
+      const historyRepo = new SearchHistoryRepository(getDb(), auth)
       historyRepo.saveEntry({
         query: state.query,
         criteria: { name: state.searchByName, content: state.searchByContent },
@@ -67,7 +68,7 @@ export function useSearch() {
       })
       setSearchHistory(historyRepo.getHistory())
     },
-    [historyRepo],
+    [],
   )
 
   /** Explicit search triggered by Go button or Enter key. Saves to history. */

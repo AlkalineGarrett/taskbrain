@@ -1,0 +1,14 @@
+.banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  padding: 4px 12px;
+  font-size: 12px;
+  text-align: center;
+  background: var(--color-banner-info-bg, #fff8e1);
+  color: var(--color-banner-info-fg, #5d4037);
+  border-bottom: 1px solid var(--color-banner-info-border, #e8d8a8);
+  pointer-events: none;
+}

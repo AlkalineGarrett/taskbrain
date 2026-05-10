@@ -3,9 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { NoteRepository } from '@/data/NoteRepository'
 import { noteStore } from '@/data/NoteStore'
 import { removeTab } from '@/components/RecentTabsBar'
-import { db, auth } from '@/firebase/config'
-
-const noteRepo = new NoteRepository(db, auth)
+import { getDb, auth } from '@/firebase/config'
 
 export function useNoteDeletion(noteId: string | null | undefined) {
   const navigate = useNavigate()
@@ -13,6 +11,7 @@ export function useNoteDeletion(noteId: string | null | undefined) {
   const handleDeleteNote = useCallback(async () => {
     if (!noteId) return
     try {
+      const noteRepo = new NoteRepository(getDb(), auth)
       await noteRepo.softDeleteNote(noteId)
       const nextNoteId = await removeTab(noteId)
       navigate(nextNoteId ? `/note/${nextNoteId}` : '/')
@@ -24,6 +23,7 @@ export function useNoteDeletion(noteId: string | null | undefined) {
   const handleRestoreNote = useCallback(async () => {
     if (!noteId) return
     try {
+      const noteRepo = new NoteRepository(getDb(), auth)
       await noteRepo.undeleteNote(noteId)
       const existing = noteStore.getNoteById(noteId)
       if (existing) {

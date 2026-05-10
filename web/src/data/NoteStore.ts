@@ -6,7 +6,7 @@ import {
   type Firestore,
   type Unsubscribe,
 } from 'firebase/firestore'
-import type { Auth } from 'firebase/auth'
+import { onAuthStateChanged, type Auth } from 'firebase/auth'
 import { noteFromFirestore, type Note, type NoteLine } from './Note'
 import { isLive } from './NoteState'
 import { firestoreUsage } from './FirestoreUsage'
@@ -70,6 +70,13 @@ export class NoteStore {
   private loadResolve: (() => void) | null = null
   private loadPromise: Promise<void> | null = null
   private unsubscribe: Unsubscribe | null = null
+  /**
+   * Set when attach() ran before auth resolved and is waiting for sign-in.
+   * Cleared on the auth callback that triggers the real attach, or on detach.
+   * Without this, attach silently no-ops at module load (auth state is async)
+   * and never retries when the user signs in.
+   */
+  private pendingAuthUnsub: Unsubscribe | null = null
   private listeners = new Set<() => void>()
   private changeListeners = new Set<(changedIds: Set<string>) => void>()
   private errorListeners = new Set<() => void>()
@@ -149,14 +156,25 @@ export class NoteStore {
     this.emitNeedsFixChange()
   }
 
-  /**
-   * Start the Firestore collection listener. Idempotent — calling multiple
-   * times is safe (subsequent calls are no-ops if already started).
-   */
-  start(db: Firestore, auth: Auth): void {
+  /** Idempotent. Wired to FirestoreLifecycle by firebase/bootstrap. */
+  attach(db: Firestore, auth: Auth): void {
     if (this.unsubscribe) return
     const userId = auth.currentUser?.uid
-    if (!userId) return
+    if (!userId) {
+      // Auth state is async — at app boot the lifecycle.start handler runs
+      // before onAuthStateChanged fires. Defer the listener attach until a
+      // user appears. Tracked so detach() can cancel a pending wait.
+      this.pendingAuthUnsub?.()
+      this.pendingAuthUnsub = onAuthStateChanged(auth, (user) => {
+        if (!user) return
+        this.pendingAuthUnsub?.()
+        this.pendingAuthUnsub = null
+        this.attach(db, auth)
+      })
+      return
+    }
+    this.pendingAuthUnsub?.()
+    this.pendingAuthUnsub = null
     this.surfacePersistentCacheError()
 
     // Create promise for ensureLoaded() callers to await
@@ -271,8 +289,16 @@ export class NoteStore {
     return this.loadPromise
   }
 
-  /** Stop listening and clear all data (e.g., on logout). */
-  clear(): void {
+  /**
+   * Detach the listener and reset in-memory state. Counterpart to attach();
+   * called by the FirestoreLifecycle on lifecycle.stop() (tab idle) so the
+   * subsequent terminate(db) has nothing to drain. The persistent cache
+   * survives — the next attach reloads from it without server reads in the
+   * common case.
+   */
+  detach(): void {
+    this.pendingAuthUnsub?.()
+    this.pendingAuthUnsub = null
     this.unsubscribe?.()
     this.unsubscribe = null
     this.rawNotes.clear()

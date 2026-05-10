@@ -14,7 +14,6 @@ import {
 } from 'firebase/firestore'
 import type { Auth } from 'firebase/auth'
 import type { Timestamp } from 'firebase/firestore'
-import { db, auth } from '@/firebase/config'
 import { firestoreUsage } from './FirestoreUsage'
 
 export interface RecentTab {
@@ -46,32 +45,57 @@ function sameTabs(a: RecentTab[], b: RecentTab[]): boolean {
  * (`getOpenTabs`, `enforceTabLimit`) don't pay a Firestore read per call.
  * Subscribers (e.g. RecentTabsBar) are notified on every cache update,
  * including local-echo snapshots — see `ensureListenerAttached`.
+ *
+ * Lifecycle: db/auth are bound by FirestoreLifecycle attach/detach so the
+ * SDK can be terminated on idle. React subscribers persist across detach
+ * so wake-ups re-deliver tab state without re-subscription on the consumer.
  */
 export class RecentTabsRepository {
+  private db: Firestore | null = null
+  private auth: Auth | null = null
   private cachedTabs: RecentTab[] = []
   private unsubscribe: Unsubscribe | null = null
   private loadPromise: Promise<void> | null = null
   private loadResolve: (() => void) | null = null
   private subscribers = new Set<() => void>()
 
-  constructor(
-    private readonly db: Firestore,
-    private readonly auth: Auth,
-  ) {}
+  attach(db: Firestore, auth: Auth): void {
+    this.db = db
+    this.auth = auth
+  }
+
+  detach(): void {
+    this.unsubscribe?.()
+    this.unsubscribe = null
+    this.loadPromise = null
+    this.loadResolve = null
+    this.cachedTabs = []
+    this.db = null
+    this.auth = null
+    // Subscribers persist; they'll receive updates again on the next attach.
+  }
+
+  private requireDb(): Firestore {
+    if (!this.db) throw new Error('RecentTabsRepository not attached (Firestore lifecycle stopped)')
+    return this.db
+  }
 
   private requireUserId(): string {
+    if (!this.auth) throw new Error('RecentTabsRepository not attached')
     const uid = this.auth.currentUser?.uid
     if (!uid) throw new Error('User not signed in')
     return uid
   }
 
   private openTabsCollection(userId: string) {
-    return collection(this.db, 'users', userId, 'openTabs')
+    return collection(this.requireDb(), 'users', userId, 'openTabs')
   }
 
   private tabRef(userId: string, noteId: string) {
     return doc(this.openTabsCollection(userId), noteId)
   }
+
+
 
   /**
    * Lazily attach the snapshot listener for the current user's openTabs
@@ -152,18 +176,6 @@ export class RecentTabsRepository {
   }
 
   /**
-   * Detach the listener and drop cached tabs. Intended for logout cleanup.
-   */
-  clear(): void {
-    this.unsubscribe?.()
-    this.unsubscribe = null
-    this.loadPromise = null
-    this.loadResolve = null
-    this.cachedTabs = []
-    this.subscribers.clear()
-  }
-
-  /**
    * Subscribe to cache updates. Listener fires after every snapshot (including
    * local echoes). Returns an unsubscribe function.
    */
@@ -224,7 +236,7 @@ export class RecentTabsRepository {
     const all = this.cachedTabs
     if (all.length <= MAX_STORED) return
     const excess = all.slice(MAX_STORED)
-    const batch = writeBatch(this.db)
+    const batch = writeBatch(this.requireDb())
     excess.forEach((t) => batch.delete(this.tabRef(userId, t.noteId)))
     await batch.commit()
     firestoreUsage.recordWrite('enforceTabLimit', 'BATCH_COMMIT', excess.length)
@@ -234,5 +246,8 @@ export class RecentTabsRepository {
 /**
  * Process-wide singleton. Two listeners on the same `openTabs` collection
  * would double the listener-read count and the per-snapshot work; share one.
+ *
+ * Bound to a live Firestore via `attach()` by the bootstrap module on every
+ * lifecycle.start(). Tests construct their own instance and call attach().
  */
-export const recentTabsRepo = new RecentTabsRepository(db, auth)
+export const recentTabsRepo = new RecentTabsRepository()

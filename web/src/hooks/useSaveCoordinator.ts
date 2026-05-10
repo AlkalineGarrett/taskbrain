@@ -8,9 +8,7 @@ import { firestoreUsage } from '@/data/FirestoreUsage'
 import type { InlineEditSession } from '@/editor/InlineEditSession'
 import type { InlineSessionManager } from '@/editor/InlineSessionManager'
 import type { SaveStatus } from '@/components/CommandBar'
-import { db, auth } from '@/firebase/config'
-
-const noteRepo = new NoteRepository(db, auth)
+import { getDb, auth } from '@/firebase/config'
 
 interface UseSaveCoordinatorOptions {
   noteId: string | null | undefined
@@ -77,7 +75,7 @@ export function useSaveCoordinator({
     // next full session load will populate it from rawNotes (which by then
     // will have caught up via the listener).
     const savePromise = noteStore.enqueueSave(() =>
-      noteRepo.saveNoteWithFullContent(session.noteId, content),
+      new NoteRepository(getDb(), auth).saveNoteWithFullContent(session.noteId, content),
     )
     noteStore.trackSave(session.noteId, savePromise)
     const createdIds = await savePromise
@@ -94,7 +92,7 @@ export function useSaveCoordinator({
       updates[`onceCache.${cacheKey}`] = value
     }
     try {
-      await updateDoc(doc(db, 'notes', noteId), updates)
+      await updateDoc(doc(getDb(), 'notes', noteId), updates)
       firestoreUsage.recordWrite('flushOnceCacheEntries', 'UPDATE')
     } catch (e) {
       console.error('Failed to persist once cache entries:', e)
@@ -143,6 +141,7 @@ export function useSaveCoordinator({
       // Resolve inline session tracked lines in parallel: a NoteStore miss
       // falls through to loadNoteWithChildren (Firestore round trip), so
       // serializing them would stack unrelated read latencies.
+      const noteRepo = new NoteRepository(getDb(), auth)
       const inlineSlots = await Promise.all(
         dirtySessions.map(async (session): Promise<SaveSlot> => {
           const content = session.getText()

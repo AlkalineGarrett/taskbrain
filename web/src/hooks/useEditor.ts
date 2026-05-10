@@ -8,15 +8,13 @@ import { DeletionSource } from '@/data/DeletionSource'
 import { noteStatsRepo } from '@/data/NoteStatsRepository'
 import { noteStore } from '@/data/NoteStore'
 import { resolveNoteIds } from '@/editor/resolveNoteIds'
-import { db, auth } from '@/firebase/config'
+import { getDb, auth } from '@/firebase/config'
 import { ERROR_LOAD, ERROR_SAVE, SAVE_ERROR_BANNER } from '@/strings'
 
 const PENDING_SAVE_ERROR_KEY = 'pendingSaveError'
 const VIEW_DWELL_MS = 1500
 const VIEW_COOLDOWN_MS = 5 * 60 * 1000
 const lastViewWriteMs = new Map<string, number>()
-
-const repo = new NoteRepository(db, auth)
 
 /**
  * Editor-specific state cache for instant tab switching.
@@ -241,7 +239,7 @@ export function useEditor(noteId: string | undefined) {
           }
         }
 
-        const { lines, showCompleted } = await repo.loadNoteWithChildren(noteId)
+        const { lines, showCompleted } = await new NoteRepository(getDb(), auth).loadNoteWithChildren(noteId)
         setShowCompleted(showCompleted)
         populateEditor(toEditorLines(lines), false)
         captureLocalBase(noteId)
@@ -352,7 +350,7 @@ export function useEditor(noteId: string | undefined) {
 
       const { trackedLines, localBases, deletionSources, applyResult } = prepareMainSaveItem(targetNoteId)
       const result = await noteStore.enqueueSave(() =>
-        repo.saveNoteWithChildren(targetNoteId, trackedLines, localBases, deletionSources),
+        new NoteRepository(getDb(), auth).saveNoteWithChildren(targetNoteId, trackedLines, localBases, deletionSources),
       )
       applyResult(result)
     } catch (e) {
@@ -369,7 +367,7 @@ export function useEditor(noteId: string | undefined) {
     const newValue = !showCompleted
     setShowCompleted(newValue)
     try {
-      await repo.updateShowCompleted(noteId, newValue)
+      await new NoteRepository(getDb(), auth).updateShowCompleted(noteId, newValue)
     } catch (e) {
       console.error('Failed to persist showCompleted:', e)
     }

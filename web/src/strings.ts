@@ -69,6 +69,7 @@ export const NEEDS_FIX = 'Fix'
 export const TAB_NEEDS_FIX_INDICATOR = 'Note was auto-healed — save to persist the fix'
 export const LOADING = 'Loading\u2026'
 export const LOADING_NOTE = 'Loading note\u2026'
+export const REFRESHING = 'Refreshing\u2026'
 
 // Error strings (Android: error_title, error_unknown, etc.)
 export const ERROR_TITLE = 'Error'

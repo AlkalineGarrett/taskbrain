@@ -6,6 +6,9 @@ import { NoteListScreen } from '@/screens/NoteListScreen'
 import { NoteEditorScreen } from '@/screens/NoteEditorScreen'
 import { RecoverScreen } from '@/screens/RecoverScreen'
 import { AdminScreen } from '@/screens/AdminScreen'
+import { installFirestoreBootstrap } from '@/firebase/bootstrap'
+
+installFirestoreBootstrap()
 
 export function App() {
   return (

@@ -9,7 +9,6 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore'
 import type { Auth } from 'firebase/auth'
-import { db, auth } from '@/firebase/config'
 import { noteStatsFromFirestore, type NoteStats } from './NoteStats'
 import { firestoreUsage } from './FirestoreUsage'
 
@@ -40,27 +39,53 @@ function sameStats(a: Map<string, NoteStats>, b: Map<string, NoteStats>): boolea
  * `docs/firestore-efficiency.md` Principle 1. Mirrors the [RecentTabsRepository]
  * pattern. Use the module singleton [noteStatsRepo] — two listeners on the
  * same `noteStats` collection would double the listener-read count.
+ *
+ * Lifecycle: db/auth are bound by FirestoreLifecycle attach/detach so the
+ * SDK can be terminated on idle. Subscribers and pending load promises
+ * survive a detach so wake-ups re-load transparently.
  */
 export class NoteStatsRepository {
+  private db: Firestore | null = null
+  private auth: Auth | null = null
   private cachedStats: Map<string, NoteStats> = new Map()
   private unsubscribe: Unsubscribe | null = null
   private loadPromise: Promise<void> | null = null
   private loadResolve: (() => void) | null = null
   private subscribers = new Set<() => void>()
 
-  constructor(
-    private readonly db: Firestore,
-    private readonly auth: Auth,
-  ) {}
+  attach(db: Firestore, auth: Auth): void {
+    this.db = db
+    this.auth = auth
+    // The listener is lazy (attached on first loadAllNoteStats); nothing to
+    // do here. If a load was pending across a detach, it'll resume next call.
+  }
+
+  detach(): void {
+    this.unsubscribe?.()
+    this.unsubscribe = null
+    this.loadPromise = null
+    this.loadResolve = null
+    this.cachedStats = new Map()
+    this.db = null
+    this.auth = null
+    // Subscribers are kept — same React subscribers will receive updates when
+    // the listener is reattached.
+  }
+
+  private requireDb(): Firestore {
+    if (!this.db) throw new Error('NoteStatsRepository not attached (Firestore lifecycle stopped)')
+    return this.db
+  }
 
   private requireUserId(): string {
+    if (!this.auth) throw new Error('NoteStatsRepository not attached')
     const uid = this.auth.currentUser?.uid
     if (!uid) throw new Error('User not signed in')
     return uid
   }
 
   private statsCollection(userId: string) {
-    return collection(this.db, 'users', userId, 'noteStats')
+    return collection(this.requireDb(), 'users', userId, 'noteStats')
   }
 
   private statsRef(userId: string, noteId: string) {
@@ -120,16 +145,6 @@ export class NoteStatsRepository {
     return this.loadPromise
   }
 
-  /** Detach the listener and drop the cache. Call on sign-out. */
-  clear(): void {
-    this.unsubscribe?.()
-    this.unsubscribe = null
-    this.loadPromise = null
-    this.loadResolve = null
-    this.cachedStats = new Map()
-    this.subscribers.clear()
-  }
-
   /** Subscribe to cache updates. Returns an unsubscribe function. */
   subscribe(listener: () => void): () => void {
     this.subscribers.add(listener)
@@ -169,5 +184,9 @@ function todayLocalDate(): string {
 /**
  * Process-wide singleton. Two listeners on the same `noteStats` collection
  * would double the listener-read count and the per-snapshot work; share one.
+ *
+ * The instance is bound to a live Firestore via `attach()` by the bootstrap
+ * module on every lifecycle.start(). Tests construct their own instance and
+ * call attach() with a mocked Firestore directly.
  */
-export const noteStatsRepo = new NoteStatsRepository(db, auth)
+export const noteStatsRepo = new NoteStatsRepository()

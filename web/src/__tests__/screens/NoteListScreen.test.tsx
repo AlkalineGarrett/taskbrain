@@ -2,17 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import type { Note } from '@/data/Note'
 
-const { useNotesSpy, useSearchSpy, noteStoreStartSpy, navigateSpy } = vi.hoisted(() => ({
+const { useNotesSpy, useSearchSpy, navigateSpy } = vi.hoisted(() => ({
   useNotesSpy: vi.fn(),
   useSearchSpy: vi.fn(),
-  noteStoreStartSpy: vi.fn(),
   navigateSpy: vi.fn(),
 }))
 
-vi.mock('@/firebase/config', () => ({ db: {}, auth: {} }))
+vi.mock('@/firebase/config', () => ({ getDb: () => ({}), auth: {} }))
 
 vi.mock('@/data/NoteStore', () => ({
-  noteStore: { start: noteStoreStartSpy },
+  noteStore: { attach: vi.fn(), detach: vi.fn() },
 }))
 
 vi.mock('@/hooks/useNotes', () => ({

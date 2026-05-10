@@ -1,13 +1,8 @@
 import { initializeApp } from 'firebase/app'
 import { connectAuthEmulator, getAuth, signInAnonymously } from 'firebase/auth'
-import {
-  type Firestore,
-  connectFirestoreEmulator,
-  initializeFirestore,
-  memoryLocalCache,
-  persistentLocalCache,
-  persistentMultipleTabManager,
-} from 'firebase/firestore'
+import type { Firestore } from 'firebase/firestore'
+
+import { firestoreLifecycle } from './lifecycle'
 
 const firebaseConfig = {
   apiKey: "AIzaSyDbbjG7ynlks5DodHoATVjJLHu_K_JX3KI",
@@ -44,29 +39,26 @@ if (persistentCacheError) {
   console.warn(`[Firestore persistence] ${persistentCacheError}`)
 }
 
-/**
- * Enables Firestore's persistent IndexedDB cache with multi-tab support so
- * cold-start reads come from local cache and the listener uses resume tokens
- * for delta sync. Mirrors Android's default-on persistent cache.
- *
- * The SDK auto-falls-back to memory cache if IndexedDB is unavailable; the
- * `persistentCacheError` export above signals that case to the UI.
- */
-export const db: Firestore = initializeFirestore(app, {
-  localCache: useEmulator
-    ? memoryLocalCache()
-    : persistentLocalCache({
-        tabManager: persistentMultipleTabManager(),
-      }),
-})
+firestoreLifecycle.configure(app, auth, useEmulator)
 
 if (useEmulator) {
-  connectFirestoreEmulator(db, 'localhost', 8080)
   connectAuthEmulator(auth, 'http://localhost:9099', { disableWarnings: true })
   if (!auth.currentUser) {
     signInAnonymously(auth).catch((e) => {
       console.error('[firebase emulator] anonymous sign-in failed', e)
     })
   }
-  console.info('[firebase emulator] wired Firestore 8080, Auth 9099')
+  console.info('[firebase emulator] wired Auth 9099 (Firestore wired by lifecycle on start)')
+}
+
+/**
+ * Returns the live Firestore instance. Throws if the lifecycle is currently
+ * stopped — callers in user-driven code paths should never see this because
+ * the visibility observer guarantees lifecycle.start before the tab is
+ * interactive. Pure background code (e.g. imports during module load) MUST
+ * NOT call this — it is only safe inside hook bodies, event handlers, and
+ * effect callbacks that fire on visible tabs.
+ */
+export function getDb(): Firestore {
+  return firestoreLifecycle.requireDb()
 }

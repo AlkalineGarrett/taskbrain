@@ -9,10 +9,8 @@ import {
   filterAndSortDeletedNotes,
   type NoteSortMode,
 } from '@/data/NoteFilteringUtils'
-import { db, auth } from '@/firebase/config'
+import { getDb, auth } from '@/firebase/config'
 import { ERROR_LOAD } from '@/strings'
-
-const repo = new NoteRepository(db, auth)
 
 export function useNotes() {
   // Notes come from the live NoteStore listener — no explicit Firestore read.
@@ -68,19 +66,19 @@ export function useNotes() {
   }, [])
 
   const createNote = useCallback(async (): Promise<string> => {
-    return repo.createNote().catch(surfaceMutationError)
+    return new NoteRepository(getDb(), auth).createNote().catch(surfaceMutationError)
   }, [surfaceMutationError])
 
   const deleteNote = useCallback(async (noteId: string) => {
-    await repo.softDeleteNote(noteId).catch(surfaceMutationError)
+    await new NoteRepository(getDb(), auth).softDeleteNote(noteId).catch(surfaceMutationError)
   }, [surfaceMutationError])
 
   const undeleteNote = useCallback(async (noteId: string) => {
-    await repo.undeleteNote(noteId).catch(surfaceMutationError)
+    await new NoteRepository(getDb(), auth).undeleteNote(noteId).catch(surfaceMutationError)
   }, [surfaceMutationError])
 
   const clearDeleted = useCallback(async (): Promise<number> => {
-    return repo.hardDeleteAllSoftDeleted().catch(surfaceMutationError)
+    return new NoteRepository(getDb(), auth).hardDeleteAllSoftDeleted().catch(surfaceMutationError)
   }, [surfaceMutationError])
 
   return {
@@ -98,5 +96,3 @@ export function useNotes() {
     refresh,
   }
 }
-
-export { repo as noteRepository }

@@ -15,7 +15,7 @@ const { repoSaveSpy, multiSaveSpy, prepareInlineSpy, updateNoteSpy, updateConten
 }))
 
 vi.mock('@/firebase/config', () => ({
-  db: {},
+  getDb: () => ({}),
   auth: { currentUser: { uid: 'u1' } },
 }))
 

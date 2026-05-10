@@ -109,16 +109,16 @@ describe('NoteStore', () => {
     })
   })
 
-  describe('clear', () => {
+  describe('detach', () => {
     it('empties the store', () => {
-      store.clear()
+      store.detach()
       expect(store.getSnapshot()).toEqual([])
     })
 
     it('notifies listeners', () => {
       const listener = vi.fn()
       store.subscribe(listener)
-      store.clear()
+      store.detach()
       expect(listener).toHaveBeenCalledTimes(1)
     })
   })
