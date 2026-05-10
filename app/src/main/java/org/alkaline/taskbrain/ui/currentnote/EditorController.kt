@@ -1427,6 +1427,21 @@ class EditorController(
     }
 
     /**
+     * Replace the current selection with [text] as a single undoable
+     * operation. Used by the IME's commitText path when a selection is
+     * active (e.g. GBoard's suggestion-tap fires
+     * setSelection(typoStart, typoEnd) → commitText(suggestion)). The
+     * user perceives the swap as one action, so undo must restore the
+     * pre-replacement state in one step.
+     */
+    fun replaceSelectionWithUndo(text: String) {
+        if (!state.hasSelection) return
+        undoManager.captureStateBeforeChange(state)
+        state.replaceSelectionInternal(text)
+        undoManager.beginEditingLine(state, state.focusedLineIndex)
+    }
+
+    /**
      * Delete the current selection (no undo handling).
      * INTERNAL: Use deleteSelectionWithUndo() for proper undo handling.
      */

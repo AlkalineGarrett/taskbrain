@@ -186,4 +186,58 @@ class LineImeStateInvariantTest {
         assertTrue(state.lines[0].text.endsWith("bar"))
         assertEquals("baz", state.lines[1].text)
     }
+
+    /**
+     * GBoard's Android 14+ suggestion-tap path is:
+     *   beginBatchEdit
+     *   finishComposingText
+     *   setSelection(0, 8)         -- select the typo
+     *   commitText("childish ", 1) -- replace selection with suggestion
+     *   endBatchEdit
+     *
+     * Pre-fix, [setSelection] dropped range selections (only handled the
+     * cursor-positioning case where start == end). The subsequent
+     * commitText then saw composingRange=null and hasSelection=false, so
+     * it inserted the suggestion at the cursor instead of replacing the
+     * typo: "vhjaskdh" + "childish " => "vhjaskdhchildish ".
+     */
+    @Test
+    fun `GBoard suggestion-tap replaces selected typo with suggestion`() {
+        val (state, _, ime) = setup("vhjaskdh", 0)
+
+        ime.beginBatchEdit()
+        ime.finishComposingText()
+        ime.setSelection(0, 8)
+        ime.commitText("childish ", 1)
+        ime.endBatchEdit()
+
+        assertEquals(
+            "expected the typo to be replaced, not appended to",
+            "childish ", state.lines[0].text,
+        )
+    }
+
+    /**
+     * Same scenario as the GBoard suggestion-tap, but extending the assertion to
+     * undo: the suggestion-tap is one user-visible action, so a single undo
+     * must take the line back to the typo state. Pre-fix this routed through
+     * a no-undo selection replacement, leaving nothing to undo.
+     */
+    @Test
+    fun `undo after GBoard suggestion-tap restores the typo`() {
+        val (state, controller, ime) = setup("vhjaskdh", 0)
+
+        ime.beginBatchEdit()
+        ime.finishComposingText()
+        ime.setSelection(0, 8)
+        ime.commitText("childish ", 1)
+        ime.endBatchEdit()
+
+        controller.undo()
+
+        assertEquals(
+            "undo should restore the pre-replacement content as a single step",
+            "vhjaskdh", state.lines[0].text,
+        )
+    }
 }

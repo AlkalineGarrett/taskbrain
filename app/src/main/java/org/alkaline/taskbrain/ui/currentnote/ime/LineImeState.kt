@@ -198,7 +198,7 @@ class LineImeState(
             if (text == " ") {
                 controller.handleSpaceWithSelection()
             } else {
-                controller.replaceSelectionNoUndo(text)
+                controller.replaceSelectionWithUndo(text)
             }
             sendImeNotification()
             return
@@ -286,14 +286,23 @@ class LineImeState(
     }
 
     fun setSelection(start: Int, end: Int) {
+        // GBoard's Android-14+ suggestion-tap path is
+        // setSelection(typoStart, typoEnd) → commitText(suggestion). The
+        // range selection has to land on the controller's selection state
+        // so the next commitText / setComposingText / deleteSurroundingText
+        // hits the existing hasSelection branch and replaces, instead of
+        // inserting at the cursor (which manifests as the suggestion being
+        // appended to the typo). Real composing is mutually exclusive with
+        // a real selection — clear it.
         if (start == end) {
             val prefix = controller.getLineText(lineIndex).let { LineState.extractPrefix(it) }
             controller.setCursor(lineIndex, prefix.length + start.coerceIn(0, length))
+        } else if (start >= 0 && end >= 0) {
+            controller.setComposingRange(lineId, null)
+            val s = start.coerceIn(0, length)
+            val e = end.coerceIn(0, length)
+            controller.setSelectionInLine(lineIndex, minOf(s, e), maxOf(s, e))
         }
-        // Range selections are tracked by the controller's selection
-        // state, not by us — we don't translate range-select to a
-        // controller op (the Compose UI manages multi-line selection
-        // separately).
         sendImeNotification()
     }
 
