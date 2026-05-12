@@ -1,20 +1,31 @@
 package org.alkaline.taskbrain.data
 
 import android.util.Log
-import com.google.firebase.firestore.DocumentChange
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.ProcessLifecycleOwner
+import com.google.firebase.Timestamp
+import com.google.firebase.firestore.AggregateSource
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Query
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.locks.ReentrantReadWriteLock
@@ -23,14 +34,9 @@ import kotlin.concurrent.write
 
 /**
  * Singleton reactive store for all notes with reconstructed content.
- * Single source of truth for directive execution context on Android.
- *
- * Uses a Firestore collection listener for real-time incremental updates.
- * Compose components observe via [notes] StateFlow.
- *
- * Internal state:
- * - [rawNotes]: every Firestore doc (including descendants), indexed by ID
- * - [_notes]: top-level notes with content rebuilt from their tree
+ * Sync architecture: see `docs/live-cross-platform-sync.md`.
+ * - [rawNotes]: every Firestore doc indexed by id
+ * - [_notes]: top-level notes with content reconstructed from their tree
  */
 object NoteStore {
     private const val TAG = "NoteStore"
@@ -81,9 +87,27 @@ object NoteStore {
      */
     private val rawNotesLock = ReentrantReadWriteLock()
 
-    private var listenerRegistration: ListenerRegistration? = null
+    private var userDocListener: ListenerRegistration? = null
     private var loaded = false
     private var loadDeferred: CompletableDeferred<Unit>? = null
+
+    /** Captured by [start] for use by [pullDelta] / detection / [clear]. */
+    private var db: FirebaseFirestore? = null
+    private var userId: String? = null
+
+    private var lastObservedSignal: Timestamp? = null
+    private var detectionRanThisSession = false
+    private var foregroundObserver: LifecycleEventObserver? = null
+
+    /** Pulls run off any view-bound scope so Activity recreation doesn't
+     *  cancel an in-flight sync. Recreated by [start] after [clear]. */
+    private var pullScope: CoroutineScope = newPullScope()
+    private val pullMutex = Mutex()
+
+    /** Overlap on the watermark — covers clock skew and same-timestamp ties. */
+    private const val PULL_OVERLAP_SECONDS = 5L
+
+    private fun newPullScope() = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** In-flight saves keyed by noteId, so loaders can await before reading. */
     private val pendingSaves = mutableMapOf<String, Deferred<Unit>>()
@@ -135,56 +159,199 @@ object NoteStore {
     }
 
     /**
-     * Start the Firestore collection listener. Idempotent — calling multiple
-     * times is safe (subsequent calls are no-ops if already started).
+     * Idempotent. Attaches the [users/{uid}](#) snapshot listener, fires the
+     * initial delta pull, and registers the foreground observer. Re-calling
+     * after a successful start is a no-op.
      */
     fun start(db: FirebaseFirestore, userId: String) {
-        if (listenerRegistration != null) return
+        if (userDocListener != null) return
+
+        this.db = db
+        this.userId = userId
 
         if (loadDeferred == null) {
             loadDeferred = CompletableDeferred()
         }
 
-        val q = db.collection("notes").whereEqualTo("userId", userId)
-
-        listenerRegistration = q.addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                Log.e(TAG, "Snapshot listener error", error)
-                _error.value = error.message ?: "Note sync failed"
-                return@addSnapshotListener
-            }
-            if (snapshot == null) return@addSnapshotListener
-            if (loaded && snapshot.metadata.hasPendingWrites()) {
+        userDocListener = db.collection("users").document(userId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.e(TAG, "user-doc signal listener error", error)
+                    _error.value = error.message ?: "Note sync failed"
+                    return@addSnapshotListener
+                }
+                if (snapshot == null) return@addSnapshotListener
+                if (snapshot.metadata.hasPendingWrites()) {
+                    FirestoreUsage.recordRead(
+                        "NoteStore.signalListener",
+                        FirestoreUsage.ReadType.LISTENER_LOCAL_ECHO,
+                        1,
+                    )
+                    return@addSnapshotListener
+                }
+                val fromCache = snapshot.metadata.isFromCache
                 FirestoreUsage.recordRead(
-                    "NoteStore.listener",
-                    FirestoreUsage.ReadType.LISTENER_LOCAL_ECHO,
-                    snapshot.documentChanges.size,
-                )
-                return@addSnapshotListener
-            }
-
-            val isFirstSnapshot = !loaded
-            val fromCache = snapshot.metadata.isFromCache
-            if (isFirstSnapshot) {
-                FirestoreUsage.recordRead(
-                    "NoteStore.listener",
-                    if (fromCache) FirestoreUsage.ReadType.LISTENER_INITIAL_CACHED
-                    else FirestoreUsage.ReadType.LISTENER_INITIAL_FRESH,
-                    snapshot.documents.size,
-                )
-                handleFirstSnapshot(snapshot.documents.mapNotNull { doc ->
-                    parseNote(doc)
-                })
-            } else {
-                FirestoreUsage.recordRead(
-                    "NoteStore.listener",
+                    "NoteStore.signalListener",
                     if (fromCache) FirestoreUsage.ReadType.LISTENER_UPDATE_CACHED
                     else FirestoreUsage.ReadType.LISTENER_UPDATE_FRESH,
-                    snapshot.documentChanges.size,
+                    1,
                 )
-                handleIncrementalSnapshot(snapshot.documentChanges)
+                val newSignal = snapshot.getTimestamp("lastNoteChange")
+                if (newSignal == lastObservedSignal) return@addSnapshotListener
+                lastObservedSignal = newSignal
+                pullScope.launch { pullDelta("signal") }
+            }
+
+        pullScope.launch { pullDelta("attach") }
+
+        // Foreground observer: every ON_START re-pulls; detection runs
+        // once-per-process to catch hard-delete divergence.
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) {
+                pullScope.launch {
+                    pullDelta("foreground")
+                    runForegroundDetectionOnce()
+                }
             }
         }
+        foregroundObserver = observer
+        try {
+            ProcessLifecycleOwner.get().lifecycle.addObserver(observer)
+        } catch (e: Throwable) {
+            // ProcessLifecycleOwner.get() throws when called outside an
+            // Android process (e.g., JVM unit tests). Pulls still fire via
+            // the signal listener and `attach`; only foreground triggers
+            // are missing in that environment.
+            Log.w(TAG, "ProcessLifecycleOwner observer add failed; foreground triggers disabled", e)
+            foregroundObserver = null
+        }
+    }
+
+    /** Serialized through [pullMutex] so attach + signal don't double-pull. */
+    private suspend fun pullDelta(reason: String) = pullMutex.withLock {
+        val db = this.db ?: return@withLock
+        val uid = this.userId ?: return@withLock
+        val watermark = LastSyncStorage.read(uid)
+        val isFullPull = watermark.seconds == 0L && watermark.nanoseconds == 0
+        val baseQuery = db.collection("notes").whereEqualTo("userId", uid)
+        val query: Query = if (isFullPull) {
+            baseQuery
+        } else {
+            baseQuery
+                .whereGreaterThan("updatedAt", overlapBuffered(watermark))
+                .orderBy("updatedAt")
+        }
+        val snapshot = try {
+            query.get().await()
+        } catch (e: Exception) {
+            Log.e(TAG, "pullDelta(reason=$reason, full=$isFullPull) failed", e)
+            _error.value = e.message ?: "Note sync failed"
+            return@withLock
+        }
+        val readType = if (isFullPull) FirestoreUsage.ReadType.PULL_FULL_REPAIR
+        else FirestoreUsage.ReadType.PULL_DELTA
+        FirestoreUsage.recordRead("NoteStore.pull.$reason", readType, snapshot.size())
+        val notes = snapshot.documents.mapNotNull { parseNote(it) }
+        if (isFullPull) {
+            applyFullPull(notes)
+        } else {
+            applyDelta(notes)
+        }
+        // Advance lastSync to max(updatedAt) of returned docs. Persist only
+        // after a successful apply so a transient failure can't push the
+        // watermark past data we haven't actually durably reflected.
+        val maxUpdatedAt = notes.maxByOrNull { note ->
+            note.updatedAt?.let { ts -> ts.seconds * 1_000_000_000L + ts.nanoseconds } ?: 0L
+        }?.updatedAt
+        if (maxUpdatedAt != null) {
+            LastSyncStorage.write(uid, maxUpdatedAt)
+        }
+    }
+
+    private fun overlapBuffered(watermark: Timestamp): Timestamp {
+        val seconds = watermark.seconds - PULL_OVERLAP_SECONDS
+        return if (seconds < 0) Timestamp(0, 0) else Timestamp(seconds, watermark.nanoseconds)
+    }
+
+    private fun applyFullPull(notes: List<Note>) {
+        rawNotesLock.write {
+            rawNotes.clear()
+            for (note in notes) rawNotes[note.id] = note
+            rebuildAll()
+        }
+        markLoaded()
+    }
+
+    private fun applyDelta(notes: List<Note>) {
+        if (notes.isEmpty()) {
+            // Even an empty delta means the initial pull completed — flag
+            // loaded so editors waiting on ensureLoaded() can proceed.
+            markLoaded()
+            return
+        }
+        val affectedRoots = mutableSetOf<String>()
+        rawNotesLock.write {
+            for (note in notes) {
+                rawNotes[note.id] = note
+                affectedRoots.add(note.rootNoteId ?: note.id)
+            }
+            rebuildAffected(affectedRoots)
+        }
+        markLoaded()
+        if (affectedRoots.isNotEmpty()) {
+            _changedNoteIds.tryEmit(affectedRoots)
+        }
+    }
+
+    private fun markLoaded() {
+        if (loaded) return
+        loaded = true
+        loadDeferred?.complete(Unit)
+        loadDeferred = null
+    }
+
+    /**
+     * One count() aggregation vs `rawNotes.size`; mismatch triggers a full
+     * repair pull and a user-visible warning. Gated to once per process —
+     * cheap if a single foreground per app lifetime is enough to catch
+     * divergence, expensive (more reads) if run on every foreground.
+     */
+    private suspend fun runForegroundDetectionOnce() {
+        if (detectionRanThisSession) return
+        if (!loaded) return // nothing to compare against yet
+        detectionRanThisSession = true
+        val db = this.db ?: return
+        val uid = this.userId ?: return
+        val serverCount = try {
+            db.collection("notes").whereEqualTo("userId", uid).count()
+                .get(AggregateSource.SERVER).await().count
+        } catch (e: Exception) {
+            Log.e(TAG, "detection count() failed", e)
+            detectionRanThisSession = false // allow retry on next foreground
+            return
+        }
+        FirestoreUsage.recordRead(
+            "NoteStore.detection",
+            FirestoreUsage.ReadType.COUNT_AGGREGATION,
+            1,
+        )
+        val localCount = rawNotesLock.read { rawNotes.size }.toLong()
+        if (serverCount == localCount) {
+            Log.d(TAG, "detection: count match ($localCount); no repair needed")
+            return
+        }
+        Log.w(
+            TAG,
+            "detection: count mismatch (local=$localCount, server=$serverCount); " +
+                "triggering full repair pull",
+        )
+        raiseWarning(
+            "Note sync inconsistency: local has $localCount notes, server has $serverCount. " +
+                "Re-syncing now.",
+        )
+        // Drop the watermark so the next pull is a full one.
+        LastSyncStorage.clear(uid)
+        pullDelta("repair")
     }
 
     /**
@@ -202,8 +369,18 @@ object NoteStore {
 
     /** Stop listening and clear all data (e.g., on logout). */
     fun clear() {
-        listenerRegistration?.remove()
-        listenerRegistration = null
+        userDocListener?.remove()
+        userDocListener = null
+        foregroundObserver?.let { obs ->
+            try {
+                ProcessLifecycleOwner.get().lifecycle.removeObserver(obs)
+            } catch (e: Throwable) {
+                // Unit test environment; observer was never registered.
+            }
+        }
+        foregroundObserver = null
+        pullScope.cancel()
+        pullScope = newPullScope()
         rawNotesLock.write { rawNotes.clear() }
         pendingPersistContent.clear()
         pendingPersistRunnables.clear()
@@ -218,6 +395,10 @@ object NoteStore {
         _notesNeedingFix.value = emptySet()
         loaded = false
         loadDeferred = null
+        lastObservedSignal = null
+        detectionRanThisSession = false
+        db = null
+        userId = null
     }
 
     /** Clear a note from [notesNeedingFix] (e.g., after a successful save). */
@@ -443,49 +624,6 @@ object NoteStore {
      */
     suspend fun <T> enqueueSave(operation: suspend () -> T): T =
         saveQueueMutex.withLock { operation() }
-
-    // --- Snapshot handlers ---
-
-    private fun handleFirstSnapshot(notes: List<Note>) {
-        rawNotesLock.write {
-            rawNotes.clear()
-            for (note in notes) {
-                rawNotes[note.id] = note
-            }
-            rebuildAll()
-        }
-        loaded = true
-        loadDeferred?.complete(Unit)
-        loadDeferred = null
-    }
-
-    private fun handleIncrementalSnapshot(changes: List<DocumentChange>) {
-        val affectedRoots = mutableSetOf<String>()
-
-        rawNotesLock.write {
-            for (change in changes) {
-                if (change.document.metadata.hasPendingWrites()) continue
-
-                val note = parseNote(change.document) ?: continue
-                val rootId = note.rootNoteId ?: note.id
-
-                if (change.type == DocumentChange.Type.REMOVED) {
-                    rawNotes.remove(change.document.id)
-                } else {
-                    rawNotes[change.document.id] = note
-                }
-                affectedRoots.add(rootId)
-            }
-
-            if (affectedRoots.isNotEmpty()) {
-                rebuildAffected(affectedRoots)
-            }
-        }
-
-        if (affectedRoots.isNotEmpty()) {
-            _changedNoteIds.tryEmit(affectedRoots)
-        }
-    }
 
     // --- Internal reconstruction ---
     // Callers must hold rawNotesLock (write).

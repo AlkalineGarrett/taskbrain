@@ -876,6 +876,7 @@ class NoteRepository(
         val data = newNoteData(userId, "")
         val ref = notesCollection.add(data).await()
         FirestoreUsage.recordWrite("createNote", FirestoreUsage.WriteType.SET)
+        UserDocSignal.bump(db, userId)
         Log.d(TAG, "Note created with ID: ${ref.id}")
         ref.id
     }
@@ -900,6 +901,7 @@ class NoteRepository(
             val data = newNoteData(userId, firstLine)
             val ref = notesCollection.add(data).await()
             FirestoreUsage.recordWrite("createMultiLineNote", FirestoreUsage.WriteType.SET)
+            UserDocSignal.bump(db, userId)
             return ref.id
         }
 
@@ -960,6 +962,7 @@ class NoteRepository(
         batch.commit().await()
         // Root note + N descendants written in a single batch.
         FirestoreUsage.recordWrite("createMultiLineNote", FirestoreUsage.WriteType.BATCH_COMMIT, nodes.size + 1)
+        UserDocSignal.bump(db, userId)
         Log.d(TAG, "Multi-line note created with ID: ${parentRef.id}")
         return parentRef.id
     }
@@ -1042,7 +1045,7 @@ class NoteRepository(
     // ── Utility operations ──────────────────────────────────────────────
 
     suspend fun updateShowCompleted(noteId: String, showCompleted: Boolean): Result<Unit> = ioLogged("updateShowCompleted") {
-        requireUserId()
+        val userId = requireUserId()
         noteRef(noteId).update(
             mapOf(
                 "showCompleted" to showCompleted,
@@ -1050,6 +1053,7 @@ class NoteRepository(
             ),
         ).await()
         FirestoreUsage.recordWrite("updateShowCompleted", FirestoreUsage.WriteType.UPDATE)
+        UserDocSignal.bump(db, userId)
     }
 
     /**
@@ -1362,6 +1366,7 @@ class NoteRepository(
     }
 
     private suspend fun commitInBatches(operation: String, ops: List<BatchOp>) {
+        if (ops.isEmpty()) return
         for (chunk in ops.chunked(MAX_BATCH_SIZE)) {
             val batch = db.batch()
             for (op in chunk) {
@@ -1374,6 +1379,8 @@ class NoteRepository(
             batch.commit().await()
             FirestoreUsage.recordWrite(operation, FirestoreUsage.WriteType.BATCH_COMMIT, chunk.size)
         }
+        // One bump per logical batch — multiple chunks are still one save.
+        UserDocSignal.bump(db, requireUserId())
     }
 
     companion object {

@@ -16,6 +16,13 @@ export type ReadType =
   | 'LISTENER_INITIAL_CACHED'
   | 'LISTENER_UPDATE_CACHED'
   | 'LISTENER_LOCAL_ECHO'
+  // Delta pull: bills exactly the docs returned (changed since lastSync).
+  | 'PULL_DELTA'
+  // Full repair pull triggered by count() mismatch — drops the watermark and
+  // re-reads every doc.
+  | 'PULL_FULL_REPAIR'
+  // count() aggregation query used by foreground detection (~1 read).
+  | 'COUNT_AGGREGATION'
 
 export type WriteType =
   | 'SET'

@@ -20,6 +20,7 @@ import { firestoreUsage } from './FirestoreUsage'
 import { isRealNoteId, newSentinelNoteId } from './NoteIdSentinel'
 import { isLive, NoteState } from './NoteState'
 import { DeletionSource, newDeletionBatchId } from './DeletionSource'
+import { UserDocSignal } from './UserDocSignal'
 import { performSimilarityMatching } from '@/editor/ContentSimilarity'
 
 export interface NoteLoadResult {
@@ -899,6 +900,9 @@ export class NoteRepository {
       await batch.commit()
       firestoreUsage.recordWrite(operation, 'BATCH_COMMIT', chunk.length)
     }
+    // One bump per logical batch — fire-and-forget; the save returns
+    // without waiting on the user-doc write to land.
+    void UserDocSignal.bump(this.db, this.requireUserId())
   }
 
   /**
@@ -1065,6 +1069,7 @@ export class NoteRepository {
       const data = this.newNoteData(userId, '')
       const ref = await addDoc(this.notesRef, data)
       firestoreUsage.recordWrite('createNote', 'SET')
+      void UserDocSignal.bump(this.db, userId)
       return ref.id
     })
   }
@@ -1091,6 +1096,7 @@ export class NoteRepository {
         const data = this.newNoteData(userId, firstLine)
         const ref = await addDoc(this.notesRef, data)
         firestoreUsage.recordWrite('createMultiLineNote', 'SET')
+        void UserDocSignal.bump(this.db, userId)
         return ref.id
       }
 
@@ -1153,6 +1159,7 @@ export class NoteRepository {
       await batch.commit()
       // Root note + N descendants written in a single batch.
       firestoreUsage.recordWrite('createMultiLineNote', 'BATCH_COMMIT', nodes.length + 1)
+      void UserDocSignal.bump(this.db, userId)
       return parentRef.id
   }
 
@@ -1202,6 +1209,16 @@ export class NoteRepository {
         await batch.commit()
         firestoreUsage.recordWrite('hardDeleteAllSoftDeleted', 'BATCH_COMMIT', chunk.length)
       }
+      // Hard-deleted docs vanish — the delta pull can't observe their absence
+      // (it filters by `updatedAt > lastSync` and the docs are gone). Remove
+      // them from this client's local rawNotes so the UI updates immediately;
+      // other clients pick up the divergence at the next count() detection.
+      noteStore.removeFromRawNotes(snap.docs.map((d) => d.id))
+      // Bump for consistency with the "every notes write triggers a pull"
+      // contract; remote clients' pulls return empty for these ids (cheap),
+      // and the resulting count-detection on their next foreground catches
+      // the divergence.
+      void UserDocSignal.bump(this.db, userId)
       return snap.size
     })
   }
@@ -1276,12 +1293,13 @@ export class NoteRepository {
 
   async updateShowCompleted(noteId: string, showCompleted: boolean): Promise<void> {
     return this.logged('updateShowCompleted', async () => {
-      this.requireUserId()
+      const userId = this.requireUserId()
       await updateDoc(this.noteRef(noteId), {
         showCompleted,
         updatedAt: serverTimestamp(),
       })
       firestoreUsage.recordWrite('updateShowCompleted', 'UPDATE')
+      void UserDocSignal.bump(this.db, userId)
     })
   }
 

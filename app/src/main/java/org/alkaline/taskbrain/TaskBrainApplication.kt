@@ -7,8 +7,11 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreSettings
 import com.google.firebase.firestore.memoryCacheSettings
 import com.google.firebase.firestore.persistentCacheSettings
+import com.google.firebase.auth.FirebaseUser
 import org.alkaline.taskbrain.data.ConnectivityMonitor
 import org.alkaline.taskbrain.data.FirestoreUsage
+import org.alkaline.taskbrain.data.LastSyncStorage
+import org.alkaline.taskbrain.data.UserDocSignal
 import org.alkaline.taskbrain.dsl.directives.ScheduleManager
 import org.alkaline.taskbrain.service.NotificationChannels
 import org.alkaline.taskbrain.ui.currentnote.undo.UndoStatePersistence
@@ -49,6 +52,21 @@ class TaskBrainApplication : Application() {
         // Hook up FirestoreUsage persistence (so the Usage button on the
         // note list can show hourly/daily history that survives restarts).
         FirestoreUsage.attach(this)
+        // Hook up the delta-pull watermark storage so NoteStore.pullDelta
+        // can read/write `lastSync_${uid}` from SharedPreferences.
+        LastSyncStorage.attach(this)
+        // Create-on-login: ensure `users/{uid}` exists for the signal
+        // listener to observe. `UserDocSignal.bump` also uses set(merge=true)
+        // so it auto-creates on first call, but doing it explicitly on auth
+        // makes the listener attach reliably even before any note write.
+        observeAuthStateForUserDocSignal()
+    }
+
+    private fun observeAuthStateForUserDocSignal() {
+        FirebaseAuth.getInstance().addAuthStateListener { auth ->
+            val user: FirebaseUser = auth.currentUser ?: return@addAuthStateListener
+            UserDocSignal.ensureExists(FirebaseFirestore.getInstance(), user.uid)
+        }
     }
 
     private fun signInAnonymouslyForEmulator() {

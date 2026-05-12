@@ -7,6 +7,7 @@ import kotlinx.coroutines.tasks.await
 import org.alkaline.taskbrain.data.FirestoreUsage
 import org.alkaline.taskbrain.data.Note
 import org.alkaline.taskbrain.data.NoteStore
+import org.alkaline.taskbrain.data.UserDocSignal
 
 /**
  * Implementation of NoteOperations that uses Firebase Firestore directly.
@@ -44,6 +45,7 @@ class NoteRepositoryOperations(
         }
         notesCollection.document(noteId).update(updates).await()
         FirestoreUsage.recordWrite("dsl.updateNote", FirestoreUsage.WriteType.UPDATE)
+        UserDocSignal.bump(db, userId)
 
         val base = NoteStore.getRawNoteById(noteId)
             ?: throw NoteOperationException("Note not found after update: $noteId")
@@ -70,6 +72,7 @@ class NoteRepositoryOperations(
         )
         noteRef.set(noteData).await()
         FirestoreUsage.recordWrite("dsl.createNote", FirestoreUsage.WriteType.SET)
+        UserDocSignal.bump(db, userId)
 
         // Return the created note
         return Note(

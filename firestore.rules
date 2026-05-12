@@ -68,6 +68,17 @@ service cloud.firestore {
 
     // ==================== User-scoped subcollections ====================
 
+    // The bare /users/{userId} document. Holds the `lastNoteChange`
+    // serverTimestamp signal that NoteStore.attach listens to for delta-pull
+    // wake-ups (see docs/note-sync-pull-migration.md). Every notes-collection
+    // write is followed by a setDoc(merge=true) on this doc. Without this
+    // rule, the bump fails PERMISSION_DENIED in prod — the recursive
+    // /users/{userId}/{document=**} rule below requires at least one segment
+    // after `userId` and so does NOT cover the parent doc itself.
+    match /users/{userId} {
+      allow read, write: if isAuthenticated() && userOwnsPath(userId);
+    }
+
     // Single recursive rule for everything under /users/{userId}/. Covers
     // alarms, recurringAlarms, schedules, scheduleExecutions, openTabs,
     // searchHistory, and any future user-scoped subcollection at any depth.

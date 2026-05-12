@@ -1,10 +1,5 @@
 package org.alkaline.taskbrain.data
 
-import com.google.firebase.firestore.DocumentChange
-import com.google.firebase.firestore.QueryDocumentSnapshot
-import com.google.firebase.firestore.SnapshotMetadata
-import io.mockk.every
-import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
@@ -17,31 +12,29 @@ import java.util.UUID
 
 /**
  * JVM-only mirror of `ViewDirectiveLocalCreatePropagationTest` (UI flavour
- * in androidTest). Pins the data-layer contract — every incremental
- * snapshot, including ones produced by our own writes, drives the
- * `_notes.value` rebuild AND emits `changedNoteIds`. Editor reload
- * protection lives in `CurrentNoteViewModel`, not here.
+ * in androidTest). Pins the data-layer contract — every delta pull,
+ * including ones returning our own writes, drives the `_notes.value`
+ * rebuild AND emits `changedNoteIds`. Editor reload protection lives in
+ * `CurrentNoteViewModel`, not here.
  *
- * The snapshot handler is `private`; the test calls it through reflection
- * to avoid leaking test seams into production code.
+ * The apply path is `private`; the test calls it through reflection to
+ * avoid leaking test seams into production code.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class NoteStoreOwnEchoIncrementalTest {
 
     @Test
-    fun `incremental snapshot of a top-level create surfaces in notes value and changedNoteIds`() = runTest(
+    fun `delta apply of a top-level create surfaces in notes value and changedNoteIds`() = runTest(
         // Unconfined so the SharedFlow collector subscribes synchronously
         // at launchIn and tryEmit delivers inline.
         UnconfinedTestDispatcher(),
     ) {
         val noteId = "test-note-${UUID.randomUUID()}"
-        val change = mockAddedChange(
-            noteId = noteId,
-            data = mapOf(
-                "userId" to "u1",
-                "content" to "marker-content",
-                "containedNotes" to emptyList<String>(),
-            ),
+        val note = Note(
+            id = noteId,
+            userId = "u1",
+            content = "marker-content",
+            containedNotes = emptyList(),
         )
 
         // Subscribe BEFORE emission — `_changedNoteIds` is replay=0, so
@@ -57,13 +50,13 @@ class NoteStoreOwnEchoIncrementalTest {
         // left arbitrary ids in `_notes.value`.
         val priorNoteIds = NoteStore.notes.value.map { it.id }.toSet()
 
-        invokeHandleIncrementalSnapshot(listOf(change))
+        invokeApplyDelta(listOf(note))
         runCurrent()
 
         assertTrue(
-            "expected NoteStore.notes to contain $noteId after the listener " +
-                "delivered the snapshot. New ids in _notes.value since the test " +
-                "started: ${NoteStore.notes.value.map { it.id }.toSet() - priorNoteIds}.",
+            "expected NoteStore.notes to contain $noteId after applyDelta " +
+                "ran. New ids in _notes.value since the test started: " +
+                "${NoteStore.notes.value.map { it.id }.toSet() - priorNoteIds}.",
             NoteStore.notes.value.any { it.id == noteId },
         )
 
@@ -77,34 +70,12 @@ class NoteStoreOwnEchoIncrementalTest {
         collectorJob.cancel()
     }
 
-    private fun mockAddedChange(noteId: String, data: Map<String, Any>): DocumentChange {
-        val metadata = mockk<SnapshotMetadata>()
-        every { metadata.hasPendingWrites() } returns false
-        val doc = mockk<QueryDocumentSnapshot>()
-        every { doc.id } returns noteId
-        every { doc.metadata } returns metadata
-        // NoteStore.parseNote routes through Firestore's POJO mapper; the
-        // mapper isn't reachable in unit tests so we stub the Note that
-        // toObject() would have produced from the raw data map.
-        val note = Note(
-            id = noteId,
-            userId = data["userId"] as? String ?: "",
-            content = data["content"] as? String ?: "",
-            containedNotes = (data["containedNotes"] as? List<String>) ?: emptyList(),
-        )
-        every { doc.toObject(Note::class.java) } returns note
-        val change = mockk<DocumentChange>()
-        every { change.document } returns doc
-        every { change.type } returns DocumentChange.Type.ADDED
-        return change
-    }
-
-    private fun invokeHandleIncrementalSnapshot(changes: List<DocumentChange>) {
+    private fun invokeApplyDelta(notes: List<Note>) {
         val method = NoteStore::class.java.getDeclaredMethod(
-            "handleIncrementalSnapshot",
+            "applyDelta",
             List::class.java,
         )
         method.isAccessible = true
-        method.invoke(NoteStore, changes)
+        method.invoke(NoteStore, notes)
     }
 }

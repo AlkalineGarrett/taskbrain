@@ -1,8 +1,13 @@
 import {
   collection,
-  query,
-  where,
+  doc,
+  getCountFromServer,
+  getDocs,
   onSnapshot,
+  orderBy,
+  query,
+  Timestamp,
+  where,
   type Firestore,
   type Unsubscribe,
 } from 'firebase/firestore'
@@ -10,6 +15,8 @@ import { onAuthStateChanged, type Auth } from 'firebase/auth'
 import { noteFromFirestore, type Note, type NoteLine } from './Note'
 import { isLive } from './NoteState'
 import { firestoreUsage } from './FirestoreUsage'
+import { LastSyncStorage } from './LastSyncStorage'
+import { UserDocSignal } from './UserDocSignal'
 import {
   rebuildAllNotes,
   rebuildAffectedNotes,
@@ -21,6 +28,12 @@ import {
 /** Cap for waiting on the listener to surface a specific note. Mirrors the
  *  Android NoteStore constant; also reused by NoteRepository.loadNoteWithChildren. */
 const NOTE_STORE_AWAIT_MS = 1500
+
+/** 5-second overlap on the delta watermark: covers clock skew and concurrent
+ *  writes whose serverTimestamps tie with our last `max`. Mirrors Android. */
+const PULL_OVERLAP_SECONDS = 5
+
+type PullReason = 'signal' | 'attach' | 'foreground' | 'repair'
 
 /**
  * Thrown when a code path that depends on a fully-loaded NoteStore runs before
@@ -51,15 +64,9 @@ export class NoteStoreNotLoadedError extends Error {
 
 /**
  * Singleton reactive store for all notes with reconstructed content.
- * Single source of truth for directive execution context.
- *
- * Uses a Firestore collection listener for real-time incremental updates.
- * React components subscribe via useSyncExternalStore (see useNoteStore.ts).
- *
- * Internal state:
- * - rawNotes: every Firestore doc (including descendants), indexed by ID
- * - reconstructedNotes: top-level notes with content rebuilt from their tree
- *   (what consumers see via getSnapshot())
+ * Sync architecture: see `docs/live-cross-platform-sync.md`.
+ * - rawNotes: every Firestore doc indexed by id
+ * - reconstructedNotes: top-level notes reconstructed from their tree
  */
 export class NoteStore {
   /** All notes from Firestore, indexed by ID (including descendants). */
@@ -156,6 +163,20 @@ export class NoteStore {
     this.emitNeedsFixChange()
   }
 
+  // Last-observed `lastNoteChange` value from the user-doc listener; skips
+  // pulls when the signal is unchanged (covers the initial value-already-set
+  // delivery on attach and unrelated bumps to the user doc).
+  private lastObservedSignal: Timestamp | null = null
+  // Once-per-attach gate for the foreground count() detection.
+  private detectionRanThisAttach = false
+  // Captured by attach() for use by pullDelta / detection / detach.
+  private currentDb: Firestore | null = null
+  private currentUserId: string | null = null
+  // Serializes pullDelta calls so attach + the first signal-listener
+  // delivery don't run two concurrent identical queries. Each pull is
+  // idempotent but a duplicate billed read on every attach adds up.
+  private pullTail: Promise<unknown> = Promise.resolve()
+
   /** Idempotent. Wired to FirestoreLifecycle by firebase/bootstrap. */
   attach(db: Firestore, auth: Auth): void {
     if (this.unsubscribe) return
@@ -177,79 +198,202 @@ export class NoteStore {
     this.pendingAuthUnsub = null
     this.surfacePersistentCacheError()
 
-    // Create promise for ensureLoaded() callers to await
+    this.currentDb = db
+    this.currentUserId = userId
+    this.detectionRanThisAttach = false
+
+    // Create-on-login: belt-and-suspenders alongside `UserDocSignal.bump`'s
+    // setDoc(merge=true). Ensures the user-doc exists before the signal
+    // listener attaches, so the first snapshot delivers an actual doc.
+    void UserDocSignal.ensureExists(db, userId)
+
+    // Create promise for ensureLoaded() callers to await.
     if (!this.loadPromise) {
       this.loadPromise = new Promise<void>((resolve) => {
         this.loadResolve = resolve
       })
     }
 
-    const notesRef = collection(db, 'notes')
-    const q = query(notesRef, where('userId', '==', userId))
-
-    this.unsubscribe = onSnapshot(q, (snapshot) => {
-      // Skip local-echo snapshots, but always process the first snapshot
-      // so ensureLoaded() can resolve even if there are pending writes.
-      if (this.loaded && snapshot.metadata.hasPendingWrites) {
-        firestoreUsage.recordRead('NoteStore.listener', 'LISTENER_LOCAL_ECHO', snapshot.docChanges().length)
+    const userDocRef = doc(db, 'users', userId)
+    this.unsubscribe = onSnapshot(userDocRef, (snapshot) => {
+      if (snapshot.metadata.hasPendingWrites) {
+        firestoreUsage.recordRead('NoteStore.signalListener', 'LISTENER_LOCAL_ECHO', 1)
         return
       }
-
-      const isFirstSnapshot = !this.loaded
-
-      if (isFirstSnapshot) {
-        firestoreUsage.recordRead(
-          'NoteStore.listener',
-          snapshot.metadata.fromCache ? 'LISTENER_INITIAL_CACHED' : 'LISTENER_INITIAL_FRESH',
-          snapshot.docs.length,
-        )
-      } else {
-        firestoreUsage.recordRead(
-          'NoteStore.listener',
-          snapshot.metadata.fromCache ? 'LISTENER_UPDATE_CACHED' : 'LISTENER_UPDATE_FRESH',
-          snapshot.docChanges().length,
-        )
-      }
-
-      if (isFirstSnapshot) {
-        // Initial load — process all docs at once
-        this.rawNotes.clear()
-        for (const doc of snapshot.docs) {
-          const note = noteFromFirestore(doc.id, doc.data())
-          this.rawNotes.set(doc.id, note)
-        }
-        this.rebuildAll()
-        this.loaded = true
-        this.loadResolve?.()
-        this.loadResolve = null
-      } else {
-        // Incremental update — process only changed docs
-        const affectedRoots = new Set<string>()
-
-        for (const change of snapshot.docChanges()) {
-          if (change.doc.metadata.hasPendingWrites) continue
-
-          const note = noteFromFirestore(change.doc.id, change.doc.data())
-          const rootId = note.rootNoteId ?? note.id
-
-          if (change.type === 'removed') {
-            this.rawNotes.delete(change.doc.id)
-          } else {
-            this.rawNotes.set(change.doc.id, note)
-          }
-          affectedRoots.add(rootId)
-        }
-
-        if (affectedRoots.size > 0) {
-          this.rebuildAffected(affectedRoots)
-          this.emitChangedNoteIds(affectedRoots)
-        }
-      }
+      firestoreUsage.recordRead(
+        'NoteStore.signalListener',
+        snapshot.metadata.fromCache ? 'LISTENER_UPDATE_CACHED' : 'LISTENER_UPDATE_FRESH',
+        1,
+      )
+      const newSignal = (snapshot.data()?.lastNoteChange as Timestamp | undefined) ?? null
+      if (timestampsEqual(newSignal, this.lastObservedSignal)) return
+      this.lastObservedSignal = newSignal
+      void this.pullDelta('signal')
     }, (error) => {
-      console.error('NoteStore snapshot listener error:', error)
+      console.error('NoteStore user-doc signal listener error:', error)
       this._error = error instanceof Error ? error.message : 'Note sync failed'
       this.emitErrorChange()
     })
+
+    void this.pullDelta('attach').then(() => this.runForegroundDetectionOnce())
+  }
+
+  /** Serialized through `pullTail` so attach + signal don't double-pull. */
+  private pullDelta(reason: PullReason): Promise<void> {
+    const next = this.pullTail.catch(() => undefined).then(() => this.pullDeltaInner(reason))
+    this.pullTail = next.catch(() => undefined)
+    return next
+  }
+
+  private async pullDeltaInner(reason: PullReason): Promise<void> {
+    const db = this.currentDb
+    const uid = this.currentUserId
+    if (!db || !uid) return
+    const watermark = LastSyncStorage.read(uid)
+    const isFullPull = watermark.seconds === 0 && watermark.nanoseconds === 0
+    const notesRef = collection(db, 'notes')
+    const q = isFullPull
+      ? query(notesRef, where('userId', '==', uid))
+      : query(
+          notesRef,
+          where('userId', '==', uid),
+          where('updatedAt', '>', overlapBuffered(watermark)),
+          orderBy('updatedAt'),
+        )
+    let snapshot
+    try {
+      snapshot = await getDocs(q)
+    } catch (e) {
+      console.error(`NoteStore.pullDelta(reason=${reason}, full=${isFullPull}) failed`, e)
+      this._error = e instanceof Error ? e.message : 'Note sync failed'
+      this.emitErrorChange()
+      return
+    }
+    firestoreUsage.recordRead(
+      `NoteStore.pull.${reason}`,
+      isFullPull ? 'PULL_FULL_REPAIR' : 'PULL_DELTA',
+      snapshot.size,
+    )
+    const notes = snapshot.docs.map((d) => noteFromFirestore(d.id, d.data()))
+    if (isFullPull) {
+      this.applyFullPull(notes)
+    } else {
+      this.applyDelta(notes)
+    }
+    // Advance lastSync to max(updatedAt) of returned docs. Persist only after
+    // a successful apply so a transient failure can't push the watermark past
+    // data we haven't actually durably reflected.
+    let maxTs: Timestamp | null = null
+    let maxNs = 0n
+    for (const note of notes) {
+      const ts = note.updatedAt
+      if (!ts) continue
+      const ns = BigInt(ts.seconds) * 1_000_000_000n + BigInt(ts.nanoseconds)
+      if (ns > maxNs) {
+        maxNs = ns
+        maxTs = ts
+      }
+    }
+    if (maxTs) {
+      LastSyncStorage.write(uid, maxTs)
+    }
+  }
+
+  private applyFullPull(notes: Note[]): void {
+    this.rawNotes.clear()
+    for (const note of notes) this.rawNotes.set(note.id, note)
+    this.rebuildAll()
+    this.markLoaded()
+  }
+
+  private applyDelta(notes: Note[]): void {
+    if (notes.length === 0) {
+      // Even an empty delta means the initial pull completed.
+      this.markLoaded()
+      return
+    }
+    const affectedRoots = new Set<string>()
+    for (const note of notes) {
+      this.rawNotes.set(note.id, note)
+      affectedRoots.add(note.rootNoteId ?? note.id)
+    }
+    this.rebuildAffected(affectedRoots)
+    this.markLoaded()
+    if (affectedRoots.size > 0) {
+      this.emitChangedNoteIds(affectedRoots)
+    }
+  }
+
+  private markLoaded(): void {
+    if (this.loaded) return
+    this.loaded = true
+    this.loadResolve?.()
+    this.loadResolve = null
+  }
+
+  /**
+   * Remove the given ids from rawNotes locally. Used by hard-delete paths
+   * whose vanished docs the delta pull can't observe (the doc is gone, so
+   * `updatedAt > lastSync` won't return it). Remote clients catch up via
+   * count-detection on their next attach.
+   */
+  removeFromRawNotes(noteIds: string[]): void {
+    if (noteIds.length === 0) return
+    const affectedRoots = new Set<string>()
+    let changed = false
+    for (const id of noteIds) {
+      const note = this.rawNotes.get(id)
+      if (!note) continue
+      affectedRoots.add(note.rootNoteId ?? note.id)
+      this.rawNotes.delete(id)
+      changed = true
+    }
+    if (!changed) return
+    this.rebuildAffected(affectedRoots)
+    this.emitChangedNoteIds(affectedRoots)
+  }
+
+  /**
+   * One count() aggregation vs reconstructed rawNotes size. Mismatch
+   * triggers a full repair pull and a user-visible warning. Gated to once
+   * per attach — every visibility-visible cycle gets one shot at catching
+   * hard-delete divergence; that's the cheapest cadence that still bounds
+   * staleness on a long-lived tab.
+   */
+  private async runForegroundDetectionOnce(): Promise<void> {
+    if (this.detectionRanThisAttach) return
+    if (!this.loaded) return
+    this.detectionRanThisAttach = true
+    const db = this.currentDb
+    const uid = this.currentUserId
+    if (!db || !uid) return
+    let serverCount: number
+    try {
+      const aggSnap = await getCountFromServer(
+        query(collection(db, 'notes'), where('userId', '==', uid)),
+      )
+      serverCount = aggSnap.data().count
+    } catch (e) {
+      console.error('NoteStore detection count() failed', e)
+      this.detectionRanThisAttach = false // retry on next attach
+      return
+    }
+    firestoreUsage.recordRead('NoteStore.detection', 'COUNT_AGGREGATION', 1)
+    const localCount = this.rawNotes.size
+    if (serverCount === localCount) {
+      console.debug(`NoteStore detection: count match (${localCount}); no repair needed`)
+      return
+    }
+    console.warn(
+      `NoteStore detection: count mismatch (local=${localCount}, server=${serverCount}); ` +
+      `triggering full repair pull`,
+    )
+    this.raiseWarning(
+      `Note sync inconsistency: local has ${localCount} notes, server has ${serverCount}. ` +
+      `Re-syncing now.`,
+    )
+    LastSyncStorage.clear(uid)
+    await this.pullDelta('repair')
   }
 
   private persistentCacheWarningSurfaced = false
@@ -308,6 +452,10 @@ export class NoteStore {
     this.loadResolve = null
     this._error = null
     this._notesNeedingFix = new Set()
+    this.lastObservedSignal = null
+    this.detectionRanThisAttach = false
+    this.currentDb = null
+    this.currentUserId = null
     this.emitChange()
     this.emitErrorChange()
     this.emitNeedsFixChange()
@@ -696,6 +844,18 @@ function sameSet(a: Set<string>, b: Set<string>): boolean {
   if (a.size !== b.size) return false
   for (const x of a) if (!b.has(x)) return false
   return true
+}
+
+function timestampsEqual(a: Timestamp | null, b: Timestamp | null): boolean {
+  if (a === b) return true
+  if (a == null || b == null) return false
+  return a.seconds === b.seconds && a.nanoseconds === b.nanoseconds
+}
+
+function overlapBuffered(watermark: Timestamp): Timestamp {
+  const seconds = watermark.seconds - PULL_OVERLAP_SECONDS
+  if (seconds < 0) return new Timestamp(0, 0)
+  return new Timestamp(seconds, watermark.nanoseconds)
 }
 
 export const noteStore = new NoteStore()

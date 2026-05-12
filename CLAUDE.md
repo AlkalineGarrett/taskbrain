@@ -22,38 +22,9 @@ This file is loaded on every turn — keep it lean. Subsystem-specific guidance 
 * DO NOT commit for the developer.
 * DO NOT estimate how long it would take a human developer to implement your proposal. Only estimate in terms of components impacted.
 
-## Project Overview
+## Project layout
 
-TaskBrain is a cross-platform ADHD task management app with a Firebase backend. It has two clients:
-- **Android app** (Kotlin, Jetpack Compose) — the primary app in `app/`
-- **Web app** (TypeScript, React) — in `web/`
-
-## Build commands
-
-Build/test/run commands are platform-specific and live in the appropriate subtree (app/ or web/).
-
-## Local test environment
-
-Use the wrapper scripts; **don't invoke `firebase emulators:start` or `emulator -avd …` directly.**
-
-```bash
-scripts/test-env-up.sh             # Firebase emulator only (web tests + manual)
-scripts/test-env-up.sh --with-avd  # Adds the Android AVD for instrumentation tests
-scripts/test-env-down.sh           # Tears it all down
-```
-
-Both scripts are idempotent — re-running is a no-op when things are already up. They handle PID files, log paths, AVD readiness, and emulator data persistence so you don't have to remember the exact incantation each time. Platform-specific gradle / vite / vitest invocations against this environment live in the per-platform `CLAUDE.md`.
-
-**Do not run `firebase deploy --only firestore:rules`.** The repo's
-`firebase.json` points the rules path at the *permissive* emulator file —
-deploying it would open prod to any signed-in user. Production rules live
-in `firestore.rules` and are deployed manually via the Firebase console.
-
-## Architecture
-
-**Pattern:** MVVM with Jetpack Compose UI on Android; React + hooks on web.
-
-**Data flow:** Compose Screens / React components → ViewModels / hooks → NoteRepository → Firebase Firestore.
+TaskBrain is a cross-platform ADHD task manager. Android (`app/`), web (`web/`), Firebase backend.
 
 **Key directories:**
 - `app/src/main/java/org/alkaline/taskbrain/data/` — Android data layer (models, repository, NoteStore)
@@ -62,6 +33,20 @@ in `firestore.rules` and are deployed manually via the Firebase console.
 - `web/src/editor/` — web editor
 - `web/src/hooks/` — React hooks bridging editor + components
 - `app/src/test/`, `web/src/__tests__/` — unit tests (JUnit 4 + MockK on Android, Vitest on web)
+
+## Local test environment
+
+Use the wrapper scripts; **don't invoke `firebase emulators:start` or `emulator -avd …` directly.**
+
+```bash
+scripts/test-env-up.sh             # Firebase emulator only
+scripts/test-env-up.sh --with-avd  # Adds the Android AVD
+scripts/test-env-down.sh
+```
+
+Scripts are idempotent.
+
+**Do not run `firebase deploy --only firestore:rules`** — `firebase.json` points at the permissive emulator file; deploying would open prod to any signed-in user. Production rules are in `firestore.rules` and deploy manually via the Firebase console.
 
 ## Foundational invariants (apply everywhere)
 

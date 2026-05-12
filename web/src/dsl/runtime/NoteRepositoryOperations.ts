@@ -12,6 +12,7 @@ import {
 } from 'firebase/firestore'
 import { noteFromFirestore, type Note } from '@/data/Note'
 import { firestoreUsage } from '@/data/FirestoreUsage'
+import { UserDocSignal } from '@/data/UserDocSignal'
 import { type NoteOperations, NoteOperationException } from './NoteOperations'
 
 /**
@@ -21,7 +22,7 @@ export class NoteRepositoryOperations implements NoteOperations {
   private readonly notesRef
 
   constructor(
-    db: Firestore,
+    private readonly db: Firestore,
     private readonly userId: string,
   ) {
     this.notesRef = collection(db, 'notes')
@@ -44,6 +45,7 @@ export class NoteRepositoryOperations implements NoteOperations {
     const ref = this.noteRef(noteId)
     await updateDoc(ref, { ...updates, updatedAt: serverTimestamp() })
     firestoreUsage.recordWrite('dsl.updateNote', 'UPDATE')
+    void UserDocSignal.bump(this.db, this.userId)
     return this.fetchNote(noteId)
   }
 
@@ -58,6 +60,7 @@ export class NoteRepositoryOperations implements NoteOperations {
       parentNoteId: null,
     })
     firestoreUsage.recordWrite('dsl.createNote', 'SET')
+    void UserDocSignal.bump(this.db, this.userId)
     return this.fetchNote(newRef.id)
   }
 

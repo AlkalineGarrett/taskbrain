@@ -46,6 +46,13 @@ object FirestoreUsage {
         LISTENER_INITIAL_CACHED(isBilled = false),
         LISTENER_UPDATE_CACHED(isBilled = false),
         LISTENER_LOCAL_ECHO(isBilled = false),
+        // Delta pull: bills exactly the docs returned (changed since lastSync).
+        PULL_DELTA(isBilled = true),
+        // Full repair pull triggered by count() mismatch — drops the watermark
+        // and re-reads every doc.
+        PULL_FULL_REPAIR(isBilled = true),
+        // count() aggregation query used by foreground detection (~1 read).
+        COUNT_AGGREGATION(isBilled = true),
     }
 
     enum class WriteType {
