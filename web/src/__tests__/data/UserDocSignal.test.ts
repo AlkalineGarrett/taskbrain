@@ -25,7 +25,7 @@ describe('UserDocSignal.bump', () => {
 
   it('writes lastNoteChange via setDoc(merge=true) to /users/{uid}', async () => {
     vi.mocked(mockSetDoc).mockResolvedValue(undefined as never)
-    await UserDocSignal.bump(mockDb, 'uid-1')
+    await UserDocSignal.bump(mockDb, 'uid-1', 'NOTES')
     expect(mockDoc).toHaveBeenCalledWith(mockDb, 'users', 'uid-1')
     expect(mockSetDoc).toHaveBeenCalledTimes(1)
     const [, payload, options] = vi.mocked(mockSetDoc).mock.calls[0]!
@@ -36,7 +36,7 @@ describe('UserDocSignal.bump', () => {
   it('swallows errors so a failed bump does not propagate to the writer', async () => {
     vi.mocked(mockSetDoc).mockRejectedValue(new Error('network down'))
     // No throw — promise resolves even on rejection inside.
-    await expect(UserDocSignal.bump(mockDb, 'uid-1')).resolves.toBeUndefined()
+    await expect(UserDocSignal.bump(mockDb, 'uid-1', 'NOTES')).resolves.toBeUndefined()
   })
 })
 

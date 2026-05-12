@@ -64,7 +64,7 @@ class LastSyncStorageTest {
 
     @Test
     fun `read returns Timestamp(0, 0) when unset`() {
-        val ts = LastSyncStorage.read("uid-1")
+        val ts = LastSyncStorage.read(UserDocSignal.Channel.NOTES, "uid-1")
         assertEquals(0L, ts.seconds)
         assertEquals(0, ts.nanoseconds)
     }
@@ -72,25 +72,25 @@ class LastSyncStorageTest {
     @Test
     fun `write then read round-trips at ms precision`() {
         val original = Timestamp(1_700_000_000L, 123_000_000)
-        LastSyncStorage.write("uid-1", original)
-        val read = LastSyncStorage.read("uid-1")
+        LastSyncStorage.write(UserDocSignal.Channel.NOTES, "uid-1", original)
+        val read = LastSyncStorage.read(UserDocSignal.Channel.NOTES, "uid-1")
         assertEquals(1_700_000_000L, read.seconds)
         assertEquals(123_000_000, read.nanoseconds)
     }
 
     @Test
     fun `per-user watermarks are isolated`() {
-        LastSyncStorage.write("uid-a", Timestamp(100L, 0))
-        LastSyncStorage.write("uid-b", Timestamp(200L, 0))
-        assertEquals(100L, LastSyncStorage.read("uid-a").seconds)
-        assertEquals(200L, LastSyncStorage.read("uid-b").seconds)
+        LastSyncStorage.write(UserDocSignal.Channel.NOTES, "uid-a", Timestamp(100L, 0))
+        LastSyncStorage.write(UserDocSignal.Channel.NOTES, "uid-b", Timestamp(200L, 0))
+        assertEquals(100L, LastSyncStorage.read(UserDocSignal.Channel.NOTES, "uid-a").seconds)
+        assertEquals(200L, LastSyncStorage.read(UserDocSignal.Channel.NOTES, "uid-b").seconds)
     }
 
     @Test
     fun `clear removes the watermark so the next read returns 0`() {
-        LastSyncStorage.write("uid-1", Timestamp(500L, 0))
-        LastSyncStorage.clear("uid-1")
-        val ts = LastSyncStorage.read("uid-1")
+        LastSyncStorage.write(UserDocSignal.Channel.NOTES, "uid-1", Timestamp(500L, 0))
+        LastSyncStorage.clear(UserDocSignal.Channel.NOTES, "uid-1")
+        val ts = LastSyncStorage.read(UserDocSignal.Channel.NOTES, "uid-1")
         assertEquals(0L, ts.seconds)
         verify { prefs.edit() }
     }

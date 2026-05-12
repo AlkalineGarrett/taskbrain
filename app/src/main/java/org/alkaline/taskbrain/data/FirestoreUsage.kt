@@ -53,6 +53,8 @@ object FirestoreUsage {
         PULL_FULL_REPAIR(isBilled = true),
         // count() aggregation query used by foreground detection (~1 read).
         COUNT_AGGREGATION(isBilled = true),
+        // Hydration of rawNotes from Firestore's persistent cache on attach. $0.
+        HYDRATE_CACHED(isBilled = false),
     }
 
     enum class WriteType {

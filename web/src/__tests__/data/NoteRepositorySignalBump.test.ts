@@ -57,7 +57,7 @@ describe('NoteRepository write paths fire UserDocSignal.bump', () => {
     await repo.createNote()
     expect(fs.addDoc).toHaveBeenCalled()
     expect(UserDocSignal.bump).toHaveBeenCalledTimes(1)
-    expect(UserDocSignal.bump).toHaveBeenCalledWith(expect.anything(), USER_ID)
+    expect(UserDocSignal.bump).toHaveBeenCalledWith(expect.anything(), USER_ID, 'NOTES')
   })
 
   it('createMultiLineNote (single line) bumps once', async () => {

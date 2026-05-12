@@ -329,11 +329,19 @@ class NoteRepository(
      * Used to atomically combine note writes with related cross-collection writes
      * (e.g. an alarm doc) so a single commit lands both. The [data] map is written
      * via `batch.set(ref, data)` (or merged when [merge] is true).
+     *
+     * [signalChannel] is the `UserDocSignal` channel that subscribes to the
+     * collection this op writes to. Set when the extra writes to a collection
+     * other than `/notes` so [commitInBatches] bumps that channel after a
+     * successful commit (e.g., alarms → `Channel.ALARMS`). Leave `null` for
+     * extras that target collections still using a snapshot listener (which
+     * sees the change directly, no signal needed).
      */
     data class BatchExtraOp(
         val ref: DocumentReference,
         val data: Map<String, Any?>,
         val merge: Boolean,
+        val signalChannel: UserDocSignal.Channel? = null,
     )
 
     /**
@@ -792,7 +800,7 @@ class NoteRepository(
         }
 
         extraOpsBuilder?.build(::effectiveId, userId)?.forEach { extra ->
-            ops.add(BatchOp(extra.ref, extra.data, extra.merge))
+            ops.add(BatchOp(extra.ref, extra.data, extra.merge, extra.signalChannel))
         }
 
         val postSaveContainedNotes = HashMap<String, List<String>>(linesToSave.size).apply {
@@ -876,7 +884,7 @@ class NoteRepository(
         val data = newNoteData(userId, "")
         val ref = notesCollection.add(data).await()
         FirestoreUsage.recordWrite("createNote", FirestoreUsage.WriteType.SET)
-        UserDocSignal.bump(db, userId)
+        UserDocSignal.bump(db, userId, UserDocSignal.Channel.NOTES)
         Log.d(TAG, "Note created with ID: ${ref.id}")
         ref.id
     }
@@ -901,7 +909,7 @@ class NoteRepository(
             val data = newNoteData(userId, firstLine)
             val ref = notesCollection.add(data).await()
             FirestoreUsage.recordWrite("createMultiLineNote", FirestoreUsage.WriteType.SET)
-            UserDocSignal.bump(db, userId)
+            UserDocSignal.bump(db, userId, UserDocSignal.Channel.NOTES)
             return ref.id
         }
 
@@ -962,7 +970,7 @@ class NoteRepository(
         batch.commit().await()
         // Root note + N descendants written in a single batch.
         FirestoreUsage.recordWrite("createMultiLineNote", FirestoreUsage.WriteType.BATCH_COMMIT, nodes.size + 1)
-        UserDocSignal.bump(db, userId)
+        UserDocSignal.bump(db, userId, UserDocSignal.Channel.NOTES)
         Log.d(TAG, "Multi-line note created with ID: ${parentRef.id}")
         return parentRef.id
     }
@@ -1053,7 +1061,7 @@ class NoteRepository(
             ),
         ).await()
         FirestoreUsage.recordWrite("updateShowCompleted", FirestoreUsage.WriteType.UPDATE)
-        UserDocSignal.bump(db, userId)
+        UserDocSignal.bump(db, userId, UserDocSignal.Channel.NOTES)
     }
 
     /**
@@ -1244,7 +1252,8 @@ class NoteRepository(
     private data class BatchOp(
         val ref: DocumentReference,
         val data: Map<String, Any?>,
-        val merge: Boolean
+        val merge: Boolean,
+        val signalChannel: UserDocSignal.Channel? = null,
     )
 
     /**
@@ -1379,8 +1388,12 @@ class NoteRepository(
             batch.commit().await()
             FirestoreUsage.recordWrite(operation, FirestoreUsage.WriteType.BATCH_COMMIT, chunk.size)
         }
-        // One bump per logical batch — multiple chunks are still one save.
-        UserDocSignal.bump(db, requireUserId())
+        // Bump every channel touched by this batch in one merged write.
+        // NOTES is always bumped; extras (e.g., alarms inside a save)
+        // contribute their own channels.
+        val channels = mutableSetOf(UserDocSignal.Channel.NOTES)
+        for (op in ops) op.signalChannel?.let { channels.add(it) }
+        UserDocSignal.bump(db, requireUserId(), channels)
     }
 
     companion object {

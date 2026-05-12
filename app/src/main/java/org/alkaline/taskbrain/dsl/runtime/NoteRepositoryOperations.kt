@@ -45,7 +45,7 @@ class NoteRepositoryOperations(
         }
         notesCollection.document(noteId).update(updates).await()
         FirestoreUsage.recordWrite("dsl.updateNote", FirestoreUsage.WriteType.UPDATE)
-        UserDocSignal.bump(db, userId)
+        UserDocSignal.bump(db, userId, UserDocSignal.Channel.NOTES)
 
         val base = NoteStore.getRawNoteById(noteId)
             ?: throw NoteOperationException("Note not found after update: $noteId")
@@ -72,7 +72,7 @@ class NoteRepositoryOperations(
         )
         noteRef.set(noteData).await()
         FirestoreUsage.recordWrite("dsl.createNote", FirestoreUsage.WriteType.SET)
-        UserDocSignal.bump(db, userId)
+        UserDocSignal.bump(db, userId, UserDocSignal.Channel.NOTES)
 
         // Return the created note
         return Note(

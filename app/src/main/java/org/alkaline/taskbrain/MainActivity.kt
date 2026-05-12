@@ -36,6 +36,7 @@ import org.alkaline.taskbrain.data.AlarmRepository
 import org.alkaline.taskbrain.data.NoteStatsRepository
 import org.alkaline.taskbrain.data.NoteStore
 import org.alkaline.taskbrain.data.RecurringAlarmRepository
+import org.alkaline.taskbrain.data.SignalListener
 import org.alkaline.taskbrain.util.PermissionHelper
 import java.util.concurrent.Executors
 
@@ -106,6 +107,7 @@ class MainActivity : AppCompatActivity() {
                     AlarmRepository.clear()
                     RecurringAlarmRepository.clear()
                     NoteStatsRepository.clear()
+                    SignalListener.clear()
                     auth.signOut()
                 },
                 isFingerDown = isFingerDown,

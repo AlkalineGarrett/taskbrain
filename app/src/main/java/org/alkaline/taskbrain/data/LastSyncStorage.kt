@@ -13,7 +13,6 @@ import com.google.firebase.Timestamp
 object LastSyncStorage {
     private const val TAG = "LastSyncStorage"
     private const val PREFS_NAME = "taskbrain_prefs"
-    private const val KEY_PREFIX = "lastSync_"
 
     private var prefs: SharedPreferences? = null
 
@@ -23,35 +22,38 @@ object LastSyncStorage {
         prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }
 
-    /** Read the watermark for [userId], or `Timestamp(0, 0)` if unset. */
-    fun read(userId: String): Timestamp {
+    private fun key(channel: UserDocSignal.Channel, userId: String): String =
+        "lastSync_${channel.name}_$userId"
+
+    /** Read the watermark for ([channel], [userId]), or `Timestamp(0, 0)` if unset. */
+    fun read(channel: UserDocSignal.Channel, userId: String): Timestamp {
         val p = prefs
         if (p == null) {
-            Log.w(TAG, "read($userId) called before attach(); returning 0")
+            Log.w(TAG, "read($channel,$userId) called before attach(); returning 0")
             return Timestamp(0, 0)
         }
-        val ms = p.getLong(KEY_PREFIX + userId, 0L)
+        val ms = p.getLong(key(channel, userId), 0L)
         if (ms <= 0L) return Timestamp(0, 0)
         val seconds = ms / 1000
         val nanos = ((ms % 1000) * 1_000_000).toInt()
         return Timestamp(seconds, nanos)
     }
 
-    /** Write the watermark for [userId]. Caller must invoke only after a
-     *  successful apply, so a transient failure can't advance past the real
-     *  `max(updatedAt)` the device has actually persisted. */
-    fun write(userId: String, timestamp: Timestamp) {
+    /** Caller must invoke only after a successful apply, so a transient
+     *  failure can't advance past the real `max(updatedAt)` the device has
+     *  actually persisted. */
+    fun write(channel: UserDocSignal.Channel, userId: String, timestamp: Timestamp) {
         val p = prefs
         if (p == null) {
-            Log.w(TAG, "write($userId) called before attach(); dropping")
+            Log.w(TAG, "write($channel,$userId) called before attach(); dropping")
             return
         }
         val ms = timestamp.seconds * 1000L + timestamp.nanoseconds / 1_000_000L
-        p.edit().putLong(KEY_PREFIX + userId, ms).apply()
+        p.edit().putLong(key(channel, userId), ms).apply()
     }
 
-    /** Used by the full-repair pull (Step 5 detection) to start over. */
-    fun clear(userId: String) {
-        prefs?.edit()?.remove(KEY_PREFIX + userId)?.apply()
+    /** Used by the full-repair pull (count() detection) to start over. */
+    fun clear(channel: UserDocSignal.Channel, userId: String) {
+        prefs?.edit()?.remove(key(channel, userId))?.apply()
     }
 }

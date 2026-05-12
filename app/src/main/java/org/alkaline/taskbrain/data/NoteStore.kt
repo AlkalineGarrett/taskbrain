@@ -1,31 +1,17 @@
 package org.alkaline.taskbrain.data
 
 import android.util.Log
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.ProcessLifecycleOwner
-import com.google.firebase.Timestamp
-import com.google.firebase.firestore.AggregateSource
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.ListenerRegistration
-import com.google.firebase.firestore.Query
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.locks.ReentrantReadWriteLock
@@ -87,27 +73,51 @@ object NoteStore {
      */
     private val rawNotesLock = ReentrantReadWriteLock()
 
-    private var userDocListener: ListenerRegistration? = null
-    private var loaded = false
-    private var loadDeferred: CompletableDeferred<Unit>? = null
+    /** Owns the signal+pull/hydrate/detect/foreground machinery. NoteStore
+     *  provides the cache shape via [noteSink]. */
+    private val noteSink = object : DeltaPullEngine.DeltaPullSink<Note> {
+        override fun applyFullPull(items: List<Note>) {
+            rawNotesLock.write {
+                rawNotes.clear()
+                for (note in items) rawNotes[note.id] = note
+                rebuildAll()
+            }
+        }
 
-    /** Captured by [start] for use by [pullDelta] / detection / [clear]. */
-    private var db: FirebaseFirestore? = null
-    private var userId: String? = null
+        override fun applyDelta(items: List<Note>) {
+            if (items.isEmpty()) return
+            val affectedRoots = mutableSetOf<String>()
+            rawNotesLock.write {
+                for (note in items) {
+                    rawNotes[note.id] = note
+                    affectedRoots.add(note.rootNoteId ?: note.id)
+                }
+                rebuildAffected(affectedRoots)
+            }
+            if (affectedRoots.isNotEmpty()) {
+                _changedNoteIds.tryEmit(affectedRoots)
+            }
+        }
 
-    private var lastObservedSignal: Timestamp? = null
-    private var detectionRanThisSession = false
-    private var foregroundObserver: LifecycleEventObserver? = null
+        override fun localCount(): Long = rawNotesLock.read { rawNotes.size.toLong() }
 
-    /** Pulls run off any view-bound scope so Activity recreation doesn't
-     *  cancel an in-flight sync. Recreated by [start] after [clear]. */
-    private var pullScope: CoroutineScope = newPullScope()
-    private val pullMutex = Mutex()
+        override fun raiseSyncWarning(message: String) {
+            _error.value = message
+        }
 
-    /** Overlap on the watermark — covers clock skew and same-timestamp ties. */
-    private const val PULL_OVERLAP_SECONDS = 5L
+        override fun clearSyncWarning() {
+            _error.value = null
+        }
+    }
 
-    private fun newPullScope() = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val pullEngine = DeltaPullEngine(
+        channel = UserDocSignal.Channel.NOTES,
+        tag = "NoteStore",
+        collectionRef = { db, uid -> db.collection("notes").whereEqualTo("userId", uid) },
+        parse = ::parseNote,
+        updatedAt = { it.updatedAt },
+        sink = noteSink,
+    )
 
     /** In-flight saves keyed by noteId, so loaders can await before reading. */
     private val pendingSaves = mutableMapOf<String, Deferred<Unit>>()
@@ -159,228 +169,31 @@ object NoteStore {
     }
 
     /**
-     * Idempotent. Attaches the [users/{uid}](#) snapshot listener, fires the
-     * initial delta pull, and registers the foreground observer. Re-calling
-     * after a successful start is a no-op.
+     * Idempotent. Hands the user-doc signal subscription, hydrate, delta
+     * pull, count() detection, and foreground observer over to
+     * [DeltaPullEngine]. Re-calling after a successful start is a no-op.
      */
     fun start(db: FirebaseFirestore, userId: String) {
-        if (userDocListener != null) return
-
-        this.db = db
-        this.userId = userId
-
-        if (loadDeferred == null) {
-            loadDeferred = CompletableDeferred()
-        }
-
-        userDocListener = db.collection("users").document(userId)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    Log.e(TAG, "user-doc signal listener error", error)
-                    _error.value = error.message ?: "Note sync failed"
-                    return@addSnapshotListener
-                }
-                if (snapshot == null) return@addSnapshotListener
-                if (snapshot.metadata.hasPendingWrites()) {
-                    FirestoreUsage.recordRead(
-                        "NoteStore.signalListener",
-                        FirestoreUsage.ReadType.LISTENER_LOCAL_ECHO,
-                        1,
-                    )
-                    return@addSnapshotListener
-                }
-                val fromCache = snapshot.metadata.isFromCache
-                FirestoreUsage.recordRead(
-                    "NoteStore.signalListener",
-                    if (fromCache) FirestoreUsage.ReadType.LISTENER_UPDATE_CACHED
-                    else FirestoreUsage.ReadType.LISTENER_UPDATE_FRESH,
-                    1,
-                )
-                val newSignal = snapshot.getTimestamp("lastNoteChange")
-                if (newSignal == lastObservedSignal) return@addSnapshotListener
-                lastObservedSignal = newSignal
-                pullScope.launch { pullDelta("signal") }
-            }
-
-        pullScope.launch { pullDelta("attach") }
-
-        // Foreground observer: every ON_START re-pulls; detection runs
-        // once-per-process to catch hard-delete divergence.
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_START) {
-                pullScope.launch {
-                    pullDelta("foreground")
-                    runForegroundDetectionOnce()
-                }
-            }
-        }
-        foregroundObserver = observer
-        try {
-            ProcessLifecycleOwner.get().lifecycle.addObserver(observer)
-        } catch (e: Throwable) {
-            // ProcessLifecycleOwner.get() throws when called outside an
-            // Android process (e.g., JVM unit tests). Pulls still fire via
-            // the signal listener and `attach`; only foreground triggers
-            // are missing in that environment.
-            Log.w(TAG, "ProcessLifecycleOwner observer add failed; foreground triggers disabled", e)
-            foregroundObserver = null
-        }
+        pullEngine.start(db, userId)
     }
 
-    /** Serialized through [pullMutex] so attach + signal don't double-pull. */
-    private suspend fun pullDelta(reason: String) = pullMutex.withLock {
-        val db = this.db ?: return@withLock
-        val uid = this.userId ?: return@withLock
-        val watermark = LastSyncStorage.read(uid)
-        val isFullPull = watermark.seconds == 0L && watermark.nanoseconds == 0
-        val baseQuery = db.collection("notes").whereEqualTo("userId", uid)
-        val query: Query = if (isFullPull) {
-            baseQuery
-        } else {
-            baseQuery
-                .whereGreaterThan("updatedAt", overlapBuffered(watermark))
-                .orderBy("updatedAt")
-        }
-        val snapshot = try {
-            query.get().await()
-        } catch (e: Exception) {
-            Log.e(TAG, "pullDelta(reason=$reason, full=$isFullPull) failed", e)
-            _error.value = e.message ?: "Note sync failed"
-            return@withLock
-        }
-        val readType = if (isFullPull) FirestoreUsage.ReadType.PULL_FULL_REPAIR
-        else FirestoreUsage.ReadType.PULL_DELTA
-        FirestoreUsage.recordRead("NoteStore.pull.$reason", readType, snapshot.size())
-        val notes = snapshot.documents.mapNotNull { parseNote(it) }
-        if (isFullPull) {
-            applyFullPull(notes)
-        } else {
-            applyDelta(notes)
-        }
-        // Advance lastSync to max(updatedAt) of returned docs. Persist only
-        // after a successful apply so a transient failure can't push the
-        // watermark past data we haven't actually durably reflected.
-        val maxUpdatedAt = notes.maxByOrNull { note ->
-            note.updatedAt?.let { ts -> ts.seconds * 1_000_000_000L + ts.nanoseconds } ?: 0L
-        }?.updatedAt
-        if (maxUpdatedAt != null) {
-            LastSyncStorage.write(uid, maxUpdatedAt)
-        }
-    }
+    /** Returns after the initial hydrate+pull completes. */
+    suspend fun ensureLoaded() = pullEngine.ensureLoaded()
 
-    private fun overlapBuffered(watermark: Timestamp): Timestamp {
-        val seconds = watermark.seconds - PULL_OVERLAP_SECONDS
-        return if (seconds < 0) Timestamp(0, 0) else Timestamp(seconds, watermark.nanoseconds)
-    }
+    /** Whether the initial pull has completed. */
+    fun isLoaded(): Boolean = pullEngine.isLoaded()
 
-    private fun applyFullPull(notes: List<Note>) {
-        rawNotesLock.write {
-            rawNotes.clear()
-            for (note in notes) rawNotes[note.id] = note
-            rebuildAll()
-        }
-        markLoaded()
+    /** Test seam: invoke applyDelta directly without going through the
+     *  engine's pull machinery. Used by unit tests that pin the
+     *  rebuildAffected → changedNoteIds emission contract. */
+    @androidx.annotation.VisibleForTesting
+    internal fun applyDeltaForTest(notes: List<Note>) {
+        noteSink.applyDelta(notes)
     }
-
-    private fun applyDelta(notes: List<Note>) {
-        if (notes.isEmpty()) {
-            // Even an empty delta means the initial pull completed — flag
-            // loaded so editors waiting on ensureLoaded() can proceed.
-            markLoaded()
-            return
-        }
-        val affectedRoots = mutableSetOf<String>()
-        rawNotesLock.write {
-            for (note in notes) {
-                rawNotes[note.id] = note
-                affectedRoots.add(note.rootNoteId ?: note.id)
-            }
-            rebuildAffected(affectedRoots)
-        }
-        markLoaded()
-        if (affectedRoots.isNotEmpty()) {
-            _changedNoteIds.tryEmit(affectedRoots)
-        }
-    }
-
-    private fun markLoaded() {
-        if (loaded) return
-        loaded = true
-        loadDeferred?.complete(Unit)
-        loadDeferred = null
-    }
-
-    /**
-     * One count() aggregation vs `rawNotes.size`; mismatch triggers a full
-     * repair pull and a user-visible warning. Gated to once per process —
-     * cheap if a single foreground per app lifetime is enough to catch
-     * divergence, expensive (more reads) if run on every foreground.
-     */
-    private suspend fun runForegroundDetectionOnce() {
-        if (detectionRanThisSession) return
-        if (!loaded) return // nothing to compare against yet
-        detectionRanThisSession = true
-        val db = this.db ?: return
-        val uid = this.userId ?: return
-        val serverCount = try {
-            db.collection("notes").whereEqualTo("userId", uid).count()
-                .get(AggregateSource.SERVER).await().count
-        } catch (e: Exception) {
-            Log.e(TAG, "detection count() failed", e)
-            detectionRanThisSession = false // allow retry on next foreground
-            return
-        }
-        FirestoreUsage.recordRead(
-            "NoteStore.detection",
-            FirestoreUsage.ReadType.COUNT_AGGREGATION,
-            1,
-        )
-        val localCount = rawNotesLock.read { rawNotes.size }.toLong()
-        if (serverCount == localCount) {
-            Log.d(TAG, "detection: count match ($localCount); no repair needed")
-            return
-        }
-        Log.w(
-            TAG,
-            "detection: count mismatch (local=$localCount, server=$serverCount); " +
-                "triggering full repair pull",
-        )
-        raiseWarning(
-            "Note sync inconsistency: local has $localCount notes, server has $serverCount. " +
-                "Re-syncing now.",
-        )
-        // Drop the watermark so the next pull is a full one.
-        LastSyncStorage.clear(uid)
-        pullDelta("repair")
-    }
-
-    /**
-     * Returns after the first snapshot arrives.
-     * Call after [start] to wait for initial data.
-     */
-    suspend fun ensureLoaded() {
-        if (loaded) return
-        val deferred = loadDeferred ?: CompletableDeferred<Unit>().also { loadDeferred = it }
-        deferred.await()
-    }
-
-    /** Whether the first Firestore snapshot has arrived. */
-    fun isLoaded(): Boolean = loaded
 
     /** Stop listening and clear all data (e.g., on logout). */
     fun clear() {
-        userDocListener?.remove()
-        userDocListener = null
-        foregroundObserver?.let { obs ->
-            try {
-                ProcessLifecycleOwner.get().lifecycle.removeObserver(obs)
-            } catch (e: Throwable) {
-                // Unit test environment; observer was never registered.
-            }
-        }
-        foregroundObserver = null
-        pullScope.cancel()
-        pullScope = newPullScope()
+        pullEngine.clear()
         rawNotesLock.write { rawNotes.clear() }
         pendingPersistContent.clear()
         pendingPersistRunnables.clear()
@@ -393,12 +206,6 @@ object NoteStore {
         _notes.value = emptyList()
         _error.value = null
         _notesNeedingFix.value = emptySet()
-        loaded = false
-        loadDeferred = null
-        lastObservedSignal = null
-        detectionRanThisSession = false
-        db = null
-        userId = null
     }
 
     /** Clear a note from [notesNeedingFix] (e.g., after a successful save). */

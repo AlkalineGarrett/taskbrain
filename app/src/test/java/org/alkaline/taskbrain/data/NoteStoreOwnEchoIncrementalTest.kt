@@ -50,7 +50,7 @@ class NoteStoreOwnEchoIncrementalTest {
         // left arbitrary ids in `_notes.value`.
         val priorNoteIds = NoteStore.notes.value.map { it.id }.toSet()
 
-        invokeApplyDelta(listOf(note))
+        NoteStore.applyDeltaForTest(listOf(note))
         runCurrent()
 
         assertTrue(
@@ -70,12 +70,4 @@ class NoteStoreOwnEchoIncrementalTest {
         collectorJob.cancel()
     }
 
-    private fun invokeApplyDelta(notes: List<Note>) {
-        val method = NoteStore::class.java.getDeclaredMethod(
-            "applyDelta",
-            List::class.java,
-        )
-        method.isAccessible = true
-        method.invoke(NoteStore, notes)
-    }
 }

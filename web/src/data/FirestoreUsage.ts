@@ -23,6 +23,8 @@ export type ReadType =
   | 'PULL_FULL_REPAIR'
   // count() aggregation query used by foreground detection (~1 read).
   | 'COUNT_AGGREGATION'
+  // Hydration of rawNotes from Firestore's IndexedDB cache on attach. $0.
+  | 'HYDRATE_CACHED'
 
 export type WriteType =
   | 'SET'
@@ -35,6 +37,7 @@ const LOCAL_ONLY_READ_TYPES = new Set<string>([
   'LISTENER_INITIAL_CACHED',
   'LISTENER_UPDATE_CACHED',
   'LISTENER_LOCAL_ECHO',
+  'HYDRATE_CACHED',
 ])
 
 interface Counter {

@@ -7,8 +7,6 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.ListenerRegistration
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,24 +17,29 @@ import java.util.Date
 
 /**
  * Repository for managing alarms under /users/{userId}/alarms/{alarmId}.
- * Reads are served from a listener-backed [StateFlow] (lazy attach,
- * full-collection cache, in-memory filters); writes go directly to
- * Firestore. See `docs/firestore-efficiency.md` Principle 1.
  *
- * The listener + cache live on the companion object so every instance
- * shares one listener — production has 7+ construction sites (ViewModels,
- * receivers, services) and a per-instance listener would mean each pays
- * its own INITIAL_FRESH and maintains a parallel network connection.
- * Receivers running in separate OS processes still get their own JVM
- * (and thus their own companion-singleton); for those, prefer the
- * `*FromServer` one-shot reads instead of the cache.
+ * Sync architecture (mirrors `NoteStore`; see `docs/live-cross-platform-sync.md`):
+ * 1. `users/{uid}` 1-doc signal listener watching `lastAlarmChange`.
+ * 2. Delta pull (`alarms WHERE updatedAt > lastSync − 5s`) on signal fire,
+ *    on first attach, and after count() divergence.
+ * 3. Hydration from Firestore's persistent cache (`get(Source.CACHE)`) on
+ *    first attach — restores the cache for $0 across process restarts.
+ *
+ * Each write path bumps `UserDocSignal.Channel.ALARMS` after success so
+ * other clients pull. Hard-deletes also update the in-memory cache locally
+ * because vanished docs are invisible to delta pulls.
+ *
+ * The signal listener + cache live on the companion object so every
+ * instance shares one — production has 7+ construction sites; a per-
+ * instance listener would mean each pays its own attach. Receivers in
+ * separate OS processes get their own JVM (and their own singleton);
+ * for those, prefer the `*FromServer` one-shot reads instead of the cache.
  *
  * The first instance to call `ensureListenerAttached()` binds its
- * `db`/`auth` to the companion's listener; subsequent instances with
- * different references are silently ignored. In production all instances
- * share the singleton `FirebaseFirestore`/`FirebaseAuth` so this is
- * irrelevant. In tests, call [clear] in `@Before` to reset the
- * companion's listener+cache before injecting fresh mocks.
+ * `db`/`auth`; subsequent instances with different references are silently
+ * ignored. In production all instances share the singleton
+ * `FirebaseFirestore`/`FirebaseAuth` so this is irrelevant. In tests, call
+ * [clear] in `@Before` to reset the companion before injecting fresh mocks.
  */
 class AlarmRepository(
     private val db: FirebaseFirestore = FirebaseFirestore.getInstance(),
@@ -54,58 +57,11 @@ class AlarmRepository(
     private fun newAlarmRef(userId: String): DocumentReference =
         alarmsCollection(userId).document()
 
-    private fun ensureListenerAttached(): CompletableDeferred<Unit> {
-        synchronized(cacheLock) {
-            if (listener != null) return loadDeferred!!
-            val userId = auth.currentUser?.uid
-                ?: throw IllegalStateException("User not signed in")
-            val deferred = loadDeferred ?: CompletableDeferred<Unit>().also { loadDeferred = it }
-
-            listener = alarmsCollection(userId)
-                .addSnapshotListener { snapshot, error ->
-                    if (error != null) {
-                        Log.e(
-                            TAG,
-                            "[alarms listener failed] userId=$userId\n${error.stackTraceToString()}",
-                            error,
-                        )
-                        NoteStore.raiseWarning(
-                            "Alarm sync failed. Alarm list and triggers may be stale " +
-                                "until you restart the app. Check logcat tag '$TAG'."
-                        )
-                        if (!deferred.isCompleted) deferred.complete(Unit)
-                        return@addSnapshotListener
-                    }
-                    if (snapshot == null) return@addSnapshotListener
-                    val firstAlreadyDelivered = deferred.isCompleted
-                    val isLocalEcho = firstAlreadyDelivered && snapshot.metadata.hasPendingWrites()
-                    val fromCache = snapshot.metadata.isFromCache
-                    val type = when {
-                        !firstAlreadyDelivered && fromCache -> FirestoreUsage.ReadType.LISTENER_INITIAL_CACHED
-                        !firstAlreadyDelivered -> FirestoreUsage.ReadType.LISTENER_INITIAL_FRESH
-                        isLocalEcho -> FirestoreUsage.ReadType.LISTENER_LOCAL_ECHO
-                        fromCache -> FirestoreUsage.ReadType.LISTENER_UPDATE_CACHED
-                        else -> FirestoreUsage.ReadType.LISTENER_UPDATE_FRESH
-                    }
-                    val docCount = if (firstAlreadyDelivered) snapshot.documentChanges.size else snapshot.size()
-                    FirestoreUsage.recordRead("AlarmRepo.listener", type, docCount)
-                    // Process local-echo snapshots too: there's no separate
-                    // optimistic-update path for the alarm cache, so the
-                    // echo is the only signal that a local write happened
-                    // (matters offline, where server confirmation may take
-                    // a while). Same trade-off as RecentTabsRepository.
-                    _cachedAlarms.value = snapshot.documents.mapNotNull { doc ->
-                        try {
-                            mapToAlarm(doc.id, doc.data ?: emptyMap())
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error parsing alarm", e)
-                            null
-                        }
-                    }
-                    if (!deferred.isCompleted) deferred.complete(Unit)
-                }
-            return deferred
-        }
+    private suspend fun ensureListenerAttached() {
+        val userId = auth.currentUser?.uid
+            ?: throw IllegalStateException("User not signed in")
+        pullEngine.start(db, userId)
+        pullEngine.ensureLoaded()
     }
 
     /** Mints a fresh alarm doc ID client-side, no Firestore write. */
@@ -121,6 +77,7 @@ class AlarmRepository(
             ref = alarmRef(userId, alarm.id),
             data = createAlarmData(alarm.copy(userId = userId)),
             merge = false,
+            signalChannel = UserDocSignal.Channel.ALARMS,
         )
     }
 
@@ -140,6 +97,7 @@ class AlarmRepository(
             val ref = newAlarmRef(userId)
             ref.set(createAlarmData(alarm.copy(id = ref.id, userId = userId))).await()
             FirestoreUsage.recordWrite("createAlarm", FirestoreUsage.WriteType.SET)
+            UserDocSignal.bump(db, userId, UserDocSignal.Channel.ALARMS)
             Log.d(TAG, "Alarm created with ID: ${ref.id}")
             ref.id
         }
@@ -155,6 +113,7 @@ class AlarmRepository(
             data["updatedAt"] = FieldValue.serverTimestamp()
             alarmRef(userId, alarm.id).set(data).await()
             FirestoreUsage.recordWrite("updateAlarm", FirestoreUsage.WriteType.SET)
+            UserDocSignal.bump(db, userId, UserDocSignal.Channel.ALARMS)
             Log.d(TAG, "Alarm updated: ${alarm.id}")
             Unit
         }
@@ -169,6 +128,7 @@ class AlarmRepository(
             val userId = requireUserId()
             alarmRef(userId, alarmId).update("notifiedStageType", stageType.name).await()
             FirestoreUsage.recordWrite("markNotifiedStage", FirestoreUsage.WriteType.UPDATE)
+            UserDocSignal.bump(db, userId, UserDocSignal.Channel.ALARMS)
             Log.d(TAG, "Marked notifiedStageType=$stageType for alarm $alarmId")
             Unit
         }
@@ -187,6 +147,7 @@ class AlarmRepository(
                 )
             ).await()
             FirestoreUsage.recordWrite("linkToRecurringAlarm", FirestoreUsage.WriteType.UPDATE)
+            UserDocSignal.bump(db, userId, UserDocSignal.Channel.ALARMS)
             Log.d(TAG, "Linked alarm $alarmId to recurring alarm $recurringAlarmId")
             Unit
         }
@@ -200,6 +161,8 @@ class AlarmRepository(
             val userId = requireUserId()
             alarmRef(userId, alarmId).delete().await()
             FirestoreUsage.recordWrite("deleteAlarm", FirestoreUsage.WriteType.DELETE)
+            removeFromCacheLocally(listOf(alarmId))
+            UserDocSignal.bump(db, userId, UserDocSignal.Channel.ALARMS)
             Log.d(TAG, "Alarm deleted: $alarmId")
             Unit
         }
@@ -211,7 +174,7 @@ class AlarmRepository(
     suspend fun deleteAllAlarms(): Result<List<String>> = runCatching {
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
-            ensureListenerAttached().await()
+            ensureListenerAttached()
             val alarms = _cachedAlarms.value
             if (alarms.isEmpty()) return@withContext emptyList<String>()
             val alarmIds = alarms.map { it.id }
@@ -224,6 +187,8 @@ class AlarmRepository(
                 batch.commit().await()
                 FirestoreUsage.recordWrite("deleteAllAlarms", FirestoreUsage.WriteType.BATCH_COMMIT, chunk.size)
             }
+            removeFromCacheLocally(alarmIds)
+            UserDocSignal.bump(db, userId, UserDocSignal.Channel.ALARMS)
             Log.d(TAG, "Deleted all alarms (${alarms.size} documents)")
             alarmIds
         }
@@ -236,7 +201,7 @@ class AlarmRepository(
     suspend fun deleteRecurringAlarmInstances(): Result<List<String>> = runCatching {
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
-            ensureListenerAttached().await()
+            ensureListenerAttached()
             val instances = _cachedAlarms.value.filter { it.recurringAlarmId != null }
             val alarmIds = instances.map { it.id }
             for (chunk in instances.chunked(500)) {
@@ -247,6 +212,8 @@ class AlarmRepository(
                 batch.commit().await()
                 FirestoreUsage.recordWrite("deleteRecurringAlarmInstances", FirestoreUsage.WriteType.BATCH_COMMIT, chunk.size)
             }
+            removeFromCacheLocally(alarmIds)
+            UserDocSignal.bump(db, userId, UserDocSignal.Channel.ALARMS)
             Log.d(TAG, "Deleted ${alarmIds.size} recurring alarm instances")
             alarmIds
         }
@@ -256,7 +223,7 @@ class AlarmRepository(
      * Gets a single alarm by ID, served from the listener cache.
      */
     suspend fun getAlarm(alarmId: String): Result<Alarm?> = runCatching {
-        ensureListenerAttached().await()
+        ensureListenerAttached()
         _cachedAlarms.value.firstOrNull { it.id == alarmId }
     }.onFailure { Log.e(TAG, "Error getting alarm", it) }
 
@@ -280,7 +247,7 @@ class AlarmRepository(
      * Gets all alarms for a specific note.
      */
     suspend fun getAlarmsForNote(noteId: String): Result<List<Alarm>> = runCatching {
-        ensureListenerAttached().await()
+        ensureListenerAttached()
         _cachedAlarms.value.filter { it.noteId == noteId }
     }.onFailure { Log.e(TAG, "Error getting alarms for note", it) }
 
@@ -289,7 +256,7 @@ class AlarmRepository(
      */
     suspend fun getAlarmsByIds(alarmIds: List<String>): Result<Map<String, Alarm>> = runCatching {
         if (alarmIds.isEmpty()) return@runCatching emptyMap()
-        ensureListenerAttached().await()
+        ensureListenerAttached()
         val byId = _cachedAlarms.value.associateBy { it.id }
         alarmIds.mapNotNull { id -> byId[id]?.let { id to it } }.toMap()
     }.onFailure { Log.e(TAG, "Error getting alarms by IDs", it) }
@@ -298,7 +265,7 @@ class AlarmRepository(
      * Gets upcoming alarms (status=PENDING, dueTime != null, ordered by dueTime asc).
      */
     suspend fun getUpcomingAlarms(): Result<List<Alarm>> = runCatching {
-        ensureListenerAttached().await()
+        ensureListenerAttached()
         _cachedAlarms.value
             .filter { it.status == AlarmStatus.PENDING && it.dueTime != null }
             .sortedBy { it.dueTime?.toDate()?.time }
@@ -308,7 +275,7 @@ class AlarmRepository(
      * Gets later alarms (status=PENDING, dueTime == null, ordered by createdAt desc).
      */
     suspend fun getLaterAlarms(): Result<List<Alarm>> = runCatching {
-        ensureListenerAttached().await()
+        ensureListenerAttached()
         _cachedAlarms.value
             .filter { it.status == AlarmStatus.PENDING && it.dueTime == null }
             .sortedByDescending { it.createdAt?.toDate()?.time }
@@ -318,7 +285,7 @@ class AlarmRepository(
      * Gets completed alarms (status=DONE, ordered by updatedAt desc).
      */
     suspend fun getCompletedAlarms(): Result<List<Alarm>> = runCatching {
-        ensureListenerAttached().await()
+        ensureListenerAttached()
         _cachedAlarms.value
             .filter { it.status == AlarmStatus.DONE }
             .sortedByDescending { it.updatedAt?.toDate()?.time }
@@ -328,7 +295,7 @@ class AlarmRepository(
      * Gets cancelled alarms (status=CANCELLED, ordered by updatedAt desc).
      */
     suspend fun getCancelledAlarms(): Result<List<Alarm>> = runCatching {
-        ensureListenerAttached().await()
+        ensureListenerAttached()
         _cachedAlarms.value
             .filter { it.status == AlarmStatus.CANCELLED }
             .sortedByDescending { it.updatedAt?.toDate()?.time }
@@ -338,7 +305,7 @@ class AlarmRepository(
      * Gets all pending alarms (used after boot for scheduling).
      */
     suspend fun getPendingAlarms(): Result<List<Alarm>> = runCatching {
-        ensureListenerAttached().await()
+        ensureListenerAttached()
         _cachedAlarms.value.filter { it.status == AlarmStatus.PENDING }
     }.onFailure { Log.e(TAG, "Error getting pending alarms", it) }
 
@@ -379,6 +346,7 @@ class AlarmRepository(
                 )
             ).await()
             FirestoreUsage.recordWrite("markDone", FirestoreUsage.WriteType.UPDATE)
+            UserDocSignal.bump(db, userId, UserDocSignal.Channel.ALARMS)
             Log.d(TAG, "Alarm marked done: $alarmId")
             Unit
         }
@@ -397,6 +365,7 @@ class AlarmRepository(
                 )
             ).await()
             FirestoreUsage.recordWrite("markCancelled", FirestoreUsage.WriteType.UPDATE)
+            UserDocSignal.bump(db, userId, UserDocSignal.Channel.ALARMS)
             Log.d(TAG, "Alarm marked cancelled: $alarmId")
             Unit
         }
@@ -416,6 +385,7 @@ class AlarmRepository(
                 )
             ).await()
             FirestoreUsage.recordWrite("snoozeAlarm", FirestoreUsage.WriteType.UPDATE)
+            UserDocSignal.bump(db, userId, UserDocSignal.Channel.ALARMS)
             Log.d(TAG, "Alarm snoozed until $snoozeUntil: $alarmId")
             Unit
         }
@@ -434,6 +404,7 @@ class AlarmRepository(
                 )
             ).await()
             FirestoreUsage.recordWrite("clearSnooze", FirestoreUsage.WriteType.UPDATE)
+            UserDocSignal.bump(db, userId, UserDocSignal.Channel.ALARMS)
             Log.d(TAG, "Alarm snooze cleared: $alarmId")
             Unit
         }
@@ -452,6 +423,7 @@ class AlarmRepository(
                 )
             ).await()
             FirestoreUsage.recordWrite("reactivateAlarm", FirestoreUsage.WriteType.UPDATE)
+            UserDocSignal.bump(db, userId, UserDocSignal.Channel.ALARMS)
             Log.d(TAG, "Alarm reactivated: $alarmId")
             Unit
         }
@@ -466,6 +438,7 @@ class AlarmRepository(
             val userId = requireUserId()
             alarmRef(userId, alarmId).update("noteId", newNoteId).await()
             FirestoreUsage.recordWrite("updateAlarmNoteId", FirestoreUsage.WriteType.UPDATE)
+            UserDocSignal.bump(db, userId, UserDocSignal.Channel.ALARMS)
             Unit
         }
     }
@@ -473,7 +446,7 @@ class AlarmRepository(
     suspend fun updateLineContentForNote(noteId: String, newContent: String): Result<Unit> = runCatching {
         withContext(Dispatchers.IO) {
             val userId = requireUserId()
-            ensureListenerAttached().await()
+            ensureListenerAttached()
             val matching = _cachedAlarms.value.filter { it.noteId == noteId }
             if (matching.isEmpty()) return@withContext
 
@@ -483,6 +456,7 @@ class AlarmRepository(
             }
             batch.commit().await()
             FirestoreUsage.recordWrite("alarms.updateLineContentForNote", FirestoreUsage.WriteType.BATCH_COMMIT, matching.size)
+            UserDocSignal.bump(db, userId, UserDocSignal.Channel.ALARMS)
             Unit
         }
     }
@@ -492,7 +466,7 @@ class AlarmRepository(
      * Used for status bar icon color.
      */
     suspend fun getHighestPriorityAlarm(): Result<AlarmPriority?> = runCatching {
-        ensureListenerAttached().await()
+        ensureListenerAttached()
         val now = Timestamp.now()
         val nowMs = now.toDate().time
 
@@ -540,35 +514,12 @@ class AlarmRepository(
         "notifiedStageType" to alarm.notifiedStageType?.name
     )
 
-    private fun mapToAlarm(id: String, data: Map<String, Any?>): Alarm = Alarm(
-        id = id,
-        userId = data["userId"] as? String ?: "",
-        noteId = data["noteId"] as? String ?: "",
-        lineContent = data["lineContent"] as? String ?: "",
-        createdAt = data["createdAt"] as? Timestamp,
-        updatedAt = data["updatedAt"] as? Timestamp,
-        dueTime = data["dueTime"] as? Timestamp,
-        stages = parseStages(data["stages"]),
-        status = try {
-            AlarmStatus.valueOf(data["status"] as? String ?: AlarmStatus.PENDING.name)
-        } catch (e: IllegalArgumentException) {
-            AlarmStatus.PENDING
-        },
-        snoozedUntil = data["snoozedUntil"] as? Timestamp,
-        recurringAlarmId = data["recurringAlarmId"] as? String,
-        notifiedStageType = (data["notifiedStageType"] as? String)?.let {
-            try { AlarmStageType.valueOf(it) } catch (e: IllegalArgumentException) { null }
-        }
-    )
-
-    private fun parseStages(raw: Any?): List<AlarmStage> = AlarmStage.fromMapList(raw)
-
     /**
      * Gets all alarm instances for a given recurring alarm template, ordered
      * by dueTime asc. Includes all statuses (PENDING, DONE, CANCELLED).
      */
     suspend fun getInstancesForRecurring(recurringAlarmId: String): Result<List<Alarm>> = runCatching {
-        ensureListenerAttached().await()
+        ensureListenerAttached()
         _cachedAlarms.value
             .filter { it.recurringAlarmId == recurringAlarmId }
             .sortedBy { it.dueTime?.toDate()?.time }
@@ -578,51 +529,126 @@ class AlarmRepository(
      * Gets all pending alarm instances for a given recurring alarm template.
      */
     suspend fun getPendingInstancesForRecurring(recurringAlarmId: String): Result<List<Alarm>> = runCatching {
-        ensureListenerAttached().await()
+        ensureListenerAttached()
         _cachedAlarms.value.filter {
             it.recurringAlarmId == recurringAlarmId && it.status == AlarmStatus.PENDING
         }
     }.onFailure { Log.e(TAG, "Error getting pending instances for recurring alarm", it) }
 
+    /**
+     * Remove alarm ids from the local cache directly. Used by hard-delete
+     * paths whose vanished docs the delta pull can't observe.
+     */
+    private fun removeFromCacheLocally(alarmIds: Collection<String>) {
+        if (alarmIds.isEmpty()) return
+        synchronized(cacheLock) {
+            val idSet = alarmIds.toHashSet()
+            val before = _cachedAlarms.value
+            val after = before.filterNot { it.id in idSet }
+            if (after.size != before.size) {
+                _cachedAlarms.value = after
+            }
+        }
+    }
+
     companion object {
         private const val TAG = "AlarmRepository"
 
-        // Singleton-shared listener + cache. Every AlarmRepository instance
-        // serves reads from this. Production has 7+ construction sites
-        // (ViewModels, services); without this sharing they'd each attach
-        // their own listener and pay parallel INITIAL_FRESH on attach.
+        // Singleton-shared cache. Every AlarmRepository instance serves
+        // reads from this. Production has 7+ construction sites; per-
+        // instance state would mean each pays its own attach.
         private val cacheLock = Any()
         private val _cachedAlarms = MutableStateFlow<List<Alarm>>(emptyList())
         internal val cachedAlarms: StateFlow<List<Alarm>> = _cachedAlarms.asStateFlow()
-        private var listener: ListenerRegistration? = null
-        private var loadDeferred: CompletableDeferred<Unit>? = null
+
+        private val alarmSink = object : DeltaPullEngine.DeltaPullSink<Alarm> {
+            override fun applyFullPull(items: List<Alarm>) {
+                synchronized(cacheLock) { _cachedAlarms.value = items }
+            }
+
+            override fun applyDelta(items: List<Alarm>) {
+                if (items.isEmpty()) return
+                synchronized(cacheLock) {
+                    val byId = _cachedAlarms.value.associateByTo(LinkedHashMap()) { it.id }
+                    for (alarm in items) byId[alarm.id] = alarm
+                    _cachedAlarms.value = byId.values.toList()
+                }
+            }
+
+            override fun localCount(): Long =
+                synchronized(cacheLock) { _cachedAlarms.value.size.toLong() }
+
+            // Route alarm sync warnings through the shared NoteStore banner
+            // — alarms have always borrowed that surface for cross-subsystem
+            // notifications.
+            override fun raiseSyncWarning(message: String) {
+                NoteStore.raiseWarning(message)
+            }
+
+            override fun clearSyncWarning() {
+                NoteStore.clearError()
+            }
+        }
+
+        private val pullEngine = DeltaPullEngine(
+            channel = UserDocSignal.Channel.ALARMS,
+            tag = "AlarmRepo",
+            collectionRef = { db, uid ->
+                db.collection("users").document(uid).collection("alarms")
+            },
+            parse = { doc -> parseAlarmSafely(doc.id, doc.data ?: emptyMap()) },
+            updatedAt = { it.updatedAt },
+            sink = alarmSink,
+        )
+
+        private fun parseAlarmSafely(id: String, data: Map<String, Any?>): Alarm? = try {
+            mapToAlarm(id, data)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Error parsing alarm $id", e)
+            null
+        }
+
+        private fun mapToAlarm(id: String, data: Map<String, Any?>): Alarm = Alarm(
+            id = id,
+            userId = data["userId"] as? String ?: "",
+            noteId = data["noteId"] as? String ?: "",
+            lineContent = data["lineContent"] as? String ?: "",
+            createdAt = data["createdAt"] as? Timestamp,
+            updatedAt = data["updatedAt"] as? Timestamp,
+            dueTime = data["dueTime"] as? Timestamp,
+            stages = AlarmStage.fromMapList(data["stages"]),
+            status = try {
+                AlarmStatus.valueOf(data["status"] as? String ?: AlarmStatus.PENDING.name)
+            } catch (e: IllegalArgumentException) {
+                AlarmStatus.PENDING
+            },
+            snoozedUntil = data["snoozedUntil"] as? Timestamp,
+            recurringAlarmId = data["recurringAlarmId"] as? String,
+            notifiedStageType = (data["notifiedStageType"] as? String)?.let {
+                try { AlarmStageType.valueOf(it) } catch (e: IllegalArgumentException) { null }
+            },
+        )
 
         /**
-         * Detach the listener and drop cached alarms. Call on sign-out so
-         * the next signed-in user doesn't see the previous user's data,
-         * and the listener doesn't keep firing under stale credentials.
+         * Tear down the engine, drop the cache. Call on sign-out so the
+         * next signed-in user doesn't see the previous user's data.
+         * [SignalListener.clear] is called separately at the same
+         * lifecycle point.
          */
         fun clear() {
+            pullEngine.clear()
             synchronized(cacheLock) {
-                listener?.remove()
-                listener = null
-                loadDeferred = null
                 _cachedAlarms.value = emptyList()
             }
         }
 
-        /** Test seam: populate the cache directly, bypassing the listener. */
+        /** Test seam: populate the cache directly, bypassing the engine. */
         @VisibleForTesting
         internal fun injectCacheForTest(alarms: List<Alarm>) {
             synchronized(cacheLock) {
-                // Sentinel listener so subsequent reads' `ensureListenerAttached`
-                // short-circuits — without it, the next read would attach a real
-                // Firestore listener over the (mocked) collection.
-                if (listener == null) listener = ListenerRegistration { /* test seam */ }
-                val deferred = loadDeferred ?: CompletableDeferred<Unit>().also { loadDeferred = it }
                 _cachedAlarms.value = alarms
-                if (!deferred.isCompleted) deferred.complete(Unit)
             }
+            pullEngine.markLoadedForTest()
         }
     }
 }

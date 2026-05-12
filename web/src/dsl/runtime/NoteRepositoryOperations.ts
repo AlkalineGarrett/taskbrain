@@ -45,7 +45,7 @@ export class NoteRepositoryOperations implements NoteOperations {
     const ref = this.noteRef(noteId)
     await updateDoc(ref, { ...updates, updatedAt: serverTimestamp() })
     firestoreUsage.recordWrite('dsl.updateNote', 'UPDATE')
-    void UserDocSignal.bump(this.db, this.userId)
+    void UserDocSignal.bump(this.db, this.userId, 'NOTES')
     return this.fetchNote(noteId)
   }
 
@@ -60,7 +60,7 @@ export class NoteRepositoryOperations implements NoteOperations {
       parentNoteId: null,
     })
     firestoreUsage.recordWrite('dsl.createNote', 'SET')
-    void UserDocSignal.bump(this.db, this.userId)
+    void UserDocSignal.bump(this.db, this.userId, 'NOTES')
     return this.fetchNote(newRef.id)
   }
 

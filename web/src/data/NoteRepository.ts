@@ -902,7 +902,7 @@ export class NoteRepository {
     }
     // One bump per logical batch — fire-and-forget; the save returns
     // without waiting on the user-doc write to land.
-    void UserDocSignal.bump(this.db, this.requireUserId())
+    void UserDocSignal.bump(this.db, this.requireUserId(), 'NOTES')
   }
 
   /**
@@ -1069,7 +1069,7 @@ export class NoteRepository {
       const data = this.newNoteData(userId, '')
       const ref = await addDoc(this.notesRef, data)
       firestoreUsage.recordWrite('createNote', 'SET')
-      void UserDocSignal.bump(this.db, userId)
+      void UserDocSignal.bump(this.db, userId, 'NOTES')
       return ref.id
     })
   }
@@ -1096,7 +1096,7 @@ export class NoteRepository {
         const data = this.newNoteData(userId, firstLine)
         const ref = await addDoc(this.notesRef, data)
         firestoreUsage.recordWrite('createMultiLineNote', 'SET')
-        void UserDocSignal.bump(this.db, userId)
+        void UserDocSignal.bump(this.db, userId, 'NOTES')
         return ref.id
       }
 
@@ -1159,7 +1159,7 @@ export class NoteRepository {
       await batch.commit()
       // Root note + N descendants written in a single batch.
       firestoreUsage.recordWrite('createMultiLineNote', 'BATCH_COMMIT', nodes.length + 1)
-      void UserDocSignal.bump(this.db, userId)
+      void UserDocSignal.bump(this.db, userId, 'NOTES')
       return parentRef.id
   }
 
@@ -1218,7 +1218,7 @@ export class NoteRepository {
       // contract; remote clients' pulls return empty for these ids (cheap),
       // and the resulting count-detection on their next foreground catches
       // the divergence.
-      void UserDocSignal.bump(this.db, userId)
+      void UserDocSignal.bump(this.db, userId, 'NOTES')
       return snap.size
     })
   }
@@ -1299,7 +1299,7 @@ export class NoteRepository {
         updatedAt: serverTimestamp(),
       })
       firestoreUsage.recordWrite('updateShowCompleted', 'UPDATE')
-      void UserDocSignal.bump(this.db, userId)
+      void UserDocSignal.bump(this.db, userId, 'NOTES')
     })
   }
 
